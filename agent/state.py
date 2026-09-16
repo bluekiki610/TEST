@@ -100,6 +100,24 @@ def get_agent_state(ai_name: str, data: Dict[str, Any]) -> Optional[AgentState]:
     if not canonical:
         return None
 
+    # 1.5 显式存在性检查
+    # 原因：main.canonical_ai_name() 找不到时返回原字符串（而非 None），
+    #       所以需要额外验证 AI 是否真的存在于 user_ais 中。
+    _base = strip_emoji(canonical)
+    _found = None
+    for _ais in (data.get("user_ais", {}) or {}).values():
+        for _a in _ais:
+            if _a == canonical or (_base and strip_emoji(_a) == _base):
+                _found = _a
+                break
+        if _found:
+            break
+
+    if not _found:
+        return None
+
+    canonical = _found
+
     # 2. 获取 Owner（反向查找容错）
     owner = None
     try:
