@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+pydantic
+aiofiles
+aiohttp
+lunardate
+sse-starlette
