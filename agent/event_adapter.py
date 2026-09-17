@@ -17,6 +17,7 @@ agent/event_adapter.py - P0-2B: First Real Event Adapter
 """
 
 import os
+_P0_2B_COUNTER = 0
 from typing import List, Optional
 from agent.event import Event
 
@@ -60,4 +61,9 @@ def observe_message(
     if os.getenv("P0_2B_DEBUG") == "1":
         print(f"[P0-2B] Event: {event.to_dict()}")
 
+    global _P0_2B_COUNTER
+    _P0_2B_COUNTER += 1
+    if os.getenv("P0_2B_DEBUG") == "1":
+        print(f"[P0-2B] CALL#{_P0_2B_COUNTER} Event: {event.to_dict()}")
+        
     return event
