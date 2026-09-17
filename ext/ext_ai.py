@@ -1076,6 +1076,29 @@ def setup(app, data, helpers):
             _group_talk(sender, content)
             print(f"⏱️ [WAKE] 群聊分支完成，总耗时: {time.time()-_wake_start:.3f}秒")
             return
+
+        # ===== P0-2B: 旁路 Event 创建（room != "main"）=====
+        # 只读快照，不修改任何变量，不改变后续 Wake 行为
+        # 一条用户消息 = 一个 message_received Event
+        try:
+            _p0_target_ais = []
+            for _p0_o, _p0_ais in data.get("user_ais", {}).items():
+                for _p0_a in _p0_ais:
+                    if not _p0_a:
+                        continue
+                    if data.get("ai_location", {}).get(_p0_a, "main") == room:
+                        if _p0_a not in _p0_target_ais:
+                            _p0_target_ais.append(_p0_a)
+            from agent.event_adapter import observe_message
+            observe_message(
+                sender=sender,
+                room=room,
+                content=content,
+                target_ais=_p0_target_ais,
+            )
+        except Exception:
+            pass
+        # ===== END P0-2B =====
         
         # ===== 以下是公共建筑/会客厅分支 =====
         print(f"🏛️ [WAKE] 进入建筑分支 | room={room} | 非群聊")
