@@ -290,3 +290,4 @@ def get_runtime(ai_name: str, data: Dict[str, Any]) -> AgentRuntime:
     未来可能引入缓存，但保持"一个 AI 一个 Runtime"的原则。
     """
     return AgentRuntime(ai_name, data)
+P0_STEP3B_PERCEPTION_CHAIN: implement first real perceive + should_wake
