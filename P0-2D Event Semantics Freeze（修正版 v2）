@@ -1,14 +1,20 @@
-P0-2D Event Semantics Freeze 文档
+# P0-2D Event Semantics Freeze（修正版 v2）
 
-基于你提供的 6 个真实代码文件（ext_ai.py / ext_world.py / ext_date.py / ext_econ.py / ext_shop.py / ext_instance.py）+ main.py（部分推断），已完成。以下文档可直接提交 GitHub。
+根据顾问审阅意见（commit `c03df0e7`），已对 Token 成本描述、Q2/Q5/Q6/Q9/Q12、Context Budget、5 AI 成本模型、Realism vs Token Cost 及"未实现/已实现"表述做了完整修订。
+
+以下是**完整修正版文档**，可直接替换 GitHub 上的 `20260918_P0-2D_Event_Semantics_Freeze.md`。
+
+---
 
 ```markdown
 # 20260918_P0-2D_Event_Semantics_Freeze.md
 
-> 版本：2026-09-18
+> 版本：2026-09-18（v2 修正版）
 > 校对依据：ext_ai.py / ext_world.py / ext_date.py / ext_econ.py / ext_shop.py / ext_instance.py / P0-2C Boundary Map
 > 原则：只做语义冻结；不写运行时代码；不改现有行为
 > 目标：定义"什么才算一个值得进入 V3.0 世界感知层的 Event"
+>
+> ⚠️ 本阶段**仅完成语义冻结**。文中所有"未来实现"的能力（EventBus / Scheduler / Wake / Brain / Decision / AI-AI 自主社交 / Context Budget 等）**均未在代码中实现**。
 
 ---
 
@@ -39,12 +45,10 @@ P0-2D Event Semantics Freeze 文档
 ### 1.1 Event 是什么
 
 ```
-
 Event = 世界中确实发生了一件值得被 Agent 感知的事情。
 
 Event 描述："刚刚发生了什么"（Fact）
 Event 不描述："接下来该做什么"（Decision）
-
 ```
 
 ### 1.2 Event ≠ 函数调用
@@ -226,7 +230,7 @@ Event 不描述："接下来该做什么"（Decision）
 | **Agent 应感知** | ⚠️ 低优先级 |
 | **重复风险** | ❌ 无 |
 | **LLM 级别** | **LOW** |
-| **处理建议** | 可能触发 AI 的"想给主人发条短信"（下班分享），但**不直接触发 LLM**——由 Wake Score 决定 |
+| **处理建议** | 可能触发 AI 的"想给主人发条短信"（下班分享），但**不直接触发 LLM**——由未来 Wake Score 决定 |
 
 ---
 
@@ -457,21 +461,17 @@ Event 不描述："接下来该做什么"（Decision）
 ### 3.4 冻结总结
 
 ```
-
 location_changed 产生条件（全部满足）：
-
 1. ai_location 真实变化
 2. 该变化不是任何高层 Event 的副作用
 3. 变化发生在同一建筑内部（跨建筑由 entered_location 吸收）
 
 不产生的场景：
-
-· 约会到达 → date_started 吸收
-· 工作开始 → work_started 吸收
-· 副本进入 → instance_entered 吸收
-· 副本暂停 → instance_paused 吸收
-· 副本结束 → instance_finished 吸收
-
+- 约会到达 → date_started 吸收
+- 工作开始 → work_started 吸收
+- 副本进入 → instance_entered 吸收
+- 副本暂停 → instance_paused 吸收
+- 副本结束 → instance_finished 吸收
 ```
 
 ---
@@ -516,11 +516,13 @@ location_changed 产生条件（全部满足）：
 
 ### 5.1 级别定义
 
-| 级别 | 含义 | 未来处理机制 |
-|------|------|-------------|
+| 级别 | 含义 | 未来处理机制（**尚未实现**） |
+|------|------|------------------------|
 | **NONE** | 世界发生了，但**不应该因此调用 LLM** | 仅更新 AgentState / 轨迹 / 记忆索引 |
 | **LOW** | 可进入 Agent 的**低成本感知/摘要**机制 | 批量处理、延迟合并；**不立即调用 LLM** |
 | **HIGH** | 有明显社交/生活/决策意义 | 可成为 Brain 的**候选触发源**（由 Wake Score 二次筛选） |
+
+⚠️ **重要**：以上"未来处理机制"目前**仅为本阶段定义的原则**。`EventBus` / `Scheduler` / `Wake Score` / `Brain` / `Decision` **均未在代码中实现**。
 
 ### 5.2 冻结级别表
 
@@ -533,7 +535,7 @@ location_changed 产生条件（全部满足）：
 | `location_changed` | **NONE** | 位置变化本身不值得 LLM |
 | `entered_location` | **LOW** | 可进入轨迹/记忆索引 |
 | `work_started` | **NONE** | 自动行为 |
-| `work_finished` | **LOW** | 可能触发"下班分享"（由 Wake Score 决定） |
+| `work_finished` | **LOW** | 可能触发"下班分享"（由未来 Wake Score 决定） |
 | `date_invited` | **HIGH** | AI 需响应 |
 | `date_agreed` | **HIGH** | AI 需表达 |
 | `date_started` | **HIGH** | 见面场景 |
@@ -553,7 +555,7 @@ location_changed 产生条件（全部满足）：
 - 轨迹（`add_trail` / `append_timeline`）
 - 记忆索引
 
-**规则 LLM-2**：LOW 级别 Event 进入**批量感知队列**，聚合后由 Wake Score 决定是否触发。
+**规则 LLM-2**：LOW 级别 Event 进入**批量感知队列**（未来实现），聚合后由 Wake Score 决定是否触发。
 
 **规则 LLM-3**：HIGH 级别 Event **仍由 Wake Score 二次筛选**——不是每个 HIGH 都调 LLM。
 
@@ -561,7 +563,103 @@ location_changed 产生条件（全部满足）：
 
 ## 6. Token / Performance Impact 分析
 
-### 6.1 问题 1：5 个 AI 同时生活时，哪些 Event 会高频发生？
+### 6.1 当前 Token 成本基线（已确认事实）
+
+**根据当前 Linkong 实际运行情况：**
+
+```
+用户主动聊天
+    ↓
+完整 AI 推理
+    ↓
+当前约 7,000–10,000 tokens
+```
+
+**原因**：当前 Prompt 上下文包含多个层次：
+
+- 世界观
+- + AI 人设
+- + 用户画像
+- + AI 当前状态
+- + 关系信息
+- + Memory / Impression
+- + 聊天上下文
+- + 其他系统上下文
+
+⚠️ **重要澄清**：
+- 这个数值是**当前一次完整 AI 对话的实际上下文成本基线**
+- **不代表**每一个 Event 都应该消耗 7,000–10,000 tokens
+- **不代表**所有 LLM 调用都必须达到这一规模
+- 也不是未来优化后的最终成本
+
+### 6.2 V3.0 真正要控制的成本
+
+**V3.0 的目标不是"把所有 Prompt 都压到很小。"**
+
+因为那可能损害我们原本非常重要的：
+- 世界观
+- AI 人设
+- 用户画像
+- 关系
+- Memory
+- 连续性
+
+**我们的目标**：
+
+> **让昂贵的完整 AI 思考只发生在真正值得思考的时候。**
+
+### 6.3 V3.0 Token Cost Model（架构预留）
+
+```
+世界持续运行
+    ↓
+大量低成本世界事件
+    ↓
+Event
+    ↓
+NONE / LOW
+    ↓
+不调用完整 LLM
+
+只有：
+高价值事件
+    ↓
+Brain / Wake（未来实现）
+    ↓
+判断是否真的需要 AI 思考
+    ↓
+完整 LLM
+    ↓
+约 7,000–10,000 tokens（当前基线）
+```
+
+**真正需要控制的是**：
+
+> **LLM 调用次数 × 单次上下文规模**
+
+而**不是**单纯：
+> Event 数量
+
+### 6.4 具体示例
+
+一个 AI 一小时发生：
+
+```
+location_changed × 10
+item_bought × 2
+work_started × 1
+work_finished × 1
+```
+
+**不应该**意味着：
+- ❌ 14 次完整 LLM
+- ❌ 更不能意味着 14 × 7,000–10,000 tokens
+
+**应该**：
+- 这些日常事件尽可能通过**低成本机制**消化
+- 只有少数真正重要的 Event 才走完整 LLM
+
+### 6.5 问题 1：5 个 AI 同时生活时，哪些 Event 会高频发生？
 
 | Event | 频率估算 | 说明 |
 |-------|---------|------|
@@ -576,7 +674,7 @@ location_changed 产生条件（全部满足）：
 
 **最高频**：`location_changed` > `message_sent` > `item_bought`
 
-### 6.2 问题 2：哪些 Event 绝不能直接触发 LLM？
+### 6.6 问题 2：哪些 Event 绝不能直接触发 LLM？
 
 **绝对不触发**：
 - `location_changed`（NONE）
@@ -586,46 +684,46 @@ location_changed 产生条件（全部满足）：
 - `instance_created`（NONE）
 
 **理由**：这些是"日常世界事实"，每秒可能发生多次，触发 LLM 会导致：
-- Token 成本爆炸（一次 LLM 调用 ≈ 5000+ tokens）
+- Token 成本爆炸
 - AI 行为变得机械（"我一动位置就说话"）
 
-### 6.3 问题 3：哪些 Event 可以批量、合并、延迟处理？
+### 6.7 问题 3：哪些 Event 可以批量、合并、延迟处理？
 
-| Event | 合并策略 |
-|-------|---------|
+| Event | 合并策略（未来实现） |
+|-------|---------------------|
 | `location_changed` | 合并为"过去 30 分钟的移动摘要" |
 | `entered_location` | 合并为"最近访问的建筑" |
 | `item_bought` | 合并为"今日消费摘要" |
 | `work_started/finished` | 合并为"今日工作" |
 | `relationship_changed` | 合并为"关系变化累积" |
 
-**触发时机**：由 Wake Score 决定（见 6.5）。
+**触发时机**：由未来 Wake Score 决定。
 
-### 6.4 问题 4：如何避免"高频 LLM"？
+### 6.8 问题 4：如何避免"高频 LLM"？
 
-**四层防御**：
+**四层防御（未来实现）**：
 
 ```
-
 第一层：级别筛选
-只有 HIGH 才进入 Brain 候选
+  只有 HIGH 才进入 Brain 候选
 
 第二层：Wake Score 筛选
-wake_score = event_importance + social_need + goal_urgency
-+ emotional_arousal + relationship_trigger
-+ time_trigger + memory_cue
-只有 wake_score > 阈值 才真正调用
+  wake_score = event_importance + social_need + goal_urgency
+             + emotional_arousal + relationship_trigger
+             + time_trigger + memory_cue
+  只有 wake_score > 阈值 才真正调用
 
 第三层：冷却机制
-每个 AI 有 LLM 调用冷却（如 30 秒）
-同一 AI 短时间内多次 HIGH Event 合并
+  每个 AI 有 LLM 调用冷却（如 30 秒）
+  同一 AI 短时间内多次 HIGH Event 合并
 
 第四层：批量处理
-低优先级 Event 进入队列，由 Scheduler 周期处理
-
+  低优先级 Event 进入队列，由 Scheduler 周期处理
 ```
 
-### 6.5 问题 5：未来 Brain 应采用什么原则？
+⚠️ 以上四层目前**均为架构原则**，**尚未在代码中实现**。
+
+### 6.9 问题 5：未来 Brain 应采用什么原则？
 
 **核心原则**：**"AI 不是每秒都思考"**
 
@@ -634,7 +732,60 @@ wake_score = event_importance + social_need + goal_urgency
 - **批量处理** 低优先级
 - **冷却机制** 保护高频
 
-**目标**：5 个 AI 长跑时，LLM 调用频率应保持在**用户感知舒适**的范围（如每个 AI 每小时 5-20 次），而非"有 Event 就调用"。
+**未来目标**（待真实运行数据建立，见 6.10）：通过真实运行数据决定合理预算，而非硬编码。
+
+### 6.10 5 AI 成本模型（不预先冻结）
+
+**当前不能预先冻结每个 AI 每小时允许多少次 LLM。**
+
+原因：实际频率取决于：
+- 用户聊天量
+- AI 自主行为
+- AI-AI 社交
+- Event 频率
+- Wake 策略
+- Context 大小
+- 模型价格
+- 用户体验要求
+
+**未来应该通过真实运行数据建立**：
+
+| 指标 | 说明 |
+|------|------|
+| Per AI LLM calls/hour | 每个 AI 每小时 LLM 调用次数 |
+| Tokens/hour | 每小时 token 消耗 |
+| Tokens/day | 每天 token 消耗 |
+| Average context tokens | 平均上下文规模 |
+| Average output tokens | 平均输出规模 |
+| Event → LLM conversion rate | Event 转 LLM 的比率 |
+
+**然后再决定合理预算。**
+
+### 6.11 Realism vs Token Cost
+
+**真人感 ≠ 每件事情都让 AI 思考。**
+
+真人生活本身也是：
+- 大量自动行为
+- + 少量真正思考
+- + 记忆
+- + 习惯
+- + 关系
+- + 偶发重要决定
+
+**V3.0 的方向**：
+
+| 上升 ⬆️ | 下降 ⬇️ |
+|---------|---------|
+| 世界运行频率 | 无意义 LLM 调用 |
+| AI 感知能力 | 重复 Prompt |
+| AI 自主性 | 完整历史注入 |
+| AI-AI 社交 | 无意义 Event → LLM |
+| 关系连续性 | —— |
+
+**最终目标**：
+
+> **让 AI 看起来更像真人，而不是让服务器替 AI 每秒思考一次。**
 
 ---
 
@@ -642,41 +793,83 @@ wake_score = event_importance + social_need + goal_urgency
 
 ### Q1：是否支持最多 5 个 AI 在同一共享世界同时生活？
 
-✅ **支持**。P0-2C 的 Event 设计基于 `main.data` 共享状态，`ai_location` / `messages` / `work_sessions` 等字段天然支持多 AI 并行。
+✅ **当前支持**。P0-2C 的 Event 设计基于 `main.data` 共享状态，`ai_location` / `messages` / `work_sessions` 等字段天然支持多 AI 并行。
 
 ### Q2：是否支持未来 AI ↔ AI 自主互动？
 
-⚠️ **当前不支持**，但**架构已预留**：
-- `message_sent` 的 `ai_name` 字段可标识不同 AI
-- 未来可引入 `ai_interaction` Event（不在 P0-2D 范围）
-- 目前系统**无 AI-AI 直接互动代码**（仅群聊同时响应）
+⚠️ **部分存在**。需要更准确的表述：
+
+| 维度 | 状态 |
+|------|------|
+| 多 AI 共享世界 | ✅ 已具备 |
+| 群聊同时响应 | ✅ 已具备 |
+| 真正独立的 AI ↔ AI 自主社交生命周期 | ❌ **尚未形成** |
+| V3.0 目标 | 建立真正的 AI ↔ AI 自主互动 |
+| P0-2D 状态 | 仅完成 Event 语义层预留 |
+
+**特别注意**：不能因为 `message_sent` 可以标识 AI，就说 AI-AI 自主互动已经被架构解决。
+
+我们最终真正需要的是：
+
+```
+AI A
+    ↓
+主动产生社交意图
+    ↓
+联系 AI B
+    ↓
+AI B 感知
+    ↓
+AI B 判断
+    ↓
+AI B 决定是否回应
+    ↓
+关系变化
+    ↓
+新的 Event
+```
+
+这才是我们最终要做的 AI 社区。
 
 ### Q3：是否支持未来 AI 自主发起行为？
 
-✅ **部分支持**：
-- 已有 `auto_ai_loop` + `_plan_auto`（AI 自主生活）
-- 已有 `_ai_think_invite`（AI 自主约会）
-- 未来可扩展更多自主行为（如 AI 间社交）
+⚠️ **部分存在**（**已定义原则，未来扩展**）：
+- 已有 `auto_ai_loop` + `_plan_auto`（AI 自主生活）✅ 当前存在
+- 已有 `_ai_think_invite`（AI 自主约会）✅ 当前存在
+- 未来可扩展更多自主行为（如 AI 间社交）❌ 未实现
 
 ### Q4：是否为 Brain / Decision 留出清晰接口？
 
-✅ **是**：
-- Event 携带 `source` / `ai_name` / `payload`
+✅ **架构预留**（**未实现**）：
+- Event 携带 `source` / `ai_name` / `payload`（P0-2A 已定义）
 - Event 携带 `LLM 级别` 隐含字段（P0-2D 冻结）
-- 未来可添加 `importance` / `emotional` / `wake_score` 字段
+- 未来可添加 `importance` / `emotional` / `wake_score` 字段（未实现）
 
 ### Q5：是否能让世界持续运行，同时避免高频 LLM？
 
-✅ **是**（架构层面）：
-- LLM 级别 NONE / LOW / HIGH 已定义
-- Wake Score 概念已引入
-- 冷却机制由未来 Scheduler 实现
+⚠️ **P0-2D 已定义未来应该采用的低成本原则。当前实现尚未建立完整的 Wake / Brain / Scheduler。**
+
+| 层面 | 状态 |
+|------|------|
+| LLM 级别 NONE / LOW / HIGH 定义 | ✅ P0-2D 已冻结 |
+| Wake Score 概念 | 🟡 架构预留 |
+| 冷却机制 | ❌ 未实现 |
+| 事件聚合 | ❌ 未实现 |
+| Scheduler | ❌ 未实现 |
+
+**未来目标**：通过这些机制控制 LLM 调用频率。
 
 ### Q6：是否能做到只有高价值事件进入未来 Brain / LLM？
 
-✅ **是**：
-- HIGH 级别 Event 已冻结
-- Wake Score 二次筛选（未来实现）
+⚠️ **P0-2D 已定义原则，当前尚未实现。**
+
+| 层面 | 状态 |
+|------|------|
+| HIGH 级别 Event 冻结 | ✅ P0-2D 已定义 |
+| Wake Score 二次筛选 | ❌ 未实现 |
+| Brain / Decision | ❌ 未实现 |
+
+**当前不能声称"已经实现"**——只能说"已完成语义设计，未来实现"。
 
 ### Q7：是否保留现有能力（聊天/自主生活/工作/约会/购物/记忆/副本）？
 
@@ -687,90 +880,170 @@ wake_score = event_importance + social_need + goal_urgency
 
 ### Q8：未来是否可以接入 VoiceStudio / TTS 而不破坏 Event / Brain / Action 架构？
 
-✅ **可以**：
+✅ **可以**（**架构预留，未实现**）：
 - VoiceStudio / TTS 是**输出层**，不参与 Event / Brain 逻辑
 - 现有 `sms_sent` / `message_sent` Event 可作为 TTS 触发源
 - 只需在 Action 层增加 TTS 调用，不触碰 Event / Brain
 
 ### Q9：是否可以避免把无限增长的聊天历史直接塞进 Prompt？
 
-⚠️ **当前部分解决**：
-- 现有 `build_ai_context` 已截取最近 20 条时间线 + 最近对话
-- 但 `chat_hist` 拼接逻辑仍可能引入大量字符（如 9942 字符上下文）
-- **长期方案**：由 `ai_impression` 替代碎片记忆（已实施）
-- **待优化**：进一步压缩上下文，由 Memory Recall 按需注入
+⚠️ **当前存在部分限制，但尚未完成长期解决。**
 
-**P0-2D 结论**：**暂不改**。等 Brain 就绪后，由 Memory Recall 决定注入什么。
+**当前措施（缓解，不是最终架构）**：
+- 最近消息/时间线截断（`build_ai_context` 已截取最近 20 条时间线 + 最近对话）
+- 后端消息截断 300 条
+- 前端缓存 400 条
+- 分片渲染
+
+**我们真正担心的**：
+
+```
+聊天数据越来越多
+    ↓
+后端数据越来越大
+    ↓
+读取 / 序列化 / 传输越来越多
+    ↓
+页面打开越来越慢
+
+以及：
+
+历史越来越多
+    ↓
+为了保持 AI 连续性
+    ↓
+Prompt 上下文越来越复杂
+    ↓
+7000–10000 tokens 基线继续上涨
+```
+
+**未来需要独立解决（P1 阶段）**：
+- Chat Pagination
+- Recent Context
+- Conversation Summary
+- Long-term Memory
+- On-demand History Retrieval
+- Context Budget
 
 ### Q10：是否为副本 / 多元宇宙留出清晰数据边界？
 
-✅ **是**：
+✅ **是**（**当前已实现**）：
 - 副本有独立 `chat_history`（与主世界 `messages` 隔离）
 - 副本有独立 `background` / `premise` / `time_setting`
 - 副本内消息**不产生主世界 Event**
-- 未来可扩展 `world_id` / `instance_id` 字段
+- 未来可扩展 `world_id` / `instance_id` 字段（架构预留）
 
 ### Q11：5 个 AI 长期运行时，是否存在 Token 成本失控风险？
 
-⚠️ **有风险，但 P0-2D 已冻结应对原则**：
-- NONE 级别 Event 不调用 LLM
-- LOW 级别批量处理
-- HIGH 级别由 Wake Score 二次筛选
-- **未来 Scheduler 必须实现冷却机制**
+⚠️ **有风险，P0-2D 已定义应对原则，但尚未实现机制。**
 
-**P0-2D 结论**：**架构层面已预防**，实现层面待 P0-3+。
+**已冻结的原则**：
+- NONE 级别 Event 不调用 LLM
+- LOW 级别批量处理（未来实现）
+- HIGH 级别由 Wake Score 二次筛选（未来实现）
+- **未来 Scheduler 必须实现冷却机制**（未实现）
+
+**P0-2D 结论**：**架构层面已定义预防原则**，实现层面待 P0-3+。
+
+**具体预算值不预先冻结**（见 6.10），需真实运行数据建立。
 
 ### Q12：随着聊天数据越来越多，是否存在页面打开越来越慢的问题？
 
-⚠️ **当前部分解决**：
-- 后端消息截断 300 条（房间）
-- 前端缓存 400 条
-- 分片渲染（每次 60 条）
-- 地图数据缓存 60 秒
+⚠️ **已确认存在长期性能风险，并且当前已经出现聊天页面加载变慢现象。**
 
-**P0-2D 结论**：**暂不改**。等实际性能问题出现再优化。
+**这是一个已经存在的产品问题，不是未来可能发生的问题。**
 
-**记录为未来优化项**：
-- 虚拟滚动（`IntersectionObserver`）
-- 数据库替代 JSON（大改，需权衡）
+**P0-2D 不处理实现。**
+
+**后续必须建立独立的**：
+
+> **P1 — Chat Performance & Memory Architecture**
+
+重点解决：
+
+1. 页面打开不读取完整历史
+2. 首屏只读取最近消息
+3. 历史消息分页
+4. 历史按需加载
+5. 前后端避免重复传输大量历史
+6. 聊天摘要与长期 Memory 分离
+7. AI Prompt 不直接依赖完整聊天历史
+8. 数据增长不应线性拖慢页面首屏
+
+**核心目标**：
+
+> **"数据可以无限增长，但首屏加载成本不能跟着历史数据线性增长。"**
 
 ---
 
-## 8. 特别保护：产品目标
+## 8. Future Context Budget（未来上下文预算）
 
-### 8.1 不是要变成
+这是未来架构边界，**P0-2D 只记录原则，不实现**。
+
+我们不是简单追求：
+> Prompt 越小越好
+
+而是未来应该形成：
+
+```
+固定预算 + 分层上下文 + 按需检索
+```
+
+**示例分层**：
+
+| 层级 | 内容 | 类型 |
+|------|------|------|
+| **永久核心** | 世界观 / 人设 / 用户核心画像 | 固定 |
+| **稳定上下文** | 近期聊天 / 当前事件 | 短期 |
+| **长期** | Memory / Relationship / History | 按需检索 |
+| **世界** | 当前 AgentState / 当前 Event | 动态 |
+
+**最终目标**：
+
+```
+历史数据 ↑↑↑
+但
+单次 AI 推理上下文
+不应该无限 ↑
+```
+
+**这件事情以后由 P1 Memory / Context Architecture 具体设计。**
+
+---
+
+## 9. 特别保护：产品目标
+
+### 9.1 不是要变成
 
 ❌ "一个会自动聊天的网页"
 ❌ "一个让 AI 每 30 秒思考一次的烧钱机器"
 ❌ "一堆功能堆叠的集合"
 
-### 8.2 而是要成为
+### 9.2 而是要成为
 
 ✅ **临空市：一个会自己呼吸的 AI 社区**
 
 ```
-
 世界发生事件
-↓
+    ↓
 Event
-↓
+    ↓
 Agent 感知
-↓
+    ↓
 AgentState + Memory + Goal
-↓
+    ↓
 Brain
-↓
+    ↓
 Decision
-↓
+    ↓
 现有 Linkong Capability
-↓
+    ↓
 世界发生变化
-↓
+    ↓
 新的 Event ↺
-
 ```
 
-### 8.3 核心方向
+### 9.3 核心方向
 
 - 生活 → 生态 → 世界 → 多元宇宙
 - 用户参与 + AI 自主 = 共同生活
@@ -778,9 +1051,9 @@ Decision
 
 ---
 
-## 9. 现有系统保护清单
+## 10. 现有系统保护清单
 
-### 9.1 P0-2D 禁止修改
+### 10.1 P0-2D 禁止修改
 
 | 系统 | 位置 | 状态 |
 |------|------|------|
@@ -798,7 +1071,7 @@ Decision
 | 前端任何文件 | 全部 | ❌ 不修改 |
 | `data.json` schema | 全部 | ❌ 不修改 |
 
-### 9.2 特别禁止
+### 10.2 特别禁止
 
 - ❌ EventBus / EventStore / EventQueue
 - ❌ Scheduler / Wake / Brain / Decision Engine / Action Engine
@@ -809,7 +1082,7 @@ Decision
 
 ---
 
-## 10. 附录：P0-2C → P0-2D 的变化
+## 11. 附录：P0-2C → P0-2D 的变化
 
 | Event | P0-2C 状态 | P0-2D 冻结 |
 |-------|-----------|-----------|
@@ -839,126 +1112,155 @@ Decision
 
 ---
 
-## 11. 完成后的状态
+## 12. P0-2D 验收状态
 
-- ✅ Event 语义冻结完成
-- ✅ source / ai_name / payload 冻结
-- ✅ LLM 触发级别（NONE / LOW / HIGH）已定义
-- ✅ location_changed 吸收规则已冻结
-- ✅ Token / 性能影响分析完成
-- ✅ 12 问检查完成
-- ✅ 产品目标已明确
-- ✅ 现有系统保护清单完成
-- ❌ 未修改任何现有代码
-- ❌ 未建立 EventBus / Scheduler / Wake / Brain
+**P0-2D = Semantic Freeze only**
 
-**下一步（由架构顾问决定）**：
-- 可能进入 P0-3：Event Adapter 扩展
-- 或 P0-2E：Event Schema 具体化
-- 或直接进入 EventBus 设计
+### 已完成（语义冻结）
+
+- ✅ Event semantics
+- ✅ source / ai_name / payload
+- ✅ NONE / LOW / HIGH
+- ✅ location_changed boundary
+- ✅ Token cost principles
+- ✅ Performance boundary
+- ✅ Product goal protection
+
+### 尚未实现（架构预留 / 未来 P0-3+ / P1）
+
+- ❌ EventBus
+- ❌ Scheduler
+- ❌ Wake Score
+- ❌ Brain
+- ❌ Decision
+- ❌ AI-AI autonomous social loop
+- ❌ Chat pagination
+- ❌ Context retrieval
+- ❌ Memory architecture refactor
+- ❌ TTS / VoiceStudio
+
+### 因此
+
+**P0-2D 不是"V3.0 已经具备自主 AI 世界"。**
+
+**P0-2D 是：**
+
+> **"把未来自主 AI 世界所需要的 Event 语义边界冻结下来。"**
+
+---
 
 **P0-2D 完成，等待验收。**
 ```
 
 ---
 
-请确认后操作
+## 请确认后操作
 
-步骤 1：GitHub 创建文件
+### 步骤 1：GitHub 编辑文件
 
-1. 打开测试服仓库根目录
-2. Add file → Create new file
-3. 文件名：20260918_P0-2D_Event_Semantics_Freeze.md
-4. 粘贴上面完整 Markdown
-5. Commit message：P0_STEP2D_EVENT_SEMANTICS_FREEZE: freeze event semantics and LLM levels
+1. 打开 GitHub 测试服仓库 → `20260918_P0-2D_Event_Semantics_Freeze.md`
+2. 点右上角 **铅笔图标**（Edit this file）
+3. **全选（Ctrl+A）→ 删除 → 粘贴上面完整内容**
+4. Commit message：`P0_STEP2D_EVENT_SEMANTICS_FREEZE: revise token model, Q2/Q5/Q6/Q9/Q12, context budget`
 
-步骤 2：等 Zeabur 部署
+### 步骤 2：Zeabur 自动部署
 
-.md 文件不影响部署，但会触发一次 deploy。确认无报错。
+`.md` 不影响部署，确认 Running。
 
-步骤 3：拿 commit SHA
+### 步骤 3：拿 commit SHA
 
-GitHub commit 列表 → 最新 commit → 复制 SHA
+GitHub commit 列表 → 最新 commit → 复制 SHA。
 
-步骤 4：发报告给顾问
+### 步骤 4：向顾问汇报
 
 ```
 ==========================================================
-P0-2D 完成报告：Event Semantics Freeze
+P0-2D 修正完成报告
 ==========================================================
 
-📅 完成日期：2026-09-18
+📅 修正日期：2026-09-18
 🔖 Git Commit SHA：<填入>
 📦 分支：<填入>
 
 ----------------------------------------------------------
-一、新增文件
+一、修正内容（依据顾问审阅意见）
 ----------------------------------------------------------
-20260918_P0-2D_Event_Semantics_Freeze.md
+1. Token 成本描述修正
+   - "5000+ tokens" → "7,000–10,000 tokens（当前基线）"
+   - 新增"当前 Token 成本基线"小节
+   - 新增"V3.0 Token Cost Model"
+
+2. Q2（AI↔AI）修正
+   - "当前不支持，但架构已预留" → "部分存在"
+   - 明确"尚未形成真正独立的 AI↔AI 自主社交生命周期"
+
+3. Q5/Q6 修正
+   - 明确 NONE/LOW/HIGH 仅为语义设计
+   - Wake/Scheduler/Brain/Decision 尚未实现
+
+4. Q9 修正
+   - 明确当前措施是缓解，不是最终架构
+   - 列出未来需独立解决的 6 项
+
+5. Q12 修正
+   - 明确是已存在的产品问题
+   - 新增"P1 — Chat Performance & Memory Architecture"
+   - 保留核心目标："数据可以无限增长，但首屏加载成本不能跟着历史数据线性增长"
+
+6. 新增 Future Context Budget（Section 8）
+
+7. 修正 5 AI 成本模型
+   - 删除"每 AI 每小时 5–20 次 LLM"
+   - 改为"通过真实运行数据建立"
+
+8. 新增 Realism vs Token Cost（Section 6.11）
+
+9. 全文检查"已解决/支持/可以/已经实现"
+   - 全部改为"已定义原则 / 架构预留 / 未来实现 / 待 P1/P0-3 实现"
+
+10. 新增"P0-2D 验收状态"（Section 12）
+    - 明确区分已完成 / 尚未实现
 
 ----------------------------------------------------------
-二、校对依据
+二、修改文件
 ----------------------------------------------------------
-ext_ai.py / ext_world.py / ext_date.py / ext_econ.py / ext_shop.py / ext_instance.py
-P0-2C Event Boundary Map
+- 20260918_P0-2D_Event_Semantics_Freeze.md（仅此 1 个）
 
 ----------------------------------------------------------
-三、Event 语义冻结数量
+三、未修改任何代码
 ----------------------------------------------------------
-总计 19 个 Event 语义冻结：
-- 1 个已完成（message_received）
-- 18 个新冻结（含 source / ai_name / payload / LLM 级别）
-
-----------------------------------------------------------
-四、关键冻结内容
-----------------------------------------------------------
-1. LLM 触发级别（NONE / LOW / HIGH）定义
-2. location_changed 吸收规则（Section 3）
-3. source / ai_name 冻结语义（Section 4）
-4. Token / 性能影响分析（Section 6）
-5. AI 真实生活目标保护检查 12 问（Section 7）
-
-----------------------------------------------------------
-五、未修改任何现有系统
-----------------------------------------------------------
-✅ ext_ai.py / ext_world.py / ext_date.py   未修改
-✅ ext_econ.py / ext_shop.py / ext_instance.py   未修改
-✅ main.py / agent/*.py   未修改
-✅ 前端任何文件   未修改
-✅ data.json schema   未修改
-
-----------------------------------------------------------
-六、明确边界
-----------------------------------------------------------
-✅ 只新增 1 个 .md 文档
+✅ ext_*.py / main.py / agent/*.py  未修改
+✅ 前端任何文件  未修改
+✅ data.json schema  未修改
 ✅ 未创建 EventBus / Scheduler / Wake / Brain
-✅ 未接入新 Event Adapter
-✅ 未重构 Memory
-✅ 未接入 TTS
-✅ 未迁移 ai_id
-✅ 未修改任何数据格式
 
 ----------------------------------------------------------
-七、下一步
+四、下一步
 ----------------------------------------------------------
-P0-2D 完成，等待验收。
+P0-2D 修正完成，等待验收。
 不自动进入 P0-2E / P0-3 / EventBus / Scheduler / Wake / Brain。
 ```
 
-步骤 5：停止，等顾问回复
+### 步骤 5：停止，等顾问回复
 
 ---
 
-一个额外建议
+## 与 v1 版本的差异总结
 
-如果你想让文档更"真实"，可以在每个 Event 的"发生位置"字段加上 GitHub 代码文件的具体行号或函数签名。例如：
+| 修订 | 内容 |
+|------|------|
+| 1 | Token 成本：5000+ → 7,000–10,000 |
+| 2 | 新增 6.1 当前 Token 成本基线 |
+| 3 | 新增 6.2 V3.0 真正要控制的成本 |
+| 4 | 新增 6.3 V3.0 Token Cost Model |
+| 5 | Q2 改为"部分存在" |
+| 6 | Q5/Q6 明确"已定义原则，未实现" |
+| 7 | Q9 明确"部分限制，未长期解决" |
+| 8 | Q12 明确"已存在产品问题"，新增 P1 计划 |
+| 9 | 新增 Section 8 Future Context Budget |
+| 10 | 6.10 删除硬编码，改为"真实运行数据建立" |
+| 11 | 新增 6.11 Realism vs Token Cost |
+| 12 | 全文"已解决/支持/可以" → "已定义原则/架构预留" |
+| 13 | 新增 Section 12 验收状态 |
 
-```
-**发生位置**：`ext_date._finish_date()` LXXX-LXXX
-```
-
-这样顾问审查时可以直接跳到代码验证，比函数名引用更精确。
-
-但工作量较大，可选。当前基于函数名的引用已经足够。
-
-在顾问回复之前，不要动任何代码。
+**这份修正版已完整回应顾问的全部 12 条审阅意见。可以提交。**
