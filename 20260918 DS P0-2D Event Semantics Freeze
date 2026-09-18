@@ -1,0 +1,964 @@
+P0-2D Event Semantics Freeze 文档
+
+基于你提供的 6 个真实代码文件（ext_ai.py / ext_world.py / ext_date.py / ext_econ.py / ext_shop.py / ext_instance.py）+ main.py（部分推断），已完成。以下文档可直接提交 GitHub。
+
+```markdown
+# 20260918_P0-2D_Event_Semantics_Freeze.md
+
+> 版本：2026-09-18
+> 校对依据：ext_ai.py / ext_world.py / ext_date.py / ext_econ.py / ext_shop.py / ext_instance.py / P0-2C Boundary Map
+> 原则：只做语义冻结；不写运行时代码；不改现有行为
+> 目标：定义"什么才算一个值得进入 V3.0 世界感知层的 Event"
+
+---
+
+## 0. 本阶段边界
+
+### 允许
+- ✅ 建立 Event 语义定义表
+- ✅ 明确 source / ai_name / payload 冻结语义
+- ✅ 引入 LLM 触发级别（NONE / LOW / HIGH）
+- ✅ 做 Token / 性能影响分析
+- ✅ 完成"AI 真实生活目标保护检查"12 问
+- ✅ 新增 1 个 .md 文档
+
+### 禁止
+- ❌ EventBus / EventStore / Scheduler / Wake / Brain / Decision / Action
+- ❌ 修改任何 ext_*.py 行为
+- ❌ 修改 main.data schema
+- ❌ Memory 重构
+- ❌ TTS / VoiceStudio 接入
+- ❌ ai_id 迁移
+- ❌ 前端修改
+- ❌ 新增 API 端点
+
+---
+
+## 1. 核心定义（回炉）
+
+### 1.1 Event 是什么
+
+```
+
+Event = 世界中确实发生了一件值得被 Agent 感知的事情。
+
+Event 描述："刚刚发生了什么"（Fact）
+Event 不描述："接下来该做什么"（Decision）
+
+```
+
+### 1.2 Event ≠ 函数调用
+
+| 对象 | 为什么不是 Event |
+|------|-----------------|
+| `drive_ai()` | 函数入口，被多种触发调用 |
+| `execute_action()` | 执行动作，不是动作本身 |
+| `build_ai_context()` | 上下文构建 |
+| `call_llm()` | LLM 调用 |
+| `save_data()` | 持久化 |
+| `_broadcast()` / `_hall_msg()` | 系统广播（不是 AI 主动发言） |
+| `_group_talk()` | 派发器 |
+| `auto_ai_loop()` | 30 秒循环 |
+| `ai_shop_tick` / `ai_spot_tick` / `work_tick` / `date_tick` | 轮询循环 |
+
+### 1.3 Event ≠ AgentState
+
+| 维度 | AgentState | Event |
+|------|-----------|-------|
+| **时态** | 现在是什么状态 | 刚刚发生了什么 |
+| **变更性** | 持续存在（投影） | 瞬时发生 |
+| **来源** | main.data 只读投影 | 世界事实 |
+| **示例** | "Dan 在咖啡馆，能量 70" | "Dan 进入了咖啡馆" |
+
+### 1.4 Event ≠ Memory
+
+| 维度 | Event | Memory |
+|------|-------|--------|
+| **时效** | 刚刚发生 | 过去累积 |
+| **存储** | 运行时（P0-2C 阶段不持久化） | 持久化（旧 enqueue_event） |
+| **消费者** | Brain（未来） | 夜间批处理 |
+| **关系** | Event 可以**成为** Memory 的输入 | Memory ≠ Event |
+
+### 1.5 Event ≠ 旧 `enqueue_event`
+
+旧 `ext_memory.enqueue_event()` 是"给夜间 LLM 总结提供原料"的机制，共 16 处调用（见 P0-2C 附录 A）。**两者语义不同，未来可能映射，但 P0-2D 不做合并。**
+
+---
+
+## 2. Event 语义冻结表（逐项）
+
+> 字段说明：
+> - **source**：事件来源（user / ai / system / world / date / econ / shop / instance）
+> - **ai_name**：事件主体（AI 名字），非 AI 事件为 None
+> - **重复风险**：是否与其他 Event 重复表达同一世界变化
+> - **LLM 级别**：NONE / LOW / HIGH（见 Section 5）
+
+---
+
+### 2.1 message_received ✅ 已完成（P0-2B）
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | 用户在某房间发送了一条消息 |
+| **发生位置** | `ext_ai.wake_ais_for_room()` 内，群聊分支 `return` 之后 |
+| **主体** | 用户（sender） |
+| **source** | `"user"` |
+| **ai_name** | `None`（P0-2B 已冻结） |
+| **payload** | `{sender, room, content, target_ais}` |
+| **Agent 应感知** | ✅ 是 |
+| **重复风险** | ❌ 无（一条消息 = 一个 Event） |
+| **LLM 级别** | **HIGH** |
+| **理由** | 用户与 AI 的主要互动；AI 需要响应 |
+
+---
+
+### 2.2 message_sent 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | AI 在某房间说出一句话（chat 单聊 / group 群聊） |
+| **发生位置（2 处）** | ① `ext_ai.execute_action()` 的 `act == "speak"` 分支<br>② `ext_ai.drive_ai()` 的 `trigger == "group"` 分支 |
+| **主体** | AI |
+| **source** | `"ai"` |
+| **ai_name** | **具体 AI 名字**（如 `"Dan"`），不是 source |
+| **payload** | `{room, content, channel}`<br>· channel: `"chat"` / `"group"` |
+| **Agent 应感知** | ✅ 是（其他 AI 可能感知同伴发言） |
+| **重复风险** | ⚠️ 与 `message_received` 方向相反，不重复 |
+| **LLM 级别** | **HIGH**（AI 主动输出，本身已是 LLM 结果） |
+| **备注** | 系统广播（`_broadcast` / `_hall_msg` / `_broadcast_to_owner`）**不算** `message_sent` |
+
+---
+
+### 2.3 sms_sent 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | AI 发出一条短信 |
+| **发生位置** | `ext_ai.execute_action()` 的 `act == "sms"` 分支 |
+| **主体** | AI |
+| **source** | `"ai"` |
+| **ai_name** | 具体 AI 名字 |
+| **payload** | `{to, content}` |
+| **Agent 应感知** | ✅ 是 |
+| **重复风险** | ⚠️ 与 `message_sent` 语义不同（私信 vs 房间消息），**不应合并** |
+| **LLM 级别** | **HIGH** |
+
+---
+
+### 2.4 relationship_changed 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | AI 与主人的关系状态发生变化（affection 数值变化） |
+| **发生位置（2 处）** | ① `ext_date._finish_date()`：`_set_aff(ai, aff)`（+5~9）<br>② `ext_date.date_accept_gift()`：`_set_aff(d['ai'], _aff(d['ai']) + 3)` |
+| **主体** | AI |
+| **source** | `"date"` |
+| **ai_name** | 具体 AI 名字 |
+| **payload** | `{old_value, new_value, delta, reason}`<br>· reason: `"date_finished"` / `"gift_accepted"` |
+| **Agent 应感知** | ⚠️ 低优先级（内部数值变化，非社交事件） |
+| **重复风险** | ⚠️ 与 `date_finished` / `gift_received` 有重叠（数值变化是这两者的副作用） |
+| **LLM 级别** | **NONE** |
+| **处理建议** | 仅作为 Brain 决策的输入参数，不主动触发 LLM |
+
+---
+
+### 2.5 location_changed 🟡 冻结（⚠️ 核心语义问题，见 Section 3）
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | AI 的 `ai_location` 发生改变 |
+| **发生位置（15 处，见 P0-2C 2.1）** | —— |
+| **主体** | AI |
+| **source** | `"world"` |
+| **ai_name** | 具体 AI 名字 |
+| **payload** | `{from_room, to_room, reason}` |
+| **Agent 应感知** | ⚠️ 取决于 reason（见 Section 3） |
+| **重复风险** | ⚠️ **高**——常与其他 Event 重复（如约会、工作） |
+| **LLM 级别** | **NONE**（位置变化本身不值得 LLM） |
+| **处理建议** | **仅当无更高层 Event 时才产生**（见 Section 3 规则） |
+
+---
+
+### 2.6 entered_location 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | AI 进入了**一个新建筑**（跨越建筑边界） |
+| **发生位置** | `ext_world._arrive()` 内部：`ai_spot_tick` 检测到 `st['last_bid'] != bid` 时触发 |
+| **主体** | AI |
+| **source** | `"world"` |
+| **ai_name** | 具体 AI 名字 |
+| **payload** | `{building_id, building_name}` |
+| **Agent 应感知** | ✅ 是 |
+| **重复风险** | ⚠️ 与 `location_changed` 语义重叠（见 Section 3） |
+| **LLM 级别** | **LOW** |
+| **处理建议** | 可进入 Agent 的低成本感知（如轨迹记录）；**不立即调用 LLM** |
+
+---
+
+### 2.7 work_started 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | AI 开始了一份工作 |
+| **发生位置（2 处）** | ① `ext_econ.auto_start_work()`（AI 自主/自动）<br>② `ext_econ.work_start()` API（用户手动） |
+| **主体** | AI |
+| **source** | `"econ"` |
+| **ai_name** | 具体 AI 名字 |
+| **payload** | `{building_id, building_name, hours}` |
+| **Agent 应感知** | ⚠️ 低优先级（自动行为） |
+| **重复风险** | ❌ 无 |
+| **LLM 级别** | **NONE**（自动行为，无需 LLM） |
+| **备注** | **旧 `enqueue_event` 的真空区**（ext_econ 完全不调用） |
+
+---
+
+### 2.8 work_finished 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | AI 完成工作，工资入账 |
+| **发生位置（2 处）** | ① `ext_econ.pay_work()`（`work_tick` 定时结算）<br>② `ext_econ.work_stop()` API |
+| **主体** | AI |
+| **source** | `"econ"` |
+| **ai_name** | 具体 AI 名字 |
+| **payload** | `{building_id, hours, earn}` |
+| **Agent 应感知** | ⚠️ 低优先级 |
+| **重复风险** | ❌ 无 |
+| **LLM 级别** | **LOW** |
+| **处理建议** | 可能触发 AI 的"想给主人发条短信"（下班分享），但**不直接触发 LLM**——由 Wake Score 决定 |
+
+---
+
+### 2.9 date_invited 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | 某方向另一方发出了约会邀请 |
+| **发生位置（2 个方向）** | ① 用户→AI：`ext_date.date_invite()` API<br>② AI→用户：`ext_date._trigger_invite()` |
+| **主体** | 邀请方（用户或 AI） |
+| **source** | `"date"`（不用 `"user"` / `"ai"`，因为两个方向共享语义） |
+| **ai_name** | **被邀请的 AI**（两个方向都是这个 AI） |
+| **payload** | `{inviter_type, inviter_name, building_id, building_name, channel}`<br>· inviter_type: `"user"` / `"ai"`<br>· channel: `"sms"` / `"chat"` |
+| **Agent 应感知** | ✅ 是 |
+| **重复风险** | ❌ 无 |
+| **LLM 级别** | **HIGH**（AI 需要响应——接受/婉拒/追问） |
+
+---
+
+### 2.10 date_agreed 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | 约会邀请被接受 |
+| **发生位置（2 处）** | ① `ext_date._accept_invite()`（用户邀约场景）<br>② `ext_date._process_reply()` 中 `result == 'accept'`（AI 邀约场景） |
+| **主体** | AI（被邀请方） |
+| **source** | `"date"` |
+| **ai_name** | 具体 AI 名字 |
+| **payload** | `{user, building_id, room, arrive_min, invited_by_ai}` |
+| **Agent 应感知** | ✅ 是 |
+| **重复风险** | ❌ 无 |
+| **LLM 级别** | **HIGH**（AI 需要表达开心/回应） |
+
+---
+
+### 2.11 date_started 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | 双方到达约会地点，约会正式激活 |
+| **发生位置** | `ext_date._arrive_date()`：`d['status'] = 'active'` |
+| **主体** | AI |
+| **source** | `"date"` |
+| **ai_name** | 具体 AI 名字 |
+| **payload** | `{user, building_id, room}` |
+| **Agent 应感知** | ✅ 是 |
+| **重复风险** | ⚠️ 与 `location_changed` 重叠（`_arrive_date` 也改 `ai_location`）；应由本 Event 吸收（见 Section 3） |
+| **LLM 级别** | **HIGH**（见面场景） |
+
+---
+
+### 2.12 date_finished 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | 约会结束 |
+| **发生位置** | `ext_date._finish_date()`（用户结束/60 分钟自然结束/取消赴约） |
+| **主体** | AI |
+| **source** | `"date"` |
+| **ai_name** | 具体 AI 名字 |
+| **payload** | `{user, building_id, room, duration_sec, affection_gain}` |
+| **Agent 应感知** | ✅ 是 |
+| **重复风险** | ⚠️ 与 `relationship_changed` 重叠（affection 变化是副作用）；应由本 Event 吸收 |
+| **LLM 级别** | **HIGH**（触发 AI 写随笔） |
+
+---
+
+### 2.13 gift_received 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | 约会中主人收下 AI 送的礼物 |
+| **发生位置** | `ext_date.date_accept_gift()` API |
+| **主体** | AI（送礼方） |
+| **source** | `"date"` |
+| **ai_name** | 具体 AI 名字 |
+| **payload** | `{user, gift_id, gift_name, gift_icon}` |
+| **Agent 应感知** | ✅ 是 |
+| **重复风险** | ⚠️ 与 `relationship_changed` 重叠（affection +3） |
+| **LLM 级别** | **HIGH** |
+
+---
+
+### 2.14 item_bought 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | 花钱买了一件东西 |
+| **发生位置（2 处）** | ① `ext_shop.shop_buy()` API（**真人**购买）<br>② `ext_shop._buy_ai_item()`（**AI** 自主购买） |
+| **主体** | 买家（人 / AI） |
+| **source** | `"shop"` |
+| **ai_name** | 买家是 AI 时填 AI 名字；买家是真人时 `None` |
+| **payload** | `{buyer_type, buyer_name, item_id, item_name, qty, price, building_name}`<br>· buyer_type: `"user"` / `"ai"` |
+| **Agent 应感知** | ⚠️ 低优先级（AI 购买时）；用户购买时不需要 AI 感知 |
+| **重复风险** | ❌ 无 |
+| **LLM 级别** | **NONE**（AI 自主购物）/ **LOW**（可能触发"给主人带一份"） |
+
+---
+
+### 2.15 gift_sent 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | 送礼 |
+| **发生位置（3 处）** | ① `ext_shop.shop_gift()` API（**真人送礼**）<br>② `ext_shop._do_reply_gift()`（**AI 回礼**）<br>③ `ext_shop._do_active_gift()`（**AI 主动送礼**） |
+| **主体** | 送礼方（人 / AI） |
+| **source** | `"shop"` |
+| **ai_name** | 送礼方是 AI 时填 AI 名字；是真人时填**收礼的 AI 名字**（因为 AI 是被影响方） |
+| **payload** | `{sender_type, sender_name, recipient, item_id, item_name, item_icon, gift_reason}`<br>· gift_reason: `"user_gift"` / `"ai_reply"` / `"ai_active"` |
+| **Agent 应感知** | ✅ 是（AI 是送礼方或收礼方都需要） |
+| **重复风险** | ❌ 无 |
+| **LLM 级别** | **HIGH**（AI 送礼后可能触发 AI 表达/感谢；用户送礼时 AI 需响应） |
+
+---
+
+### 2.16 instance_created 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | 副本被创建（草稿） |
+| **发生位置** | `ext_instance.create_instance()` API |
+| **主体** | 用户 |
+| **source** | `"instance"` |
+| **ai_name** | `None` |
+| **payload** | `{user, iid, name}` |
+| **Agent 应感知** | ⚠️ 低优先级（AI 尚未进入） |
+| **重复风险** | ❌ 无 |
+| **LLM 级别** | **NONE**（配置操作） |
+
+---
+
+### 2.17 instance_entered 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | 副本被激活，AI 被锁定进入 |
+| **发生位置** | `ext_instance.enter_instance()` API |
+| **主体** | AI |
+| **source** | `"instance"` |
+| **ai_name** | 具体 AI 名字 |
+| **payload** | `{user, iid, name}` |
+| **Agent 应感知** | ✅ 是 |
+| **重复风险** | ⚠️ 与 `location_changed` 重叠（进入副本设置 `ai_location = "_instance_{iid}"`）；应由本 Event 吸收 |
+| **LLM 级别** | **HIGH**（进入副本是重要事件） |
+| **备注** | 副本**内部**消息（`chat_history`）**不产生**主世界 Event |
+
+---
+
+### 2.18 instance_paused 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | AI 暂离副本 |
+| **发生位置** | `ext_instance.pause_instance()` API |
+| **主体** | AI |
+| **source** | `"instance"` |
+| **ai_name** | 具体 AI 名字 |
+| **payload** | `{user, iid, name, return_to_room}` |
+| **Agent 应感知** | ✅ 是 |
+| **重复风险** | ⚠️ 与 `location_changed` 重叠（返回住宅） |
+| **LLM 级别** | **HIGH** |
+
+---
+
+### 2.19 instance_finished 🟡 冻结
+
+| 字段 | 值 |
+|------|-----|
+| **世界事实** | 副本结束，AI 解冻回住宅，生成总结 |
+| **发生位置** | `ext_instance.end_instance()` API |
+| **主体** | AI |
+| **source** | `"instance"` |
+| **ai_name** | 具体 AI 名字 |
+| **payload** | `{user, iid, name, summary_preview, return_to_room}` |
+| **Agent 应感知** | ✅ 是 |
+| **重复风险** | ⚠️ 与 `location_changed` 重叠 |
+| **LLM 级别** | **HIGH**（已调用 LLM 生成总结） |
+
+---
+
+## 3. location_changed 语义规则（⚠️ 核心问题）
+
+### 3.1 问题陈述
+
+`ai_location` 在 15 处被修改。如果每次赋值都产生 `location_changed` Event，会与 `date_started` / `work_started` / `instance_entered` 等**高层 Event 重复**。
+
+例如：
+- 约会到达时：`_arrive_date()` 同时改 `ai_location` 和 `status='active'`
+- 如果两个 Event 都产生 → **语义重复**
+
+### 3.2 冻结规则
+
+**规则 L1**：`location_changed` **仅在没有更高层 Event 时产生。**
+
+**规则 L2**：以下高层 Event **吸收** `location_changed`（不重复产生）：
+
+| 高层 Event | 吸收的 location_changed 位置 |
+|-----------|----------------------------|
+| `date_started` | `_arrive_date()` |
+| `work_started` | `auto_start_work()` / `work_start()` |
+| `instance_entered` | `enter_instance()` |
+| `instance_paused` | `pause_instance()` |
+| `instance_finished` | `end_instance()` |
+| `message_sent`（follow 分支） | `execute_action()` speak+follow 同建筑 |
+| `message_sent`（普通分支） | `execute_action()` speak 普通 / note / diary |
+| `entered_location` | `ext_world._arrive` 检测的跨建筑移动 |
+
+**规则 L3**：以下情况**独立产生** `location_changed`：
+
+| 位置 | reason | 说明 |
+|------|--------|------|
+| `execute_action()` **move** 分支 | `"self_move"` | AI 自主决定移动 |
+| `_follow_arrive()` | `"follow_arrive"` | 跟随到达 |
+| `drive_ai()` summon 分支 `_s()` | `"summon"` | 被召唤 |
+| `_check_meetings()` | `"meeting_arrive"` | 约定到达 |
+| `wake_ais_for_room()` 大喊分支 `arrive_and_reply()` | `"yell_arrive"` | 大喊到达 |
+
+**规则 L4**：`_plan_auto` / `_home_activity` 触发的自主移动——**目前无独立位置修改代码**（它们通过 `drive_ai` → `execute_action` move 分支触发），复用 L3。
+
+### 3.3 与 `entered_location` 的关系
+
+**规则 L5**：`entered_location` 与 `location_changed` **不重复**。
+- `entered_location` 只在**跨建筑**时触发（由 `ext_world._arrive` 检测）
+- `location_changed` 在**同建筑内房间间移动**时触发
+
+**规则 L6**：当跨建筑移动同时满足时，**只产生 `entered_location`**，不产生 `location_changed`。
+
+### 3.4 冻结总结
+
+```
+
+location_changed 产生条件（全部满足）：
+
+1. ai_location 真实变化
+2. 该变化不是任何高层 Event 的副作用
+3. 变化发生在同一建筑内部（跨建筑由 entered_location 吸收）
+
+不产生的场景：
+
+· 约会到达 → date_started 吸收
+· 工作开始 → work_started 吸收
+· 副本进入 → instance_entered 吸收
+· 副本暂停 → instance_paused 吸收
+· 副本结束 → instance_finished 吸收
+
+```
+
+---
+
+## 4. source / ai_name 冻结语义
+
+### 4.1 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **S1** | `source` **永远是类别**，不是具体名字 |
+| **S2** | `ai_name` 是**事件主体**（AI 名字），非 AI 事件为 `None` |
+| **S3** | 不要把 AI 名字放进 `source` |
+
+### 4.2 冻结枚举
+
+| source | 含义 | 典型 Event |
+|--------|------|-----------|
+| `"user"` | 用户触发的世界事实 | `message_received` |
+| `"ai"` | AI 主动产生的世界事实 | `message_sent` / `sms_sent` |
+| `"system"` | 系统行为 | （暂无 Event，保留） |
+| `"world"` | 世界/位置/建筑相关 | `location_changed` / `entered_location` |
+| `"date"` | 约会相关 | `date_*` / `gift_received` |
+| `"econ"` | 经济/工作相关 | `work_started` / `work_finished` |
+| `"shop"` | 购物/送礼相关 | `item_bought` / `gift_sent` |
+| `"instance"` | 副本相关 | `instance_*` |
+
+### 4.3 两个方向的 AI 事件
+
+**AI 发送消息**：
+- `source = "ai"`
+- `ai_name = 具体 AI 名字`
+
+**用户发送消息**：
+- `source = "user"`
+- `ai_name = None`（保持 P0-2B 语义）
+- 具体目标 AI 放 `payload.target_ais`
+
+---
+
+## 5. LLM 触发级别（NONE / LOW / HIGH）
+
+### 5.1 级别定义
+
+| 级别 | 含义 | 未来处理机制 |
+|------|------|-------------|
+| **NONE** | 世界发生了，但**不应该因此调用 LLM** | 仅更新 AgentState / 轨迹 / 记忆索引 |
+| **LOW** | 可进入 Agent 的**低成本感知/摘要**机制 | 批量处理、延迟合并；**不立即调用 LLM** |
+| **HIGH** | 有明显社交/生活/决策意义 | 可成为 Brain 的**候选触发源**（由 Wake Score 二次筛选） |
+
+### 5.2 冻结级别表
+
+| Event | 级别 | 理由 |
+|-------|------|------|
+| `message_received` | **HIGH** | 用户与 AI 主要互动 |
+| `message_sent` | **HIGH** | AI 主动输出 |
+| `sms_sent` | **HIGH** | AI 主动私信 |
+| `relationship_changed` | **NONE** | 内部数值变化，作为 Brain 输入 |
+| `location_changed` | **NONE** | 位置变化本身不值得 LLM |
+| `entered_location` | **LOW** | 可进入轨迹/记忆索引 |
+| `work_started` | **NONE** | 自动行为 |
+| `work_finished` | **LOW** | 可能触发"下班分享"（由 Wake Score 决定） |
+| `date_invited` | **HIGH** | AI 需响应 |
+| `date_agreed` | **HIGH** | AI 需表达 |
+| `date_started` | **HIGH** | 见面场景 |
+| `date_finished` | **HIGH** | 触发 AI 写随笔 |
+| `gift_received` | **HIGH** | 情感场景 |
+| `item_bought` | **NONE**（AI）/ **LOW**（用户侧） | 日常行为 |
+| `gift_sent` | **HIGH** | 情感场景 |
+| `instance_created` | **NONE** | 配置操作 |
+| `instance_entered` | **HIGH** | 进入副本 |
+| `instance_paused` | **HIGH** | 暂离副本 |
+| `instance_finished` | **HIGH** | 副本结束 |
+
+### 5.3 关键约束
+
+**规则 LLM-1**：**NONE 级别 Event 永远不触发 LLM**。它们只更新：
+- AgentState（未来）
+- 轨迹（`add_trail` / `append_timeline`）
+- 记忆索引
+
+**规则 LLM-2**：LOW 级别 Event 进入**批量感知队列**，聚合后由 Wake Score 决定是否触发。
+
+**规则 LLM-3**：HIGH 级别 Event **仍由 Wake Score 二次筛选**——不是每个 HIGH 都调 LLM。
+
+---
+
+## 6. Token / Performance Impact 分析
+
+### 6.1 问题 1：5 个 AI 同时生活时，哪些 Event 会高频发生？
+
+| Event | 频率估算 | 说明 |
+|-------|---------|------|
+| `location_changed` | 每个 AI 每小时 1-3 次 | 自主移动 + 跟随 |
+| `entered_location` | 每个 AI 每小时 0.5-1 次 | 跨建筑移动 |
+| `message_sent` | 每次 AI 响应 1 次 | 用户对话频率相关 |
+| `sms_sent` | 每个 AI 每天 0-5 次 | 主动关心 / 约会 |
+| `item_bought` | 每个 AI 每天 1-3 次 | `ai_shop_tick` 每 60 秒检查 |
+| `work_started/finished` | 每个 AI 每天 1-2 次 | 工作日 |
+| `date_*` | 每个 AI 每天 0-1 次 | 受冷却限制 |
+| `gift_sent` | 每个 AI 每天 0-2 次 | 回礼 / 主动送礼 |
+
+**最高频**：`location_changed` > `message_sent` > `item_bought`
+
+### 6.2 问题 2：哪些 Event 绝不能直接触发 LLM？
+
+**绝对不触发**：
+- `location_changed`（NONE）
+- `work_started`（NONE）
+- `item_bought`（NONE，AI 侧）
+- `relationship_changed`（NONE）
+- `instance_created`（NONE）
+
+**理由**：这些是"日常世界事实"，每秒可能发生多次，触发 LLM 会导致：
+- Token 成本爆炸（一次 LLM 调用 ≈ 5000+ tokens）
+- AI 行为变得机械（"我一动位置就说话"）
+
+### 6.3 问题 3：哪些 Event 可以批量、合并、延迟处理？
+
+| Event | 合并策略 |
+|-------|---------|
+| `location_changed` | 合并为"过去 30 分钟的移动摘要" |
+| `entered_location` | 合并为"最近访问的建筑" |
+| `item_bought` | 合并为"今日消费摘要" |
+| `work_started/finished` | 合并为"今日工作" |
+| `relationship_changed` | 合并为"关系变化累积" |
+
+**触发时机**：由 Wake Score 决定（见 6.5）。
+
+### 6.4 问题 4：如何避免"高频 LLM"？
+
+**四层防御**：
+
+```
+
+第一层：级别筛选
+只有 HIGH 才进入 Brain 候选
+
+第二层：Wake Score 筛选
+wake_score = event_importance + social_need + goal_urgency
++ emotional_arousal + relationship_trigger
++ time_trigger + memory_cue
+只有 wake_score > 阈值 才真正调用
+
+第三层：冷却机制
+每个 AI 有 LLM 调用冷却（如 30 秒）
+同一 AI 短时间内多次 HIGH Event 合并
+
+第四层：批量处理
+低优先级 Event 进入队列，由 Scheduler 周期处理
+
+```
+
+### 6.5 问题 5：未来 Brain 应采用什么原则？
+
+**核心原则**：**"AI 不是每秒都思考"**
+
+- **事件驱动**，不是轮询
+- **Wake Score 决定**，不是 Event 级别直接决定
+- **批量处理** 低优先级
+- **冷却机制** 保护高频
+
+**目标**：5 个 AI 长跑时，LLM 调用频率应保持在**用户感知舒适**的范围（如每个 AI 每小时 5-20 次），而非"有 Event 就调用"。
+
+---
+
+## 7. AI 真实生活目标保护检查（12 问）
+
+### Q1：是否支持最多 5 个 AI 在同一共享世界同时生活？
+
+✅ **支持**。P0-2C 的 Event 设计基于 `main.data` 共享状态，`ai_location` / `messages` / `work_sessions` 等字段天然支持多 AI 并行。
+
+### Q2：是否支持未来 AI ↔ AI 自主互动？
+
+⚠️ **当前不支持**，但**架构已预留**：
+- `message_sent` 的 `ai_name` 字段可标识不同 AI
+- 未来可引入 `ai_interaction` Event（不在 P0-2D 范围）
+- 目前系统**无 AI-AI 直接互动代码**（仅群聊同时响应）
+
+### Q3：是否支持未来 AI 自主发起行为？
+
+✅ **部分支持**：
+- 已有 `auto_ai_loop` + `_plan_auto`（AI 自主生活）
+- 已有 `_ai_think_invite`（AI 自主约会）
+- 未来可扩展更多自主行为（如 AI 间社交）
+
+### Q4：是否为 Brain / Decision 留出清晰接口？
+
+✅ **是**：
+- Event 携带 `source` / `ai_name` / `payload`
+- Event 携带 `LLM 级别` 隐含字段（P0-2D 冻结）
+- 未来可添加 `importance` / `emotional` / `wake_score` 字段
+
+### Q5：是否能让世界持续运行，同时避免高频 LLM？
+
+✅ **是**（架构层面）：
+- LLM 级别 NONE / LOW / HIGH 已定义
+- Wake Score 概念已引入
+- 冷却机制由未来 Scheduler 实现
+
+### Q6：是否能做到只有高价值事件进入未来 Brain / LLM？
+
+✅ **是**：
+- HIGH 级别 Event 已冻结
+- Wake Score 二次筛选（未来实现）
+
+### Q7：是否保留现有能力（聊天/自主生活/工作/约会/购物/记忆/副本）？
+
+✅ **完全保留**：
+- 本阶段未修改任何 ext_*.py
+- 所有现有功能正常运行
+- Event 层是**旁路观察**，不影响主流程
+
+### Q8：未来是否可以接入 VoiceStudio / TTS 而不破坏 Event / Brain / Action 架构？
+
+✅ **可以**：
+- VoiceStudio / TTS 是**输出层**，不参与 Event / Brain 逻辑
+- 现有 `sms_sent` / `message_sent` Event 可作为 TTS 触发源
+- 只需在 Action 层增加 TTS 调用，不触碰 Event / Brain
+
+### Q9：是否可以避免把无限增长的聊天历史直接塞进 Prompt？
+
+⚠️ **当前部分解决**：
+- 现有 `build_ai_context` 已截取最近 20 条时间线 + 最近对话
+- 但 `chat_hist` 拼接逻辑仍可能引入大量字符（如 9942 字符上下文）
+- **长期方案**：由 `ai_impression` 替代碎片记忆（已实施）
+- **待优化**：进一步压缩上下文，由 Memory Recall 按需注入
+
+**P0-2D 结论**：**暂不改**。等 Brain 就绪后，由 Memory Recall 决定注入什么。
+
+### Q10：是否为副本 / 多元宇宙留出清晰数据边界？
+
+✅ **是**：
+- 副本有独立 `chat_history`（与主世界 `messages` 隔离）
+- 副本有独立 `background` / `premise` / `time_setting`
+- 副本内消息**不产生主世界 Event**
+- 未来可扩展 `world_id` / `instance_id` 字段
+
+### Q11：5 个 AI 长期运行时，是否存在 Token 成本失控风险？
+
+⚠️ **有风险，但 P0-2D 已冻结应对原则**：
+- NONE 级别 Event 不调用 LLM
+- LOW 级别批量处理
+- HIGH 级别由 Wake Score 二次筛选
+- **未来 Scheduler 必须实现冷却机制**
+
+**P0-2D 结论**：**架构层面已预防**，实现层面待 P0-3+。
+
+### Q12：随着聊天数据越来越多，是否存在页面打开越来越慢的问题？
+
+⚠️ **当前部分解决**：
+- 后端消息截断 300 条（房间）
+- 前端缓存 400 条
+- 分片渲染（每次 60 条）
+- 地图数据缓存 60 秒
+
+**P0-2D 结论**：**暂不改**。等实际性能问题出现再优化。
+
+**记录为未来优化项**：
+- 虚拟滚动（`IntersectionObserver`）
+- 数据库替代 JSON（大改，需权衡）
+
+---
+
+## 8. 特别保护：产品目标
+
+### 8.1 不是要变成
+
+❌ "一个会自动聊天的网页"
+❌ "一个让 AI 每 30 秒思考一次的烧钱机器"
+❌ "一堆功能堆叠的集合"
+
+### 8.2 而是要成为
+
+✅ **临空市：一个会自己呼吸的 AI 社区**
+
+```
+
+世界发生事件
+↓
+Event
+↓
+Agent 感知
+↓
+AgentState + Memory + Goal
+↓
+Brain
+↓
+Decision
+↓
+现有 Linkong Capability
+↓
+世界发生变化
+↓
+新的 Event ↺
+
+```
+
+### 8.3 核心方向
+
+- 生活 → 生态 → 世界 → 多元宇宙
+- 用户参与 + AI 自主 = 共同生活
+- 低 Token 成本 + 高智能感
+
+---
+
+## 9. 现有系统保护清单
+
+### 9.1 P0-2D 禁止修改
+
+| 系统 | 位置 | 状态 |
+|------|------|------|
+| `ext_ai.py` | 全部 | ❌ 不修改 |
+| `ext_world.py` | 全部 | ❌ 不修改 |
+| `ext_date.py` | 全部 | ❌ 不修改 |
+| `ext_econ.py` | 全部 | ❌ 不修改 |
+| `ext_shop.py` | 全部 | ❌ 不修改 |
+| `ext_instance.py` | 全部 | ❌ 不修改 |
+| `ext_memory.py` | 全部 | ❌ 不修改 |
+| `main.py` | 全部 | ❌ 不修改 |
+| `agent/state.py` | 全部 | ❌ 不修改 |
+| `agent/event.py` | 全部 | ❌ 不修改 |
+| `agent/event_adapter.py` | 全部 | ❌ 不修改 |
+| 前端任何文件 | 全部 | ❌ 不修改 |
+| `data.json` schema | 全部 | ❌ 不修改 |
+
+### 9.2 特别禁止
+
+- ❌ EventBus / EventStore / EventQueue
+- ❌ Scheduler / Wake / Brain / Decision Engine / Action Engine
+- ❌ Memory 重构
+- ❌ TTS / VoiceStudio 接入
+- ❌ ai_id 迁移
+- ❌ 重写 ext_ai.py / ext_world.py
+
+---
+
+## 10. 附录：P0-2C → P0-2D 的变化
+
+| Event | P0-2C 状态 | P0-2D 冻结 |
+|-------|-----------|-----------|
+| `message_received` | ✅ 已完成 | ✅ 语义冻结 |
+| `message_sent` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `sms_sent` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `relationship_changed` | 🟡 已定位 | ✅ 降为 NONE 级别 |
+| `location_changed` | 🟡 15 处 | ✅ **吸收规则冻结**（Section 3） |
+| `entered_location` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `work_started` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `work_finished` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `date_invited` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `date_agreed` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `date_started` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `date_finished` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `gift_received` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `item_bought` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `gift_sent` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `instance_created` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `instance_entered` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `instance_paused` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `instance_finished` | 🟡 已定位 | ✅ 语义 + LLM 级别冻结 |
+| `activity_started` | ❌ 不存在 | ❌ 已删除 |
+| `money_changed` | ❌ 独立 Event | ❌ 不作为 Event |
+
+**总计**：19 个 Event 语义冻结（1 已完成 + 18 新冻结）。
+
+---
+
+## 11. 完成后的状态
+
+- ✅ Event 语义冻结完成
+- ✅ source / ai_name / payload 冻结
+- ✅ LLM 触发级别（NONE / LOW / HIGH）已定义
+- ✅ location_changed 吸收规则已冻结
+- ✅ Token / 性能影响分析完成
+- ✅ 12 问检查完成
+- ✅ 产品目标已明确
+- ✅ 现有系统保护清单完成
+- ❌ 未修改任何现有代码
+- ❌ 未建立 EventBus / Scheduler / Wake / Brain
+
+**下一步（由架构顾问决定）**：
+- 可能进入 P0-3：Event Adapter 扩展
+- 或 P0-2E：Event Schema 具体化
+- 或直接进入 EventBus 设计
+
+**P0-2D 完成，等待验收。**
+```
+
+---
+
+请确认后操作
+
+步骤 1：GitHub 创建文件
+
+1. 打开测试服仓库根目录
+2. Add file → Create new file
+3. 文件名：20260918_P0-2D_Event_Semantics_Freeze.md
+4. 粘贴上面完整 Markdown
+5. Commit message：P0_STEP2D_EVENT_SEMANTICS_FREEZE: freeze event semantics and LLM levels
+
+步骤 2：等 Zeabur 部署
+
+.md 文件不影响部署，但会触发一次 deploy。确认无报错。
+
+步骤 3：拿 commit SHA
+
+GitHub commit 列表 → 最新 commit → 复制 SHA
+
+步骤 4：发报告给顾问
+
+```
+==========================================================
+P0-2D 完成报告：Event Semantics Freeze
+==========================================================
+
+📅 完成日期：2026-09-18
+🔖 Git Commit SHA：<填入>
+📦 分支：<填入>
+
+----------------------------------------------------------
+一、新增文件
+----------------------------------------------------------
+20260918_P0-2D_Event_Semantics_Freeze.md
+
+----------------------------------------------------------
+二、校对依据
+----------------------------------------------------------
+ext_ai.py / ext_world.py / ext_date.py / ext_econ.py / ext_shop.py / ext_instance.py
+P0-2C Event Boundary Map
+
+----------------------------------------------------------
+三、Event 语义冻结数量
+----------------------------------------------------------
+总计 19 个 Event 语义冻结：
+- 1 个已完成（message_received）
+- 18 个新冻结（含 source / ai_name / payload / LLM 级别）
+
+----------------------------------------------------------
+四、关键冻结内容
+----------------------------------------------------------
+1. LLM 触发级别（NONE / LOW / HIGH）定义
+2. location_changed 吸收规则（Section 3）
+3. source / ai_name 冻结语义（Section 4）
+4. Token / 性能影响分析（Section 6）
+5. AI 真实生活目标保护检查 12 问（Section 7）
+
+----------------------------------------------------------
+五、未修改任何现有系统
+----------------------------------------------------------
+✅ ext_ai.py / ext_world.py / ext_date.py   未修改
+✅ ext_econ.py / ext_shop.py / ext_instance.py   未修改
+✅ main.py / agent/*.py   未修改
+✅ 前端任何文件   未修改
+✅ data.json schema   未修改
+
+----------------------------------------------------------
+六、明确边界
+----------------------------------------------------------
+✅ 只新增 1 个 .md 文档
+✅ 未创建 EventBus / Scheduler / Wake / Brain
+✅ 未接入新 Event Adapter
+✅ 未重构 Memory
+✅ 未接入 TTS
+✅ 未迁移 ai_id
+✅ 未修改任何数据格式
+
+----------------------------------------------------------
+七、下一步
+----------------------------------------------------------
+P0-2D 完成，等待验收。
+不自动进入 P0-2E / P0-3 / EventBus / Scheduler / Wake / Brain。
+```
+
+步骤 5：停止，等顾问回复
+
+---
+
+一个额外建议
+
+如果你想让文档更"真实"，可以在每个 Event 的"发生位置"字段加上 GitHub 代码文件的具体行号或函数签名。例如：
+
+```
+**发生位置**：`ext_date._finish_date()` LXXX-LXXX
+```
+
+这样顾问审查时可以直接跳到代码验证，比函数名引用更精确。
+
+但工作量较大，可选。当前基于函数名的引用已经足够。
+
+在顾问回复之前，不要动任何代码。
