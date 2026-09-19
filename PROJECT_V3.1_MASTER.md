@@ -10,6 +10,9 @@
 - 当前 V3.0/V3.1 开发与验收：`bluekiki610/TEST`
 - V3.0 P0-1 ~ P0-3B 已完成/接受。
 - V3.1 当前处于：**Architecture Freeze 前的总整理阶段**。
+- V3.1 Phase A（Global Architecture Inventory）已完成。
+- 当前系统事实见 §22（不改变目标架构，只是真实起点）。
+- Architecture Contract 见 `docs/V3.1_ARCHITECTURE_CONTRACT.md`（FROZEN）。
 - 现在不要直接继续堆 autonomous behavior；先冻结架构与全局影响边界。
 
 ## 1. 产品定义
@@ -555,5 +558,590 @@ PROJECT 是“架构地图”，不是代码实现说明书。
 > Event 是世界共同语言。
 
 > 先统一语义，再拆文件；先接管决策，再迁移执行。
+>
+
+## 22. 当前系统事实（Phase A Inventory 结果 · 2026-09-19）
+
+> 本节记录的是**当前 TEST 仓库真实状态**，不是 V3.1 目标架构。
+> 未来所有改造必须以此为起点，不能假设现状与设计一致。
+> 完整清单见：`docs/V3.1_GLOBAL_ARCHITECTURE_INVENTORY.md`
+
+### 22.1 后台运行结构
+
+**10 个常驻后台循环**：
+
+| 文件 | 名称 | 间隔 | 职责 |
+|------|------|------|------|
+| main | snapshot_loop | 1800s | 自动快照 |
+| ext_ai | auto_ai_loop | 30s | AI 自主生活/剧情/写作/上班/约会萌发 |
+| ext_ai | follow_watch | 5s | 跟随状态检查 |
+| ext_world | ai_spot_tick | 30s | 跨建筑到达检测 |
+| ext_econ | work_tick | 30s | 工资结算 |
+| ext_shop | ai_shop_tick | 60s | AI 自主购物 |
+| ext_date | date_tick | 5s | 约会状态机 |
+| ext_contact | contact_tick | 900s | 主动关心 |
+| ext_holiday | announcement_worker | 1800-3600s | 节日公告 |
+| ext_memory | _nightly_scheduler_loop | 每天 2:05 | 夜间记忆批处理 |
+
+**数十个单次 `threading.Timer`**：全部未持久化，服务器重启后丢失。
+
+**关键事实**：
+- **无统一 Scheduler**
+- **无 Wake Score**
+- **无冷却机制**（除 `ai_drive_log` 30s + `ai_group_cooldown` 之外）
+
+### 22.2 ext_ai 是当前 AI Orchestration Hub
+
+`ext_ai.py` 通过 `m.drive_ai` / `m.call_llm` / `m.set_ai_wake_hook` 挂载为全系统 AI 中枢。
+
+**被 8+ 模块调用**：ext_world / ext_date / ext_econ / ext_shop / ext_sms / ext_room / ext_instance / ext_contact / ext_admin。
+
+**调用形式**：`m.drive_ai(ai, trigger, room, trigger_text, fallback_to)`
+
+**关键事实**：`ext_ai` 不是"一个 AI 的 Runtime"，而是**全系统 AI 行为的唯一调度器**。这是 V3.1 AgentRuntime 必须逐步接管的核心边界。
+
+### 22.3 AgentState / Event / AgentRuntime 当前状态
+
+| 模块 | 状态 | 是否被调用 |
+|------|------|-----------|
+| `agent/state.py` | P0-1 完成 | ❌ 无调用者 |
+| `agent/event.py` | P0-2A 完成 | ✅ 被 event_adapter / runtime |
+| `agent/event_adapter.py` | P0-2B 完成 | ✅ 被 ext_ai.wake_ais_for_room（room != main）|
+| `agent/runtime.py` | P0-3A/3B 完成 | ❌ 无调用者 |
+
+**注意**：AgentRuntime 目前是**旁路观察**，不影响任何现有行为。
+
+### 22.4 ai_location 写入点（15 处）
+
+| # | 位置 | 原因 |
+|---|------|------|
+| 1-2 | ext_ai.execute_action (speak+follow / speak普通) | AI 发言时更新位置 |
+| 3-4 | ext_ai.execute_action (note / diary) | AI 写字时更新位置 |
+| 5 | ext_ai.execute_action (move) | AI 主动移动 |
+| 6 | ext_ai.wake_ais_for_room 大喊分支 | 大喊召唤到达 |
+| 7 | ext_ai._follow_arrive | 跟随到达 |
+| 8 | ext_ai.drive_ai summon | 召唤同建筑 |
+| 9 | ext_ai._check_meetings | 约定到达 |
+| 10 | ext_date._arrive_date | 约会到达 |
+| 11 | ext_econ.auto_start_work | 上班位置 |
+| 12 | ext_instance.enter_instance | 进入副本 |
+| 13 | ext_instance.pause_instance | 副本暂停传回 |
+| 14 | ext_instance.end_instance | 副本结束传回 |
+| 15 | main.check_pending_moves | 延迟移动到期 |
+
+**风险**：无统一入口；多处并发可能竞态。
+
+### 22.5 当前 Context 规模
+
+**每次完整 AI 对话约 7,000-10,000 tokens**（`ext_ai.build_ai_context`）。
+
+**组成**：DEFAULT_ROLEPLAY + world_lore + persona + user_profiles + worldbook + ai_impression + ai_timeline + ai_visited + room_notes/diary/story + date_ctx + chat_hist + prompt_injections + bctx + scene_hint + 输出规范。
+
+**V3.1 边界**：不粗暴砍掉；目标是通过 Context Budget + Memory Recall 让"历史增长不导致单次 Context 线性增长"。
+
+### 22.6 Memory Runtime 当前未运行
+
+**关键事实**：`ext_memory.py` 的 `enqueue_event()` 有致命 Bug：
+
+```python
+async def enqueue_event(...):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        result = await loop.run_until_complete(_enqueue_event_impl(...))  # ❌ 语法非法
+        return result
+    return await _enqueue_event_impl(...)  # ❌ 函数未定义
+    # ↓ 真实写文件逻辑永远不执行 ↓
+影响：
+
+16 处调用（ext_shop × 5 + ext_date × 5 + ext_world × 6）全部静默失败
+
+pending_events.json 从未被写入
+
+夜间批处理扫描到的是空目录
+
+用户聊天历史未被记忆化
+
+22.7 已知不一致 / 未挂载
+#	位置	问题
+1	ext_ai.build_ai_context	调用 m.get_date_context，但未找到任何挂载 → 恒返回 ""
+2	ext_ai.drive_ai	调用 m.on_ai_action，但未找到定义 → 死代码
+3	ext_admin.generate_impression	存 key 用 normalize_name(ai_name)，ext_ai 读 key 优先原始名 → key 不一致
+22.8 SNS 当前不存在
+当前系统：无朋友圈 / 无评论 / 无点赞 / 无动态。
+
+唯一接近：sms（短信）+ messages（房间/群聊）+ notifications（通知中心）。
+
+SNS 属于未来产品能力，Communication Layer（§11）已为它预留语义位置。
+
+22.9 Event 真空区
+模块	状态
+ext_econ	完全未调用 enqueue_event（工作/工资）
+ext_instance	完全未调用 enqueue_event（副本进出）
+ext_memory	调用失败（见 §22.6）
+22.10 事实与目标分离原则
+以上所有事实不改变 V3.1 目标架构，只是当前系统的真实起点。
+
+未来改造规则：
+
+任何改造必须以此节为基准，不能假设现状与设计一致
+
+任何"修 Bug"必须先评估是否影响 V3.1 边界
+
+任何"顺手重构"必须停，报告给架构审核
+
+text
+
+---
+
+## 文件 2：新建 `docs/V3.1_ARCHITECTURE_CONTRACT.md`
+
+```markdown
+# V3.1 Architecture Contract
+
+> 版本：2026-09-19
+> 状态：**FROZEN**
+> 依据：PROJECT V3.1 MASTER + Phase A Global Inventory
+> 目的：冻结 V3.1 边界，防止 Context / Motivation / Memory / Activity / Scheduler 相互侵入
+> 原则：只定义 Contract，不实现功能
+
+---
+
+## 0. 总原则
+V3.1 = orchestration / control layer over existing Linkong capabilities
+
+≠ 重写 Linkong
+≠ 建立第二套 World
+≠ 建立第二套 Source of Truth
+
+text
+
+**改造策略**：
+- 先统一语义，再拆文件
+- 先接管决策，再迁移执行
+- 先并行观察，再逐步切换
+- 旧功能不能坏
+
+---
+
+## 1. Source of Truth
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **SOT-1** | `main.data` 是当前唯一 Source of Truth |
+| **SOT-2** | AgentState 是 Projection，**不是** Source of Truth |
+| **SOT-3** | Event 是"事实描述"，**不是** Source of Truth |
+| **SOT-4** | 不允许任何 V3.1 模块创建第二数据源 |
+| **SOT-5** | 不允许任何 V3.1 模块双向同步 main.data |
+| **SOT-6** | 任何"缓存"必须是只读投影或可重建 |
+
+---
+
+## 2. AgentState
+
+### 定义
+`main.data` 的只读投影，描述"现在是什么状态"。
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **AS-1** | P0-1 实现保持不变，直到 P0-4 才考虑接入 |
+| **AS-2** | `mood` / `energy` / `social_need` / `stress` 是 placeholder，**不得**作为决策输入 |
+| **AS-3** | AgentState 不反向写入 main.data |
+| **AS-4** | `current_activity` 的推导优先级是 P0-1 临时规则，不代表最终行为模型 |
+| **AS-5** | 未来若需持久化 AgentState，必须单独设计，不得写入 main.data |
+
+---
+
+## 3. Event
+
+### 定义
+世界刚刚发生了什么（Fact）。
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **EV-1** | Event ≠ 函数调用（`drive_ai` / `call_llm` / `execute_action` / `save_data` 都不是 Event） |
+| **EV-2** | Event 不进入 LLM |
+| **EV-3** | Event 不修改 main.data |
+| **EV-4** | Event 不触发行为（不自动聊天 / 移动 / 约会 / 工作 / 购物 / TTS） |
+| **EV-5** | 一条用户消息 = 一个 Event（不是每个 AI 一个） |
+| **EV-6** | Event 语义冻结见 `20260918_P0-2D_Event_Semantics_Freeze.md` |
+| **EV-7** | `location_changed` 吸收规则已冻结（见 P0-2D §3） |
+| **EV-8** | 旧 `enqueue_event` 与新 `agent.Event` **不是同一系统**，不得混用 |
+
+---
+
+## 4. AgentRuntime
+
+### 定义
+单个 AI 的 orchestration 生命周期。
+
+### 生命周期
+RECEIVE → PERCEIVE → WAKE_DECISION → CONTEXT
+→ THINK → DECISION → ACTION → WORLD_CHANGE → EVENT
+
+text
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **AR-1** | 一个 AI 一个 Runtime 实例（不是"超级 Runtime 管理所有 AI"） |
+| **AR-2** | Runtime 不直接访问 main.data（只通过 Contract 方法） |
+| **AR-3** | Runtime 不直接修改 World（只通过 Decision → Action 让现有 ext_* 修改） |
+| **AR-4** | Runtime 不替代 ext_ai（**旁路观察**） |
+| **AR-5** | P0-3B 感知链保持不变 |
+| **AR-6** | P0-3B **不返回 THINK**（留给未来 Wake Score） |
+| **AR-7** | Runtime 不成为 main.data 第二个数据库 |
+
+---
+
+## 5. Context Assembly
+
+### 定义
+独立于旧 `build_ai_context` 的 Context 构造层。
+
+### 分层
+| 层 | 内容 | 是否增长 |
+|----|------|---------|
+| **A. Stable Core** | 世界观 / 人设 / 核心用户信息 / 长期身份 | ❌ 稳定 |
+| **B. Recent** | 当前对话 / 最近 Event / 当前活动 | ❌ 有界 |
+| **C. Long-term** | Memory / Relationship / 历史事件 | ✅ 按需检索 |
+| **D. Dynamic World** | AgentState / 当前地点 / 当前世界状态 | ❌ 瞬时 |
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **CA-1** | Context Assembly 与旧 `build_ai_context` **并行运行** |
+| **CA-2** | 不修改旧 `build_ai_context` |
+| **CA-3** | 目标：历史增长**不**导致单次 Context 线性增长 |
+| **CA-4** | 不粗暴砍掉现有 7k-10k tokens（保护世界观 / 人设 / 关系 / Memory 连续性） |
+| **CA-5** | Long-term 层必须**按需检索**，不默认全量注入 |
+
+---
+
+## 6. Memory
+
+### 定义
+人类式记忆：Experience → Emotional Encoding → Association → Dormant → Cue → Recall。
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **ME-1** | **当前 `ext_memory` Runtime 不修复** |
+| **ME-2** | **当前 `ext_memory` Runtime 不启用** |
+| **ME-3** | **不假设旧记忆链有效** |
+| **ME-4** | Memory ≠ Chat History |
+| **ME-5** | Memory Recall 不是搜索，是"被想起"（Cue-driven） |
+| **ME-6** | 普通聊天 Recall 0 是常态 |
+| **ME-7** | 特殊情境 Recall 1-2 |
+| **ME-8** | 真正重要：少量高价值记忆 |
+| **ME-9** | 不做 ai_impression key migration（暂缓） |
+| **ME-10** | 未来 Memory Recall 接口预留，但本阶段不实现 |
+
+---
+
+## 7. Goal
+
+### 定义
+AI 现在/近期想完成什么，以及为什么。
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **GO-1** | 本阶段**不实现** |
+| **GO-2** | 不引入随机目标 |
+| **GO-3** | 不修改 `_plan_auto` |
+| **GO-4** | 未来必须从 Relationship / Memory / Commitment 推导，不凭空生成 |
+
+---
+
+## 8. Motivation
+
+### 定义
+Goal + State + Relationship + Memory → 行动动机。
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **MO-1** | 本阶段**不实现** |
+| **MO-2** | 不替代当前 `_plan_auto` 的随机概率 |
+| **MO-3** | 未来随机性只用于生活细节 / 候选生成，不解释核心关系/承诺 |
+
+---
+
+## 9. Commitment
+
+### 定义
+AI 已经答应 / 约定 / 承诺什么。
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **CO-1** | 本阶段**不实现** |
+| **CO-2** | 不修改现有 `date_invites` / `date_invites_out` / `ai_meeting` 状态 |
+| **CO-3** | 不修改现有 date/meeting 状态机 |
+| **CO-4** | 未来 Commitment 是解决"AI 为什么现在应该去那里"的关键层 |
+
+---
+
+## 10. Activity
+
+### 定义
+PLANNED → TRAVELING → ARRIVED → ACTIVE → PAUSED → COMPLETED / CANCELLED。
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **AC-1** | 本阶段**不实现** |
+| **AC-2** | 不修改现有 `work_sessions` / `dates` / `ai_shop_state` / `instances` |
+| **AC-3** | 不修改现有 date/world/shop/instance 的状态字段 |
+| **AC-4** | 未来 Activity 应有 `activity_id` / `type` / `actor` / `participants` / `place` / `started_at` / `expected_end_at` / `status` / `reason` / `linked_commitments` |
+
+---
+
+## 11. World Query
+
+### 定义
+Brain / Policy 查询世界的方法（`query_places(purpose, urgency, open_now)` 等）。
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **WQ-1** | 本阶段**不实现** |
+| **WQ-2** | 不替代现有 `find_building_of_room` / `resolve_building` / `can_access_room` |
+| **WQ-3** | 不修改 `buildings` / `rooms` / `npcs` schema |
+| **WQ-4** | 未来 World Query 必须基于现有数据结构，不引入新索引（除非单独设计） |
+
+---
+
+## 12. Communication
+
+### 定义
+Chat / SMS / Group Chat / SNS / Comment / Notification / Date Invitation / AI↔AI。
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **CM-1** | Brain 决定"是否沟通 / 对象 / 原因 / 渠道 / 时机" |
+| **CM-2** | 底层插件负责执行（ext_sms / ext_ai / ext_notes / ext_core） |
+| **CM-3** | **SNS 本阶段不实现** |
+| **CM-4** | **AI↔AI autonomous loop 本阶段不实现** |
+| **CM-5** | 不修改现有 `ext_sms` / `ext_ai.wake_ais_for_room` / `ext_ai._group_talk` |
+| **CM-6** | SNS 属于未来产品能力，Communication Layer 已预留语义位置 |
+
+---
+
+## 13. Action
+
+### 定义
+执行层，只执行不解释动机。
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **AX-1** | Action 不直接修改 main.data |
+| **AX-2** | Action 只调用现有 ext_* 能力 |
+| **AX-3** | 当前 `ext_ai.execute_action` **保持不变** |
+| **AX-4** | 未来迁移时必须"旧功能不能坏" |
+| **AX-5** | Action 与 Decision 分离（不在 Action 中做决策） |
+
+---
+
+## 14. Scheduler
+
+### 定义
+统一调度，替代散落的 `threading.Timer` 和后台循环。
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **SC-1** | 本阶段**不实现** |
+| **SC-2** | **不替代**任何现有 `threading.Timer` |
+| **SC-3** | **不替代**任何现有后台循环（`auto_ai_loop` / `ai_spot_tick` / `work_tick` / `ai_shop_tick` / `date_tick` / `contact_tick`） |
+| **SC-4** | 未来迁移必须是"只读观察 → 并行 → 切换"三步走 |
+| **SC-5** | 未来 Scheduler 必须解决"重启丢失 Timer"问题（持久化） |
+
+---
+
+## 15. ext_ai migration boundary
+
+### 当前事实
+`ext_ai` 是全系统 AI orchestration hub，被 8+ 模块调用。
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **AI-1** | **不重写** `ext_ai.py` |
+| **AI-2** | **不删除** `ext_ai.py` |
+| **AI-3** | 先迁移**接口**（`m.drive_ai` / `m.call_llm` / `m.set_ai_wake_hook`） |
+| **AI-4** | 后迁移**实现** |
+| **AI-5** | 迁移过程必须"旧功能不能坏" |
+| **AI-6** | 迁移必须**分阶段**，不一次性重构 |
+| **AI-7** | 未来 `ext_ai` 从"总控制器"退化为兼容/编排层 |
+
+---
+
+## 16. Legacy compatibility rules
+
+### 冻结规则
+
+| 规则 | 内容 |
+|------|------|
+| **LC-1** | `main.data` 是 Source of Truth，**不迁移** |
+| **LC-2** | `main.py` **不重写** |
+| **LC-3** | 现有 API **不删除**（可以新增） |
+| **LC-4** | 现有插件 **不删除**（可以新增） |
+| **LC-5** | 前端 **不重写**（可以增强） |
+| **LC-6** | 现有 `ext_*` 业务逻辑**不修改**（除非单独 PR 说明） |
+| **LC-7** | 改名迁移路径**继续有效**（ext_admin.replace_name_in_data） |
+| **LC-8** | 名字规范化系统（`canonical_ai_name` / `owner_of_ai`）**继续有效** |
+
+---
+
+## 17. 不现在做（完整清单）
+
+以下全部**本阶段不做**：
+
+### 修复 / 迁移类
+- ❌ 修复 `ext_memory`
+- ❌ 重新启用 `ext_memory`
+- ❌ ai_impression key migration
+- ❌ 处理 15 处 `ai_location`
+- ❌ 修复 `get_date_context` 未挂载
+- ❌ 修复 `on_ai_action` 未定义
+
+### 新增 / 实现类
+- ❌ 创建 Scheduler
+- ❌ 实现 Goal / Motivation / Commitment
+- ❌ 实现 Activity Lifecycle
+- ❌ 实现 World Query
+- ❌ 实现 Brain / Decision
+- ❌ 实现 AI↔AI autonomous loop
+- ❌ 实现 SNS
+- ❌ 实现 Chat Pagination
+- ❌ 实现 local chat archive
+- ❌ 实现 TTS / VoiceStudio
+- ❌ 实现 World Clone / multi-tenant
+
+### 修改类
+- ❌ 修改 `main.py` 业务逻辑
+- ❌ 修改 `ext_ai.py` 业务逻辑
+- ❌ 修改 `ext_world.py` 业务逻辑
+- ❌ 修改 `ext_date.py` 业务逻辑
+- ❌ 修改 `ext_econ.py` 业务逻辑
+- ❌ 修改 `ext_shop.py` 业务逻辑
+- ❌ 修改 `ext_sms.py` 业务逻辑
+- ❌ 修改 `ext_room.py` 业务逻辑
+
+---
+
+## 18. 允许修改的边界（本阶段）
+
+**只允许修改**：
+
+| 文件 | 内容 |
+|------|------|
+| `PROJECT_V3.1_MASTER.md` | 追加 §22 当前系统事实 |
+| `docs/V3.1_ARCHITECTURE_CONTRACT.md` | 本文件 |
+
+**不修改**：
+- 任何 `.py`
+- 任何 `.js`
+- 任何 `.html`
+- 任何 `data/*.json`
+- `requirements.txt`
+
+---
+
+## 19. 进入 Phase B 的条件
+
+**进入 Phase B（Context Foundation）必须满足**：
+
+- [x] Phase A Global Inventory 已完成
+- [x] Phase A-2 Architecture Contract 已冻结
+- [x] PROJECT_V3.1_MASTER.md 已更新
+- [x] 未修改任何业务代码
+- [ ] 架构审核通过
+
+**只有全部满足后，才能进入 Phase B。**
+
+---
+
+## 20. Contract 变更规则
+
+| 规则 | 内容 |
+|------|------|
+| **CC-1** | 任何边界修改必须先更新本 Contract |
+| **CC-2** | 不允许"顺手改" |
+| **CC-3** | 修改必须经架构审核 |
+| **CC-4** | 修改必须记录在本 Contract 的变更日志中 |
+| **CC-5** | Contract 是 V3.1 所有阶段的设计锚点 |
+
+---
+
+## 21. 为什么下一步是 Context Foundation
+
+### Phase B（V3.1 Context Foundation）的必要性
+
+**1. Context 是当前最痛的瓶颈**
+- 每次对话 7k-10k tokens
+- 上下文包含 15+ 片段
+- 无分层、无预算、无按需检索
+
+**2. Context 是后续所有阶段的前置依赖**
+- Memory Recall → 需要 Context 分层
+- Goal / Motivation → 需要 Context 提供状态
+- Activity Lifecycle → 需要 Context 提供当前活动
+- World Query → 需要 Context 提供世界状态
+
+**3. Context Foundation 完全独立于业务代码**
+- 只新增 `agent/context.py` 之类的模块
+- 不修改 `build_ai_context`
+- 可并行运行、独立测试
+
+**4. 不做 Context Foundation 就进入 Goal/Motivation 会失控**
+- 会导致 Goal 层自己去拼 context
+- 会导致 Motivation 层重复读取 main.data
+- 会破坏 Contract 的"单一 Source of Truth"原则
+
+**结论**：Context Foundation 是**低风险、高价值、被所有后续阶段依赖**的第一步。它是 V3.1 从"文档"走向"代码"的正确切入点。
+
+---
+
+## 22. 附录：Contract 与 P0-* 文档的关系
+
+| 文档 | 定位 | 状态 |
+|------|------|------|
+| `PROJECT.md` | 旧版功能地图 | 保留，被 MASTER 引用 |
+| `PROJECT_V3.1_MASTER.md` | V3.1 设计总纲 | 活跃更新 |
+| `docs/V3.1_GLOBAL_ARCHITECTURE_INVENTORY.md` | Phase A 事实盘点 | FROZEN（事实） |
+| `docs/V3.1_ARCHITECTURE_CONTRACT.md` | **本文件** | FROZEN（边界） |
+| `20260918_P0-2D_Event_Semantics_Freeze.md` | Event 语义冻结 | FROZEN |
+| `20260918_P0-3A_Agent_Runtime_Contract.md` | Runtime 生命周期 | FROZEN |
+
+**冲突解决顺序**：Contract > MASTER > 阶段文档 > 旧文档。
+
+---
+
+**V3.1 Architecture Contract 已冻结。**
+
+**下一步：等待架构审核，然后进入 Phase B（V3.1 Context Foundation）。**
 
 > 世界越来越真实，而不是系统越来越复杂。
