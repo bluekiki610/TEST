@@ -240,30 +240,22 @@ def setup(app, data, helpers):
             try:
                 _broadcast_to_owner(owner, f"💝 {ai} 给你带回了 {it['icon']}{it['name']}，回礼你的心意")
             except Exception as e:
-                print(f"⚠️ [SHOP] 回礼广播失败: {e}")
-            
-            try:
-                asyncio.create_task(enqueue_event(
-                    user=owner,
-                    ai=ai,
-                    action="回礼",
-                    place="",
-                    raw_text=f"{ai} 回赠 {owner} {it['icon']}{it['name']}",
-                    valence_guess=8,
-                    arousal_guess=6
-                ))
-            except Exception:
-                pass
+                print(f"⚠️ [SHOP] 回礼广播失败，但礼物已送出: {e}")
+            _safe_enqueue_event(
+                user=owner,
+                ai=ai,
+                action="回礼",
+                place="",
+                raw_text=f"{ai} 回赠 {owner} {it['icon']}{it['name']}",
+                valence_guess=8,
+                arousal_guess=6
+            )
             save_data()
         except Exception:
             pass
 
     def _do_active_gift(ai, owner):
         try:
-            # ===== 插入这两行：打印调用堆栈 =====
-            import traceback
-            traceback.print_stack()
-            # ===== 插入结束 =====
             wallet = data['wallets'].get(ai, 0) or 0
             gift_items = _gift_items_buyable(wallet)
             if not gift_items:
@@ -280,43 +272,65 @@ def setup(app, data, helpers):
             except Exception as e:
                 print(f"⚠️ [SHOP] 主动送礼广播失败，但礼物已送出: {e}")
 
-            try:
-                asyncio.create_task(enqueue_event(
-                    user=owner,
-                    ai=ai,
-                    action="主动送礼",
-                    place="逛街",
-                    raw_text=f"{ai} 逛街时给 {owner} 带了 {it['icon']}{it['name']}",
-                    valence_guess=8,
-                    arousal_guess=6
-                ))
-            except Exception as e:
-                print(f"⚠️ [SHOP] 记忆记录失败: {e}")
+            _safe_enqueue_event(
+                user=owner,
+                ai=ai,
+                action="主动送礼",
+                place="逛街",
+                raw_text=f"{ai} 逛街时给 {owner} 带了 {it['icon']}{it['name']}",
+                valence_guess=8,
+                arousal_guess=6
+            )
             save_data()
             return True
         except Exception as e:
             print(f"⚠️ [SHOP] 主动送礼致命失败: {e}")
             return False
 
+    def _safe_enqueue_event(**kwargs):
+        """在可能没有 event loop 的后台线程里安全提交 enqueue_event。
+        失败只打日志，绝不抛出，也绝不影响调用方的交易/状态。"""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(enqueue_event(**kwargs))
+        except RuntimeError:
+            print(f"[SHOP] 无 event loop，跳过 enqueue_event: {kwargs.get('action', '?')}", flush=True)
+        except Exception as e:
+            print(f"[SHOP] enqueue_event 提交失败: {e}", flush=True)
+
     def _buy_ai_item(ai, b, it):
-        # ===== 加堆栈打印 =====
-        import traceback
-        traceback.print_stack()
-        # ===== 加堆栈打印结束 =====
         price = it['price']
         wallet = data['wallets'].get(ai, 0) or 0
         if wallet < price:
             return False
+
+        # ===== 1. 核心交易 =====
         data['wallets'][ai] = wallet - price
+
+        # ===== 2. 立即提交购物状态（必须在任何非核心副作用之前） =====
+        st = _ai_shop_state(ai)
+        st['last_ts'] = time.time()
+        st['day_count'] = st.get('day_count', 0) + 1
+        st['next_shop_ts'] = time.time() + random.randint(2400, 4800)
+        save_data()
+
+        # ===== 3. 非核心副作用（每步独立 try，失败不影响交易和状态） =====
         bname = b.get('name', '?')
-        add_trail(ai, f"在 {bname} 买了 {it['icon']}{it['name']}（-{price} 金币）")
-        _broadcast(bname, f"📍 {ai} 在 {bname} 买了 {it['icon']}{it['name']}")
+        try:
+            add_trail(ai, f"在 {bname} 买了 {it['icon']}{it['name']}（-{price} 金币）")
+        except Exception as e:
+            print(f"[SHOP] add_trail 失败({ai}): {e}", flush=True)
+        try:
+            _broadcast(bname, f"📍 {ai} 在 {bname} 买了 {it['icon']}{it['name']}")
+        except Exception as e:
+            print(f"[SHOP] broadcast 失败({ai}): {e}", flush=True)
         try:
             append_timeline(ai, f"在 {bname} 买了{it['name']}，{it.get('desc', '')}")
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[SHOP] append_timeline 失败({ai}): {e}", flush=True)
 
-        asyncio.create_task(enqueue_event(
+        # ===== 4. 记忆事件（异步安全提交，失败不影响交易） =====
+        _safe_enqueue_event(
             user=_owner_of(ai) or ai,
             ai=ai,
             action="AI消费",
@@ -324,15 +338,8 @@ def setup(app, data, helpers):
             raw_text=f"{ai} 在 {bname} 买了 {it['icon']}{it['name']}（{price}金币）",
             valence_guess=6,
             arousal_guess=4
-        ))
+        )
 
-        st = _ai_shop_state(ai)
-        st['last_ts'] = time.time()
-        st['day_count'] = st.get('day_count', 0) + 1
-        # ===== 修复：设置下次可购买时间（40~80分钟后） =====
-        st['next_shop_ts'] = time.time() + random.randint(2400, 4800)
-        # ===== 修复结束 =====
-        save_data()
         return True
 
     def ai_shop_tick():
@@ -415,8 +422,8 @@ def setup(app, data, helpers):
                             continue
                         it = random.choice(cands)
                         _buy_ai_item(ai, b, it)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[SHOP] ai_shop_tick 异常: {e}", flush=True)
             time.sleep(60)
 
     @app.get('/api/shop/menu')
