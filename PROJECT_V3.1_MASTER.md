@@ -11,6 +11,11 @@
 - V3.0 P0-1 ~ P0-3B 已完成/接受。
 - V3.1 当前处于：**Architecture Freeze 前的总整理阶段**。
 - V3.1 Phase A（Global Architecture Inventory）已完成。
+  - V3.1 Phase B1（Context Data Contract）已完成。
+  - 新增 `agent/context.py`
+  - 新增 `test_b1_context.py`
+  - 当前 Context Architecture 见 §14.1
+  - B2 / B3 尚未开始
 - 当前系统事实见 §22（不改变目标架构，只是真实起点）。
 - Architecture Contract 见 `docs/V3.1_ARCHITECTURE_CONTRACT.md`（FROZEN）。
 - 现在不要直接继续堆 autonomous behavior；先冻结架构与全局影响边界。
@@ -438,6 +443,43 @@ Stable Core
 历史增长不导致单次 Context 线性增长。
 
 LLM Cost ≈ LLM Call Count × Context Size
+
+### 14.1 当前 Context Architecture（Phase B1 完成）
+
+**已建立**：Context 数据结构 + 预算模型。
+
+**四层**：
+
+| 层 | 内容 | 预算上限 | 增长特性 |
+|----|------|---------|---------|
+| Stable Core | 世界观 / 人设 / 用户画像 / 长期身份 | 2000 tokens | 不增长 |
+| Recent | 当前对话 / 最近事件 / 当前活动 | 3000 tokens | 有界 |
+| Long-term | Memory / Relationship / 历史事件 | 2500 tokens | 按需检索（B2 实现） |
+| Dynamic World | AgentState / 当前地点 / 当前世界状态 | 1000 tokens | 瞬时 |
+
+**总预算**：8500 tokens（略低于当前真实基线 7k-10k）。
+
+**核心数据结构**（`agent/context.py`）：
+- `AgentContext`：结构化对象，不是 Prompt 字符串
+- `ContextSection`：单层结构化内容（items 是 dict 列表）
+- `ContextBudget`：四层预算模型
+
+**关键原则**：
+- Context 是结构化对象，不是已拼好的 Prompt
+- 每层有独立预算上限
+- `to_debug_dict()` 不包含 items 内容（防泄漏）
+- 已预留 `decision_constraints` 字段（B1 不实现）
+
+**B1 边界**：
+- 不读取 `main.data`
+- 不调用 LLM
+- 不修改任何现有业务代码
+- 不启用 `ext_memory`
+- 不进入 `think()` / `decide()` / `execute()`
+
+**B2 未开始**：Providers（StableCoreProvider / RecentProvider / LongTermProvider / DynamicWorldProvider）
+
+**B3 未开始**：ContextAssembler + 接入 `agent/runtime.build_context()`
 
 ## 15. Wake / Relevance
 
