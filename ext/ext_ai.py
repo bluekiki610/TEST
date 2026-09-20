@@ -709,8 +709,8 @@ def setup(app, data, helpers):
                     except (TypeError, ValueError):
                         amin = 3
                     amin = max(1, min(5, amin))
+                    # 普通 SMS 导航只走 ai_pending_moves 一条移动链，不再写入 ai_meeting
                     data.setdefault("ai_pending_moves", {})[ai] = {"room": got, "at_ts": time.time() + amin * 60}
-                    data.setdefault("ai_meeting", {})[ai] = {"room": got, "at_ts": time.time() + amin * 60}
                     append_timeline(ai, f"你答应 {to} 去 {got}，约 {amin} 分钟后到")
             elif act == "remember":
                 if content:
@@ -906,6 +906,14 @@ def setup(app, data, helpers):
                 a = (action.get("action") or "speak").lower()
                 if a in ("speak", "note", "diary", "story", "move", "remember", "work", "silent"):
                     action = {"action": "sms", "to": fallback_to, "content": action.get("content", ""), "go_to": action.get("go_to", ""), "arrive_min": action.get("arrive_min", 3)}
+
+            # ===== 5.5 arrive_sms 硬约束：到达后不得再次创建移动任务 =====
+            # 到达是终点行为，即使 LLM 返回了 go_to / arrive_min，也在执行层强制剥离，
+            # 防止 "到达 → arrive_sms → 发 SMS → 再次 go_to → 再次到达" 的反馈循环。
+            if trigger == "arrive_sms" and (action.get("action") or "").lower() == "sms":
+                action = dict(action)
+                action.pop("go_to", None)
+                action.pop("arrive_min", None)
 
             # ===== 6. summon 分支 =====
             if trigger == "summon":
