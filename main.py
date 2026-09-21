@@ -20,7 +20,7 @@ class CacheStaticFiles(StaticFiles):
     async def get_response(self, path, scope):
         response = await super().get_response(path, scope)
         if response.status_code == 200 and not path.lower().endswith((".html", ".js")):
-            response.headers["Cache-Control"] = "public, max-age=604800"
+            response.headers["Cache-Control"] = "public, max-age=86400"
         return response
 from pydantic import BaseModel
 import uvicorn
