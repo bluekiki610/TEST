@@ -11,11 +11,15 @@
 - V3.0 P0-1 ~ P0-3B 已完成/接受。
 - V3.1 当前处于：**Architecture Freeze 前的总整理阶段**。
 - V3.1 Phase A（Global Architecture Inventory）已完成。
-  - V3.1 Phase B1（Context Data Contract）已完成。
+- V3.1 Phase B1（Context Data Contract）已完成。
   - 新增 `agent/context.py`
   - 新增 `test_b1_context.py`
   - 当前 Context Architecture 见 §14.1
-  - B2 / B3 尚未开始
+- V3.1 Phase B2-1（StableCoreProvider）已完成。
+  - 新增 `agent/stable_core_provider.py`
+  - 新增 `test_b2_1_stable_core.py`
+  - 仅实现 Stable Core 层 Provider，不接 Runtime
+  - B2-2 / B2-3 / B2-4 尚未开始
 - 当前系统事实见 §22（不改变目标架构，只是真实起点）。
 - Architecture Contract 见 `docs/V3.1_ARCHITECTURE_CONTRACT.md`（FROZEN）。
 - 现在不要直接继续堆 autonomous behavior；先冻结架构与全局影响边界。
@@ -476,6 +480,38 @@ LLM Cost ≈ LLM Call Count × Context Size
 - 不修改任何现有业务代码
 - 不启用 `ext_memory`
 - 不进入 `think()` / `decide()` / `execute()`
+
+### 14.2 Context Providers（Phase B2 渐进）
+
+**B2 总原则**：
+- Provider ≠ Database
+- Provider ≠ Memory
+- Provider ≠ Decision
+- Provider ≠ Prompt
+- Provider 只负责：从已有系统事实中，取出一小块结构化数据
+
+**B2 分阶段**：
+
+| 阶段 | Provider | 状态 |
+|------|----------|------|
+| B2-1 | StableCoreProvider | ✅ 已完成 |
+| B2-2 | DynamicWorldProvider | ⏳ 未开始 |
+| B2-3 | RecentProvider | ⏳ 未开始 |
+| B2-4 | LongTermProvider（Stub） | ⏳ 未开始 |
+
+**B2-1 StableCoreProvider**：
+- 位置：`agent/stable_core_provider.py`
+- 输入：`fetch(ai_name, owner, data)`（data 由调用方传入，Provider 不 import main）
+- 输出：`List[Dict[str, Any]]`（结构化 items，不是 Prompt）
+- 提取内容：
+  - `identity`（AI 名 + owner 名）
+  - `world_lore`（世界观）
+  - `persona`（AI 人设）
+  - `user_profile`（用户画像）
+- 明确排除：messages / sms / trails / ai_timeline / ai_memories / ai_keys / dev_users / pairs_admin / server_id / ai_impression
+- 行为：只读、不缓存、不修改 data
+
+**B2 完成前不接 Runtime**：`agent/runtime.build_context()` 保持不变（P0-3A Stub）。
 
 **B2 未开始**：Providers（StableCoreProvider / RecentProvider / LongTermProvider / DynamicWorldProvider）
 
