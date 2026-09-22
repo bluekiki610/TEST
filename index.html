@@ -766,7 +766,14 @@ function isPrivateRoom(room){ var b=buildingOfRoom(room); return b!==null&&b.typ
 function canEnterRoom(room){ if(room==='main') return true; var b=buildingOfRoom(room); if(!b) return true; if(b.type==='npc') return true; if(isHallRoom(room)) return true; if(b.owner===userName) return true; var acc=mapData.room_access[room]||[]; if(acc.indexOf(userName)>=0) return true; for(var i=0;i<acc.length;i++){ if((mapData.user_ais[acc[i]]||[]).indexOf(userName)>=0) return true; } return false; }
 function showChat(){ ['mapView','regionView','buildingView','myView'].forEach(function(i){document.getElementById(i).style.display='none';}); document.getElementById('chatView').style.display='flex'; loadMessages(false); updateRoomUI(); bChatOn=false; curTab='chat'; updateTab(); }
 function showMap(){ ['chatView','regionView','buildingView','myView'].forEach(function(i){document.getElementById(i).style.display='none';}); document.getElementById('mapView').style.display='flex'; currentRegion=null; exitModes(); loadMap(); curTab='map'; updateTab(); }
-function showRegion(name){ currentRegion=name; ['chatView','mapView','buildingView','myView'].forEach(function(i){document.getElementById(i).style.display='none';}); document.getElementById('regionView').style.display='flex'; exitModes(); renderRegion(); }
+function showRegion(name){ 
+  currentRegion=name; 
+  ['chatView','mapView','buildingView','myView'].forEach(function(i){document.getElementById(i).style.display='none';}); 
+  document.getElementById('regionView').style.display='flex'; 
+  exitModes(); 
+  // ✅ 进入分区前强制拉最新 mapData（避免分地图路径缓存）
+  loadMapData().then(function(){ renderRegion(); }); 
+}
 function showBuilding(bid){ currentBuilding=bid; ['chatView','mapView','regionView','myView'].forEach(function(i){document.getElementById(i).style.display='none';}); document.getElementById('buildingView').style.display='flex'; exitModes(); renderBuilding(); }
 function backFromBuilding(){ if(buildingFromRegion) showRegion(currentBuildingRegion()); else showMap(); }
 function openBuilding(bid){
