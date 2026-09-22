@@ -19,7 +19,13 @@
   - 新增 `agent/stable_core_provider.py`
   - 新增 `test_b2_1_stable_core.py`
   - 仅实现 Stable Core 层 Provider，不接 Runtime
-  - B2-2 / B2-3 / B2-4 尚未开始
+- V3.1 Phase B2-2（DynamicWorldProvider）已完成。
+  - 新增 `agent/dynamic_world_provider.py`
+  - 新增 `test_b2_2_dynamic_world.py`
+  - 仅提供 current_time / current_location / AgentState 投影
+  - **不提供** current_map / current_region / current_place / current_building
+  - Map Knowledge 仅预留，未实现
+  - B2-3 / B2-4 尚未开始
 - 当前系统事实见 §22（不改变目标架构，只是真实起点）。
 - Architecture Contract 见 `docs/V3.1_ARCHITECTURE_CONTRACT.md`（FROZEN）。
 - 现在不要直接继续堆 autonomous behavior；先冻结架构与全局影响边界。
@@ -511,9 +517,25 @@ LLM Cost ≈ LLM Call Count × Context Size
 - 明确排除：messages / sms / trails / ai_timeline / ai_memories / ai_keys / dev_users / pairs_admin / server_id / ai_impression
 - 行为：只读、不缓存、不修改 data
 
+**B2-2 DynamicWorldProvider**：
+- 位置：`agent/dynamic_world_provider.py`
+- 输入：`fetch(ai_name, owner, data, now_ts=None, agent_state_dict=None)`
+- 输出：`List[Dict[str, Any]]`
+- 提供字段：
+  - `current_time`（北京时间，来自 provider.clock）
+  - `current_location`（直接读 `ai_location`）
+  - `current_activity` / `is_working` / `is_dating` / `is_following`（可选，从 AgentState 投影）
+- 保守缺省：
+  - **不提供** `current_building` / `current_map` / `current_region` / `current_place`
+  - 需要反查或多步推断，违反"不猜测"原则
+- Map Knowledge 预留（describe() 中声明，未实现）：
+  - `map_id` / `map_name` / `map_type` / `map_region`
+  - `map_owner` / `map_purpose` / `map_description`
+  - `map_tags` / `map_environment` / `map_places`
+
 **B2 完成前不接 Runtime**：`agent/runtime.build_context()` 保持不变（P0-3A Stub）。
 
-**B2 未开始**：Providers（StableCoreProvider / RecentProvider / LongTermProvider / DynamicWorldProvider）
+**B2 未完成**：Providers（StableCoreProvider / RecentProvider / LongTermProvider / DynamicWorldProvider）
 
 **B3 未开始**：ContextAssembler + 接入 `agent/runtime.build_context()`
 
