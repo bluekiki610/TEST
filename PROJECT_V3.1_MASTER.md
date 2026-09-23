@@ -642,7 +642,7 @@ LLM Cost ≈ LLM Call Count × Context Size
 |------|----------|------|
 | B2-1 | StableCoreProvider | ✅ 已完成 |
 | B2-2 | DynamicWorldProvider | ✅ 已完成 |
-| B2-3 | RecentProvider |  进行中 / 下一阶段 |
+| B2-3 | RecentProvider |  ✅ 已完成 |
 | B2-4 | LongTermProvider（Stub） | ⏳ 未开始 |
 
 **B2-1 StableCoreProvider**：
@@ -673,15 +673,45 @@ LLM Cost ≈ LLM Call Count × Context Size
   - `map_owner` / `map_purpose` / `map_description`
   - `map_tags` / `map_environment` / `map_places`
 
+**B2-3 RecentProvider**：
+- 位置：`agent/recent_provider.py`
+- 输入：
+  `fetch(ai_name, owner, data, now_ts=None, agent_state_dict=None)`
+- 输出：
+  `List[Dict[str, Any]]`
+- 当前数据源：
+  - `ai_timeline[ai]`
+  - `trails[ai]`
+  - `ai_visited[ai]`
+- 默认上限：
+  - timeline ≤ 5
+  - trail ≤ 5
+  - visited ≤ 3
+  - 单条 content ≤ 120 字符
+  - trails 默认 24 小时窗口
+- 当前最多输出约 13 个 Recent items。
+- 不读取完整 Chat / SMS / Notes / Diary / Story。
+- 不读取 Memory。
+- 不生成 Goal / Decision / Map / Building / Region / Place。
+- 不 import main / ext_*。
+- 不调用 LLM。
+- 不修改 main.data。
+- 当前直接读取现有系统事实，不经过 Event 层。
+- Event → RecentProvider 的统一接入留待后续阶段。
+
 **B2 全部完成前不接 Runtime**：`agent/runtime.build_context()` 保持P0-3A Stub。
 
 **B2 当前状态**：
 - StableCoreProvider：✅ 已完成
 - DynamicWorldProvider：✅ 已完成
-- RecentProvider：下一阶段
-- LongTermProvider：尚未开始
+- RecentProvider：✅ 已完成
+- LongTermProvider：⏳ 尚未开始
 
-**B3 未开始**：ContextAssembler + 接入 `agent/runtime.build_context()`
+**B2 全部完成前不接 Runtime**：
+`agent/runtime.build_context()` 继续保持 P0-3A Stub。
+
+**B3 未开始**：
+ContextAssembler + 接入 `agent/runtime.build_context()`
 
 ## 15. Wake / Relevance
 
