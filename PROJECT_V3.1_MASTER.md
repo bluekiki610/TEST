@@ -439,7 +439,7 @@ AI 应先根据 Goal / Motivation / Relationship / Time / World Condition 查询
 
 不要通过随机建筑选择代替 World Query。
 
-当前只记录架构，不实现 Map Query / Place Query
+当前只记录架构，不实现 Map Query / Place Query。
 
 ## 9. Autonomous Life
 
