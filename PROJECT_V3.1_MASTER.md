@@ -14,7 +14,15 @@
 - V3.1 Phase B1（Context Data Contract）已完成。
 - V3.1 Phase B2-1（StableCoreProvider）已完成。
 - V3.1 Phase B2-2（DynamicWorldProvider）已完成。
-- V3.1 当前进入 Phase B2-3（RecentProvider）。
+- V3.1 Phase B2-3（RecentProvider）已完成。
+  - 新增 `agent/recent_provider.py`
+  - 测试 `docs/test_b2_3_recent.py`（可从仓库根目录直接运行：`python docs/test_b2_3_recent.py`）
+  - **实际数据源**：
+    - `ai_timeline[ai]` → `recent_timeline`（上限 5 条）
+    - `trails[ai]` → `recent_trail`（24h 窗口 + 上限 5 条）
+    - `ai_visited[ai]` → `recent_visited_place`（上限 3 个）
+  - **明确不生成**：recent_map / recent_building / recent_region / recent_place / recent_decision / recent_goal / recent_memory / recent_full_chat / recent_full_sms
+  - **限制**：输出条数 ≤ 13，单条 ≤ 120 字符，输入 3000 条 → 输出 ≤ 13 条（非线性）
 - B2-4（LongTermProvider）尚未开始。
 - B3（ContextAssembler + Runtime 接入）尚未开始。
 现在不要直接继续堆 autonomous behavior；
@@ -675,29 +683,30 @@ LLM Cost ≈ LLM Call Count × Context Size
 
 **B2-3 RecentProvider**：
 - 位置：`agent/recent_provider.py`
-- 输入：
-  `fetch(ai_name, owner, data, now_ts=None, agent_state_dict=None)`
-- 输出：
-  `List[Dict[str, Any]]`
-- 当前数据源：
-  - `ai_timeline[ai]`
-  - `trails[ai]`
-  - `ai_visited[ai]`
-- 默认上限：
-  - timeline ≤ 5
-  - trail ≤ 5
-  - visited ≤ 3
-  - 单条 content ≤ 120 字符
-  - trails 默认 24 小时窗口
-- 当前最多输出约 13 个 Recent items。
-- 不读取完整 Chat / SMS / Notes / Diary / Story。
-- 不读取 Memory。
-- 不生成 Goal / Decision / Map / Building / Region / Place。
-- 不 import main / ext_*。
-- 不调用 LLM。
-- 不修改 main.data。
-- 当前直接读取现有系统事实，不经过 Event 层。
-- Event → RecentProvider 的统一接入留待后续阶段。
+- 测试：`docs/test_b2_3_recent.py`（从仓库根目录运行）
+- 输入：`fetch(ai_name, owner, data, now_ts=None, agent_state_dict=None)`
+- 输出：`List[Dict[str, Any]]`（结构化 items）
+- 数据源（全部有明确上限）：
+  - `ai_timeline[ai]`   → `recent_timeline`      (≤ 5 条)
+  - `trails[ai]`        → `recent_trail`         (≤ 5 条 + 24h 窗口)
+  - `ai_visited[ai]`    → `recent_visited_place` (≤ 3 个)
+- 边界：
+  - **不读** messages / sms / notes / diaries / stories
+  - **不读** ai_memories / ai_impression
+  - **不读** AgentState（current_activity 属于 Dynamic World）
+  - **不生成** map / building / region / place / decision / goal / memory
+- 预算策略：
+  - 条数上限：timeline 5 + trail 5 + visited 3 = 13
+  - 时间窗口：trails 默认 24h
+  - 内容长度：单条 ≤ 120 字符
+  - 非线性验证：输入 3000 条 → 输出 ≤ 13 条
+- 与 Event 的边界：
+  - 当前直接从 ai_timeline / trails / ai_visited 读
+  - 未来 Event 层就绪后可插入转换层
+- 与 Memory 的边界：
+  - Recent 只读最近事件，不做 Recall
+  - Long-term 由 B2-4 负责
+  - 旧 ext_memory 不修复、不启用
 
 **B2 全部完成前不接 Runtime**：`agent/runtime.build_context()` 保持P0-3A Stub。
 
