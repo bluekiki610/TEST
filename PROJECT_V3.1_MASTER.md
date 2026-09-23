@@ -9,26 +9,16 @@
 - 正式仓库：`bluekiki610/linkong`
 - 当前 V3.0/V3.1 开发与验收：`bluekiki610/TEST`
 - V3.0 P0-1 ~ P0-3B 已完成/接受。
-- V3.1 当前处于：**Architecture Freeze 前的总整理阶段**。
+- V3.1 当前处于：**Context Foundation / Phase B 阶段**。
 - V3.1 Phase A（Global Architecture Inventory）已完成。
 - V3.1 Phase B1（Context Data Contract）已完成。
-  - 新增 `agent/context.py`
-  - 新增 `test_b1_context.py`
-  - 当前 Context Architecture 见 §14.1
 - V3.1 Phase B2-1（StableCoreProvider）已完成。
-  - 新增 `agent/stable_core_provider.py`
-  - 新增 `test_b2_1_stable_core.py`
-  - 仅实现 Stable Core 层 Provider，不接 Runtime
 - V3.1 Phase B2-2（DynamicWorldProvider）已完成。
-  - 新增 `agent/dynamic_world_provider.py`
-  - 新增 `test_b2_2_dynamic_world.py`
-  - 仅提供 current_time / current_location / AgentState 投影
-  - **不提供** current_map / current_region / current_place / current_building
-  - Map Knowledge 仅预留，未实现
-  - B2-3 / B2-4 尚未开始
-- 当前系统事实见 §22（不改变目标架构，只是真实起点）。
-- Architecture Contract 见 `docs/V3.1_ARCHITECTURE_CONTRACT.md`（FROZEN）。
-- 现在不要直接继续堆 autonomous behavior；先冻结架构与全局影响边界。
+- V3.1 当前进入 Phase B2-3（RecentProvider）。
+- B2-4（LongTermProvider）尚未开始。
+- B3（ContextAssembler + Runtime 接入）尚未开始。
+现在不要直接继续堆 autonomous behavior；
+先完成 Context Foundation，再进入 Agent Decision / Motivation 层。
 
 ## 1. 产品定义
 
@@ -418,7 +408,9 @@ Brain/Policy 将来需要查询：
 World
 → Map
 → Building / Place / NaturalFeature
-→ ActivityMap 是可查询的 World Knowledge，而不是单纯图片。
+→ Activity
+
+Map 是可查询的 World Knowledge，而不是单纯图片。
 
 Map 可以具有：
 - map_id
@@ -681,7 +673,7 @@ LLM Cost ≈ LLM Call Count × Context Size
   - `map_owner` / `map_purpose` / `map_description`
   - `map_tags` / `map_environment` / `map_places`
 
-**B2 完成前不接 Runtime**：`agent/runtime.build_context()` 保持不变（P0-3A Stub）。
+**B2 全部完成前不接 Runtime**：`agent/runtime.build_context()` 保持P0-3A Stub。
 
 **B2 当前状态**：
 - StableCoreProvider：✅ 已完成
