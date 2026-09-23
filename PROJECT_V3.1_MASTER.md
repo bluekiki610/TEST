@@ -23,7 +23,16 @@
     - `ai_visited[ai]` → `recent_visited_place`（上限 3 个）
   - **明确不生成**：recent_map / recent_building / recent_region / recent_place / recent_decision / recent_goal / recent_memory / recent_full_chat / recent_full_sms
   - **限制**：输出条数 ≤ 13，单条 ≤ 120 字符，输入 3000 条 → 输出 ≤ 13 条（非线性）
-- B2-4（LongTermProvider）尚未开始。
+- ✅ V3.1 Phase B2-4（LongTermProvider Stub）已完成。
+  - 新增 `agent/long_term_provider.py`（Stub，无业务逻辑）
+  - 测试 `docs/test_b2_4_long_term.py`（可从仓库根目录直接运行）
+  - 当前状态：**stub**
+  - 当前无真实 Long-term 数据源，返回 `[]` 是正确行为
+  - Memory Runtime 仍未启用
+  - ext_memory 不修改、不修复
+  - Recall 仅预留接口（`recall_query` 参数），未实现
+  - ContextAssembler 尚未开始
+  - Runtime 尚未接入
 - B3（ContextAssembler + Runtime 接入）尚未开始。
 现在不要直接继续堆 autonomous behavior；
 先完成 Context Foundation，再进入 Agent Decision / Motivation 层。
@@ -707,6 +716,46 @@ LLM Cost ≈ LLM Call Count × Context Size
   - Recent 只读最近事件，不做 Recall
   - Long-term 由 B2-4 负责
   - 旧 ext_memory 不修复、不启用
+
+**B2-4 LongTermProvider Stub**：
+- 位置：`agent/long_term_provider.py`
+- 输入：
+  `fetch(ai_name, owner, data, now_ts=None, agent_state_dict=None, recall_query=None)`
+- 输出：`List[Dict[str, Any]]` —— **当前始终返回 `[]`**
+- 状态：
+  - `status = "stub"`
+  - `data_source = "none"`
+  - `memory_runtime_connected = False`
+  - `recall_supported = False`
+- 当前返回 `[]` 的原因：
+  - Memory Runtime 未启用
+  - 无可靠 Long-term 数据源
+  - 不生成伪造的长期记忆
+- 预算元数据（`describe()` 声明，即使当前为空）：
+  - `max_items = 5`
+  - `max_chars_per_item = 300`
+  - `token_budget = 2500`（与 ContextBudget.long_term_max 一致）
+- 明确禁止（本阶段）：
+  - 不修复 ext_memory
+  - 不启用 Memory Runtime
+  - 不读 pending_events
+  - 不生成新 Memory 文本
+  - 不扫 chat / sms / notes / diaries / stories / timeline / trails / visited
+  - 不创建第二套 Memory DB
+  - 不创建持久化文件
+- 明确不生成 item 类型：
+  - `long_term_memory` / `long_term_recall` / `long_term_diary` /
+    `long_term_note` / `long_term_chat` / `long_term_event` /
+    `long_term_decision` / `long_term_goal`
+- 与 Memory Runtime 的关系：
+  - 未来流程：Memory Runtime → Recall → LongTermProvider → ContextAssembler
+  - 本阶段仅建立接口，Memory Runtime 未启用
+- 与其他 Provider 的一致性：
+  - 接口签名与 B2-1 / B2-2 / B2-3 一致
+  - Dependency Injection 风格
+  - 不 import main / ext_*
+  - 不调用 LLM / 网络
+  - 不修改 main.data
 
 **B2 全部完成前不接 Runtime**：`agent/runtime.build_context()` 保持P0-3A Stub。
 
