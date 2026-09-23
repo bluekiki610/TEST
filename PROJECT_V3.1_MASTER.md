@@ -49,6 +49,39 @@ Linkong 不是“多个 AI 聊天机器人”。
 
 World → Event → Perception → State/Context → Memory/Relationship Recall → Goal/Motivation → Commitment → Intent → Planning → Decision → Policy → Action → World Change → Event
 
+### 1.1 首页产品形态：AI Life Home
+Linkong 的默认 App 入口不应长期停留在“上一次聊天页面”。
+
+未来首页采用“AI Life Home”作为用户进入社区后的第一视觉入口：
+- AI 人物作为首页主要视觉主体；
+- 人物可以通过循环视频 / 动画 / Live2D / 3D 等表现层呈现；
+- 用户可以直接与人物进行轻量互动；
+- 人物身体不同区域可以配置 Interaction Hotspot；
+- 点击脸、头、手、肩、身体等区域，可触发对应互动；
+- 高频、低延迟互动优先使用预录语音 / 预制动画；
+- 需要理解用户自然语言或复杂上下文时，再进入 LLM；
+- LLM 生成的内容可通过 Voice / TTS 层输出 AI 专属声音；
+- 首页同时作为 Chat / Community / Map / Date / Home / Shop / Schedule / Activity 等功能入口。
+
+首页不是新的 AI Runtime，也不是新的数据源。
+
+它只是现有 Agent / World / Activity / Communication / Action 能力的用户视觉入口。
+
+产品关系：
+AI Agent State / Activity / Goal / Relationship
+↓
+Home Presentation
+↓
+Character / Status / Interaction
+↓
+User Interaction
+↓
+Event / Agent Perception
+↓
+Response / Voice / Animation / Navigation
+
+首页必须读取真实 Agent / World 状态，而不是自行维护第二套 AI 状态。
+
 ## 2. 旧系统真实功能地图
 
 旧 PROJECT.md 是当前系统的“器官清单”，不得因为 V3.1 而丢失。
@@ -64,7 +97,11 @@ World → Event → Perception → State/Context → Memory/Relationship Recall 
   - 现阶段是重要兼容基础，不做无理由大重写。
 
 - `index.html`
-  - 前端主页面，现有稳定能力保持。
+  - 当前前端主页面；  
+  - 现有稳定能力保持；  
+  - V3.1 不要求整体推倒重写；  
+  - 未来新增 Home Shell / AI Life Home 作为新的默认入口；  
+  - Chat / Map / Room / Date / SMS / Shop 等现有功能继续作为功能页面或功能模块存在。
 
 - `ext-loader.js`
   - 前端插件加载器，通过 `/api/ext_js/load` 加载扩展；
@@ -153,6 +190,32 @@ World → Event → Perception → State/Context → Memory/Relationship Recall 
 
 - `ext_mapimg.js`
   - 地图上传按钮
+
+### V3.1 Frontend Direction
+
+未来前端采用：
+
+App Shell
+├── Home / AI Life Home
+├── Chat
+├── Map / World
+├── Date
+├── Home / Room
+├── SMS / Communication
+├── Shop
+├── Schedule
+├── Activity
+└── Settings
+
+Home 是默认入口，但不是新的业务数据层。
+不采用“第二套独立前端覆盖旧前端”的方式。
+
+原则：
+- 保留现有业务页面；
+- 新增 Home Shell；
+- 统一导航；
+- Home 负责人物展示、互动与功能入口；
+- 原有页面继续负责具体业务功能。
 
 ## 3. 现有重要约束 / 已修复问题
 
@@ -255,6 +318,43 @@ Event 不是函数调用，不是 Timer，不是 LLM 调用。
 
 只负责执行，不负责解释动机。
 
+### 5.x User Interaction Layer
+
+未来前端增加独立的 User Interaction Layer，用于连接用户在首页上的直接互动与 Agent Runtime。
+
+第一阶段支持：
+- Character Touch
+- Character Hotspot
+- Face / Head / Hand / Shoulder / Body 等互动区域
+- Character Voice
+- Character Animation / Video Feedback
+- Home Navigation
+- Status Feedback
+
+互动链：
+
+User Touch / UI Interaction
+→ Interaction Event
+→ Agent Perception / Relevance
+→ Response Decision
+→ Action
+→ Voice / Animation / UI Feedback
+
+重要边界：
+
+- Interaction Layer 不是 Agent Brain；
+- Interaction Layer 不维护独立 AI State；
+- Interaction Layer 不直接修改 main.data；
+- 高频简单互动可以由前端/Interaction Layer 使用预定义响应；
+- 复杂、上下文相关互动再进入 Agent Runtime / LLM；
+- Interaction Layer 必须能够逐步从视频 Hotspot 升级到 Live2D / 3D，而不改变上层 Agent 语义。
+
+第一阶段允许采用：循环角色视频 + 透明 Hotspot + 预录语音。
+
+后续可以替换为：Live2D / 动画角色 / 3D 角色。
+
+表现层变化不应导致 Agent 核心架构变化。
+
 ## 6. Time / Schedule
 
 AI 必须知道当前时间，但不是死脚本。
@@ -310,6 +410,44 @@ Brain/Policy 将来需要查询：
 
 用户说受伤时，AI 应能：
 识别医疗需求 → 查询真实世界 → 选择可用医疗地点 → 规划前往 → 执行 → 产生事件。
+
+### World Presentation Hierarchy
+
+未来 World Query 应支持至少以下层级：
+
+World
+→ Map
+→ Building / Place / NaturalFeature
+→ ActivityMap 是可查询的 World Knowledge，而不是单纯图片。
+
+Map 可以具有：
+- map_id
+- map_name
+- map_type
+- map_description
+- map_owner / ownership
+- map_purpose
+- map_tags
+- map_environment
+- suitable_activities
+- availability
+
+Building / Place / NaturalFeature 可以具有：
+- place_id
+- map_id
+- name
+- type
+- description
+- ownership
+- tags
+- suitable_activities
+- availability
+
+AI 应先根据 Goal / Motivation / Relationship / Time / World Condition 查询候选 Map，再在 Map 内查询 Building / Place / NaturalFeature。
+
+不要通过随机建筑选择代替 World Query。
+
+当前只记录架构，不实现 Map Query / Place Query
 
 ## 9. Autonomous Life
 
@@ -375,6 +513,16 @@ Brain 决定：
 是否沟通、对象、原因、渠道、时机。
 
 底层插件负责执行。
+
+### Voice / Speech Output
+
+Voice 是 Communication / Interaction 的表现层能力之一。
+
+- 高频固定互动可以直接播放预录语音；
+- LLM 动态回复可以经过 TTS；
+- 每个 AI 可以通过稳定 Agent identity / voice identity 关联自己的声音；
+- Voice 不决定 AI 说什么，只负责将已经决定的文本/语义转换为声音表现；
+- VoiceStudio 属于未来 Voice Layer，不改变 Agent Runtime / Brain / Decision 架构。
 
 ## 12. Memory V3.1
 
@@ -501,8 +649,8 @@ LLM Cost ≈ LLM Call Count × Context Size
 | 阶段 | Provider | 状态 |
 |------|----------|------|
 | B2-1 | StableCoreProvider | ✅ 已完成 |
-| B2-2 | DynamicWorldProvider | ⏳ 未开始 |
-| B2-3 | RecentProvider | ⏳ 未开始 |
+| B2-2 | DynamicWorldProvider | ✅ 已完成 |
+| B2-3 | RecentProvider |  进行中 / 下一阶段 |
 | B2-4 | LongTermProvider（Stub） | ⏳ 未开始 |
 
 **B2-1 StableCoreProvider**：
@@ -535,7 +683,11 @@ LLM Cost ≈ LLM Call Count × Context Size
 
 **B2 完成前不接 Runtime**：`agent/runtime.build_context()` 保持不变（P0-3A Stub）。
 
-**B2 未完成**：Providers（StableCoreProvider / RecentProvider / LongTermProvider / DynamicWorldProvider）
+**B2 当前状态**：
+- StableCoreProvider：✅ 已完成
+- DynamicWorldProvider：✅ 已完成
+- RecentProvider：下一阶段
+- LongTermProvider：尚未开始
 
 **B3 未开始**：ContextAssembler + 接入 `agent/runtime.build_context()`
 
@@ -556,6 +708,27 @@ THINK
 未来 VoiceStudio 接入只通过稳定 Agent identity / voice identity 关联。
 
 Voice 不进入当前 V3.1 核心架构改造。
+
+### Home Interaction Voice
+
+首页人物互动允许存在两类声音：
+
+1. Pre-recorded Voice   
+ - 高频、低延迟、固定互动；   
+ - 不调用 LLM；   
+ - 不产生高额 Token 消耗。
+
+2. Dynamic AI Voice  
+ - 用户提出需要理解上下文的问题；  
+ - Agent / LLM 生成动态回复； 
+ - 再通过 TTS / VoiceStudio 输出。
+ 
+两者最终都属于 Voice Presentation Layer。
+
+因此：“戳脸 → 固定游戏语音”和“用户说话 → LLM → TTS”可以同时存在。
+
+当前阶段只记录架构，不实现 VoiceStudio 接入。
+
 
 ## 17. Instance / Multi-world
 
@@ -625,12 +798,21 @@ PROJECT 是“架构地图”，不是代码实现说明书。
 - 核心功能回归矩阵
 
 ### Phase B — V3.1 Context Foundation
-然后才实现：
-- Context Assembly
-- Stable Core / Current / Recent / Dynamic World
-- Long-term Memory Recall 接口预留
-- 不接入失败的旧在线记忆插件
-- 不改变现有聊天行为
+
+当前正在进行 Context Foundation。
+
+顺序：
+1. Context Data Contract
+2. StableCoreProvider
+3. DynamicWorldProvider
+4. RecentProvider
+5. LongTermProvider
+6. ContextAssembler
+7. 接入 `agent/runtime.build_context()`
+
+Home / Frontend Interaction Layer 属于产品表现层建设方向，不应提前打断当前 Context Foundation。
+
+在 Agent Core 语义冻结后，再进行 Home Shell 的前端架构设计与实现。
 
 ### Phase C — Motivation / Goal / Commitment
 再让自主生活、移动、约会开始具有连续原因。
