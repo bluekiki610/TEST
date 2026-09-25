@@ -23,7 +23,7 @@
     - `ai_visited[ai]` → `recent_visited_place`（上限 3 个）
   - **明确不生成**：recent_map / recent_building / recent_region / recent_place / recent_decision / recent_goal / recent_memory / recent_full_chat / recent_full_sms
   - **限制**：输出条数 ≤ 13，单条 ≤ 120 字符，输入 3000 条 → 输出 ≤ 13 条（非线性）
-- ✅ V3.1 Phase B2-4（LongTermProvider Stub）已完成。
+- V3.1 Phase B2-4（LongTermProvider Stub）已完成。
   - 新增 `agent/long_term_provider.py`（Stub，无业务逻辑）
   - 测试 `docs/test_b2_4_long_term.py`（可从仓库根目录直接运行）
   - 当前状态：**stub**
@@ -33,7 +33,16 @@
   - Recall 仅预留接口（`recall_query` 参数），未实现
   - ContextAssembler 尚未开始
   - Runtime 尚未接入
-- B3（ContextAssembler + Runtime 接入）尚未开始。
+- V3.1 Phase B2-4（LongTermProvider Stub）已 ACCEPTED。
+- V3.1 Phase B3（ContextAssembler）已完成。
+  - 新增 `agent/context_assembler.py`
+  - 测试 `docs/test_b3_context_assembler.py`（从仓库根目录运行：`python docs/test_b3_context_assembler.py`）
+  - 四层组装：Stable Core / Recent / Long-term / Dynamic World
+  - Budget enforcement：四层独立预算 + 总预算
+  - deterministic truncation：保持 Provider 原顺序，超预算时拒绝当前 item，标记 truncated=True
+  - LongTermProvider 当前仍为 Stub，返回 `[]`
+  - Runtime 尚未接入，`agent/runtime.build_context()` 保持 P0-3A Stub
+  - 未修改 `agent/runtime.py`、`main.py`、`ext_*.py`
 现在不要直接继续堆 autonomous behavior；
 先完成 Context Foundation，再进入 Agent Decision / Motivation 层。
 
@@ -660,7 +669,7 @@ LLM Cost ≈ LLM Call Count × Context Size
 | B2-1 | StableCoreProvider | ✅ 已完成 |
 | B2-2 | DynamicWorldProvider | ✅ 已完成 |
 | B2-3 | RecentProvider |  ✅ 已完成 |
-| B2-4 | LongTermProvider（Stub） | ⏳ 未开始 |
+| B2-4 | LongTermProvider（Stub） | ✅ 已完成 |
 
 **B2-1 StableCoreProvider**：
 - 位置：`agent/stable_core_provider.py`
@@ -763,13 +772,17 @@ LLM Cost ≈ LLM Call Count × Context Size
 - StableCoreProvider：✅ 已完成
 - DynamicWorldProvider：✅ 已完成
 - RecentProvider：✅ 已完成
-- LongTermProvider：⏳ 尚未开始
+- LongTermProvider：✅ 已完成
 
 **B2 全部完成前不接 Runtime**：
 `agent/runtime.build_context()` 继续保持 P0-3A Stub。
 
-**B3 未开始**：
-ContextAssembler + 接入 `agent/runtime.build_context()`
+**B3 已完成**：
+- 新增 `agent/context_assembler.py`
+- 测试 `docs/test_b3_context_assembler.py`
+- 仅完成 Context Assembly
+- 不接入 Runtime；`agent/runtime.build_context()` 保持 P0-3A Stub
+- Runtime 接入属于后续阶段
 
 ## 15. Wake / Relevance
 
