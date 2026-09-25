@@ -65,6 +65,192 @@ def setup(app, data, helpers):
         except Exception:
             return text
 
+    # ============================================================
+    # 协议层恢复：从损坏/截断的 LLM JSON 输出中恢复 action/content
+    # 原则：LLM 输出是协议，不是用户内容。解析失败时恢复协议，不能把协议本身当正文。
+    # ============================================================
+
+    def _extract_json_string_value(s, key):
+        """
+        从 JSON 文本中提取指定 key 的字符串值。
+        支持：
+        - 正常闭合的字符串
+        - 被截断（无结束引号）的字符串
+        - 包含转义 \\" \\n \\t \\r \\\\ \\/ \\uXXXX 的字符串
+        返回字符串，找不到或空返回 None。
+        """
+        if not s:
+            return None
+        pattern = r'"' + re.escape(key) + r'"\s*:\s*"'
+        m = re.search(pattern, s)
+        if not m:
+            return None
+        start = m.end()
+        result = []
+        i = start
+        n = len(s)
+        while i < n:
+            c = s[i]
+            if c == '\\' and i + 1 < n:
+                nxt = s[i + 1]
+                if nxt == 'n':
+                    result.append('\n')
+                    i += 2
+                elif nxt == 't':
+                    result.append('\t')
+                    i += 2
+                elif nxt == 'r':
+                    result.append('\r')
+                    i += 2
+                elif nxt == '"':
+                    result.append('"')
+                    i += 2
+                elif nxt == '\\':
+                    result.append('\\')
+                    i += 2
+                elif nxt == '/':
+                    result.append('/')
+                    i += 2
+                elif nxt == 'u' and i + 5 < n:
+                    try:
+                        hex_str = s[i + 2:i + 6]
+                        result.append(chr(int(hex_str, 16)))
+                        i += 6
+                    except ValueError:
+                        result.append(nxt)
+                        i += 2
+                else:
+                    result.append(nxt)
+                    i += 2
+            elif c == '"':
+                # 未转义的引号 → 字符串正常结束
+                break
+            else:
+                result.append(c)
+                i += 1
+        out = ''.join(result)
+        return out if out else None
+
+    def _recover_llm_action(text):
+        """
+        从损坏/截断的 LLM JSON 输出中恢复标准 action dict。
+        返回 dict 或 None（无法恢复 content 时）。
+        """
+        if not text:
+            return None
+        s = text.strip()
+        if not s:
+            return None
+
+        # 1. 去掉 markdown ```json ... ``` 包裹
+        s = re.sub(r'^```(?:json)?\s*', '', s, flags=re.IGNORECASE)
+        s = re.sub(r'\s*```\s*$', '', s)
+        s = s.strip()
+
+        # 2. 尝试提取 action
+        action_val = None
+        m = re.search(r'"action"\s*:\s*"([^"]*)"', s)
+        if m:
+            action_val = m.group(1).strip()
+
+        # 3. 尝试提取 building_id
+        bid = None
+        m = re.search(r'"building_id"\s*:\s*"([^"]*)"', s)
+        if m:
+            bid = m.group(1).strip()
+
+        # 4. 尝试提取 room
+        room = None
+        m = re.search(r'"room"\s*:\s*"([^"]*)"', s)
+        if m:
+            room = m.group(1).strip()
+
+        # 5. 尝试恢复 content（核心）
+        content = _extract_json_string_value(s, "content")
+
+        # 6. content 恢复失败则整体失败
+        if not content or not content.strip():
+            return None
+
+        result = {"content": content}
+        if action_val:
+            result["action"] = action_val
+        if bid:
+            result["building_id"] = bid
+        if room:
+            result["room"] = room
+        return result
+
+    def _clean_raw_for_fallback(text):
+        """
+        最终兜底：从无法恢复的 LLM 输出中剔除协议痕迹，只保留可能的自然语言内容。
+        如果整段看起来是 JSON 协议，则尝试提取 content 值。
+        完全无法提取则返回空字符串。
+        """
+        if not text:
+            return ""
+        s = text.strip()
+        s = re.sub(r'^```(?:json)?\s*', '', s, flags=re.IGNORECASE)
+        s = re.sub(r'\s*```\s*$', '', s)
+        s = s.strip()
+        if s.startswith("{") and ('"action"' in s or '"content"' in s):
+            c = _extract_json_string_value(s, "content")
+            if c:
+                return c.strip()
+            return ""
+        return s
+
+    def _resolve_story_room(action, ai):
+        """
+        确定 story 应写入的房间。
+        优先级：
+        1. action["room"] 且有效
+        2. action["building_id"] → 找该建筑合适的房间
+           a. AI 当前就在该建筑的某个房间 → 用当前房间
+           b. 否则用该建筑的会客厅
+           c. 否则用该建筑第一个有效房间
+        3. AI 当前所在房间（有效时）
+        4. main
+        """
+        # 1. 明确的 room
+        room_raw = (action.get("room") or "").strip()
+        if room_raw:
+            r = full_room_name(room_raw)
+            if r and r in data.get("rooms", {}):
+                return r
+
+        # 2. building_id
+        bid_raw = (action.get("building_id") or "").strip()
+        if bid_raw:
+            bid = resolve_building(bid_raw)
+            if bid:
+                b = data.get("buildings", {}).get(bid, {})
+                rooms = b.get("rooms", []) or []
+
+                # 2a. AI 当前就在该建筑内
+                ai_loc = data.get("ai_location", {}).get(ai, "")
+                if ai_loc and ai_loc in rooms and ai_loc in data.get("rooms", {}):
+                    return ai_loc
+
+                # 2b. 优先会客厅
+                bname = b.get("name", "") or ""
+                hall = bname + "·会客厅"
+                if hall in rooms and hall in data.get("rooms", {}):
+                    return hall
+
+                # 2c. 该建筑第一个有效房间
+                for r in rooms:
+                    if r and r in data.get("rooms", {}):
+                        return r
+
+        # 3. AI 当前位置
+        ai_loc = data.get("ai_location", {}).get(ai, "")
+        if ai_loc and ai_loc in data.get("rooms", {}):
+            return ai_loc
+
+        # 4. main
+        return "main"
+
     def now_bj():
         from datetime import datetime, timezone, timedelta
         return datetime.now(timezone(timedelta(hours=8)))
@@ -658,10 +844,9 @@ def setup(app, data, helpers):
                     data["notifications"][owner] = data["notifications"][owner][:50]
             
             elif act == "story":
-                # ===== 按房间写入剧情 =====
-                story_room = room if room and room in data["rooms"] else data.get("ai_location", {}).get(ai, "main")
-                if story_room not in data["rooms"]:
-                    story_room = "main"
+                # ===== 按房间写入剧情（优先 room → building_id 反查 → ai_location → main） =====
+                story_room = _resolve_story_room(action, ai)
+                print(f"[AI_PARSE] story_room={story_room}")
                 data["stories"].setdefault(story_room, []).append({
                     "author": ai,
                     "text": content[:1500],
@@ -848,29 +1033,42 @@ def setup(app, data, helpers):
                     except json.JSONDecodeError as e2:
                         print(f"⚠️ [TIMING] 清理后仍失败: {e2}，使用兜底策略")
 
-                # 如果 action 仍为 None，使用兜底策略（根据 trigger 智能选择）
+                # 如果 action 仍为 None，优先尝试恢复协议，再兜底
                 if action is None:
-                    print(f"📝 [TIMING] 使用兜底策略，尝试推断动作类型")
-                    raw = out.strip()
-                    if len(raw) > 500:
-                        raw = raw[:500] + "..."
-                    
-                    # ===== 智能推断：根据 trigger 决定默认动作 =====
-                    if trigger == "write":
-                        # 写作冲动 → 默认写 diary（如果在家）或 story（如果在公共建筑）
-                        bid_here = find_building_of_room(room) if room and room != "main" else None
-                        if bid_here and data.get('buildings', {}).get(bid_here, {}).get('type') in ('npc', 'nature'):
-                            action = {"action": "story", "building_id": bid_here, "content": raw}
-                            print(f"📝 [TIMING] 推断为 story（在公共建筑）")
-                        else:
-                            action = {"action": "diary", "room": room or "main", "content": raw}
-                            print(f"📝 [TIMING] 推断为 diary（在家或住宅）")
-                    elif trigger == "arrive":
-                        # 到达建筑 → 默认 speak
-                        action = {"action": "speak", "content": raw}
+                    print(f"[AI_PARSE] JSON解析失败")
+                    print(f"[AI_PARSE] 尝试恢复 action/content")
+                    recovered = _recover_llm_action(out)
+                    if recovered:
+                        action = recovered
+                        act_name = action.get("action", "")
+                        if act_name:
+                            print(f"[AI_PARSE] recovered action={act_name}")
+                        if action.get("building_id"):
+                            print(f"[AI_PARSE] recovered building_id={action['building_id']}")
+                        if action.get("room"):
+                            print(f"[AI_PARSE] recovered room={action['room']}")
+                        print(f"[AI_PARSE] recovered content_len={len(action.get('content', ''))}")
                     else:
-                        # 其他情况 → 默认 speak
-                        action = {"action": "speak", "content": raw}
+                        print(f"[AI_PARSE] recovery failed")
+                        print(f"[AI_PARSE] trigger={trigger}")
+                        print(f"[AI_PARSE] raw_len={len(out)}")
+
+                        # 最终兜底：剥离协议痕迹后按 trigger 推断动作
+                        raw_clean = _clean_raw_for_fallback(out)
+                        if not raw_clean:
+                            print(f"[AI_PARSE] raw cleaned to empty, skip")
+                            return
+
+                        if trigger == "write":
+                            bid_here = find_building_of_room(room) if room and room != "main" else None
+                            if bid_here and data.get('buildings', {}).get(bid_here, {}).get('type') in ('npc', 'nature'):
+                                action = {"action": "story", "building_id": bid_here, "content": raw_clean}
+                            else:
+                                action = {"action": "diary", "room": room or "main", "content": raw_clean}
+                        elif trigger == "arrive":
+                            action = {"action": "speak", "content": raw_clean}
+                        else:
+                            action = {"action": "speak", "content": raw_clean}
 
             _elapsed_parse = time.time() - _t3
             print(f"⏱️ [TIMING] JSON 解析耗时: {_elapsed_parse:.3f}秒")
@@ -1534,6 +1732,35 @@ def setup(app, data, helpers):
                     'has_key': bool(data.get('ai_keys', {}).get(owner, {}).get('key')), 'working': ai in data.get('work_sessions', {}),
                 }
         return {'state': out}
+    
+    @app.get("/api/ai/location")
+    async def ai_location_realtime(user: str = ""):
+        """
+        返回该用户自己的 AI 的实时位置 + pending_moves。
+        - 只返回这个用户自己的 AI，不泄漏其他用户 AI 位置
+        - 不返回地图/建筑/房间等额外数据
+        - 数据源：data["ai_location"] / data["ai_pending_moves"]
+        """
+        u = canonical_contact_name((user or '').strip())
+        if not u:
+            return {"ok": False, "msg": "缺少 user"}
+        ais = data.get("user_ais", {}).get(u, []) or []
+        locations = {}
+        pending_moves = {}
+        ai_location_all = data.get("ai_location", {}) or {}
+        pending_all = data.get("ai_pending_moves", {}) or {}
+        for ai in ais:
+            if not ai:
+                continue
+            loc = ai_location_all.get(ai, "")
+            locations[ai] = loc if isinstance(loc, str) else ""
+            pm = pending_all.get(ai)
+            if isinstance(pm, dict) and pm.get("room"):
+                pending_moves[ai] = {
+                    "room": pm.get("room"),
+                    "at_ts": pm.get("at_ts", 0),
+                }
+        return {"ok": True, "locations": locations, "pending_moves": pending_moves}
     
     @app.get("/api/ai/impression")
     async def get_impression(ai: str = ""):

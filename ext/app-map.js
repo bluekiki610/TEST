@@ -142,17 +142,20 @@
       });
       var loc=document.getElementById('aiLocInfo');
       if(loc){
-        var txt='';
-        if(!ais.length){ txt='（先在设置里登记「我的 AI」）'; }
-        else { ais.forEach(function(ai){
-          var l=(mapData.ai_location||{})[ai]||'未知';
-          if(l==='main') l='💬 群聊中（不在具体场所）';
-          var pend=(mapData.ai_pending_moves||{})[ai];
-          var line='🤖 '+esc(ai)+'：📍 '+esc(l);
-          if(pend && pend.room){ var left=Math.max(0, Math.ceil((pend.at_ts - Date.now()/1000)/60)); line+='　🚶 正赶往 '+esc(pend.room)+(left>0?'（约 '+left+' 分钟）':''); }
-          txt+='<div style="padding:4px 0">'+line+' <span style="color:#7fd0ff;cursor:pointer;font-size:12px" onclick="summonAIHere(currentRoom)">📣召唤</span></div>';
-        }); }
-        loc.innerHTML=txt;
+        if(!ais.length){ loc.innerHTML='（先在设置里登记「我的 AI」）'; }
+        else {
+          // 先用缓存快速占位，避免闪烁
+          var txt='';
+          ais.forEach(function(ai){
+            var l=(mapData.ai_location||{})[ai]||'未知';
+            if(l==='main') l='💬 群聊中（不在具体场所）';
+            var line='🤖 '+esc(ai)+'：📍 '+esc(l);
+            txt+='<div style="padding:4px 0">'+line+'</div>';
+          });
+          loc.innerHTML=txt;
+          // 立即用真实 API 覆盖
+          if(typeof window.refreshMyAiLocations === 'function') window.refreshMyAiLocations();
+        }
       }
 
       // ===== 群聊静音 + 原地待命 开关 =====
@@ -235,6 +238,54 @@
       }
     }catch(e){}
   };
+  
+  // ===== 补丁 2.2：AI 实时位置刷新 =====
+  window.refreshMyAiLocations = function(){
+    var ais = (mapData.user_ais[userName] || []);
+    var el = document.getElementById('aiLocInfo');
+    if(!el) return;
+    if(!ais.length){
+      el.innerHTML = '（先在设置里登记「我的 AI」）';
+      return;
+    }
+    api('/api/ai/location?user=' + encodeURIComponent(userName)).then(function(d){
+      if(!d || !d.ok) return;
+      var locs = d.locations || {};
+      var pend = d.pending_moves || {};
+      // 同步 mapData 缓存（让地图标记等其他组件也能及时更新）
+      mapData.ai_location = locs;
+      mapData.ai_pending_moves = pend;
+      // 用 API 返回值直接渲染（不依赖缓存）
+      var txt = '';
+      ais.forEach(function(ai){
+        var l = locs[ai];
+        if(l === undefined || l === null || l === '') l = '未知';
+        if(l === 'main') l = '💬 群聊中（不在具体场所）';
+        var line = '🤖 ' + esc(ai) + '：📍 ' + esc(l);
+        var p = pend[ai];
+        if(p && p.room){
+          var left = Math.max(0, Math.ceil((p.at_ts - Date.now()/1000)/60));
+          line += '　🚶 正赶往 ' + esc(p.room) + (left > 0 ? '（约 ' + left + ' 分钟）' : '');
+        }
+        line += ' <span style="color:#7fd0ff;cursor:pointer;font-size:12px" onclick="summonAIHere(currentRoom)">📣召唤</span>';
+        txt += '<div style="padding:4px 0">' + line + '</div>';
+      });
+      el.innerHTML = txt;
+    }).catch(function(e){
+      console.log('[AI_LOCATION] refresh failed', e);
+    });
+  };
+
+  // ===== 补丁 2.3：仅在「我的」页刷新 =====
+  setInterval(function(){
+    try {
+      if(typeof curTab !== 'undefined' && curTab === 'me'){
+        if(typeof window.refreshMyAiLocations === 'function'){
+          window.refreshMyAiLocations();
+        }
+      }
+    } catch(e){}
+  }, 4000);
 })();
 
 // ===== 群聊静音切换函数 =====
@@ -1604,3 +1655,4 @@ setTimeout(initHome, 500);
   setInterval(checkFireworks, 10000);
   setTimeout(checkFireworks, 1000);
 })();
+
