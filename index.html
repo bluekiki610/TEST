@@ -960,7 +960,156 @@ function hideStoryModal(){ document.getElementById('storyMask').classList.remove
 function grantUserDirect(room,user,allow){ var b=mapData.buildings[currentBuilding]; api('/api/room/grant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:room,owner:b.owner,user:user,allow:allow})}).then(function(){ toast(allow?'✅ 已同意 '+user:'已拒绝 '+user); loadMapData().then(renderBuilding); }).catch(function(e){ toast('❌ '+e.message); }); }
 function editBuildingDesc(){ var b=mapData.buildings[currentBuilding]; var d=prompt('建筑简介（这个建筑是做什么的？AI 逛之前会读）：',b.description||''); if(d===null) return; api('/api/map/building/desc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({building_id:currentBuilding,description:d})}).then(function(){ toast('✅ 简介已更新'); loadMapData().then(renderBuilding); }).catch(function(e){ toast('❌ '+e.message); }); }
 function editNpc(name){ var list=mapData.npcs[currentBuilding]||[]; var n=null; for(var i=0;i<list.length;i++){ if(list[i].name===name){ n=list[i]; break; } } if(!n) return; var nn=prompt('NPC 名字：',n.name); if(!nn) return; var em=prompt('头像 emoji：',n.emoji||'👤')||'👤'; var dd=prompt('人设：',n.desc||'')||''; api('/api/npc/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({building_id:currentBuilding,name:name,new_name:nn,emoji:em,desc:dd})}).then(function(){ toast('✅ NPC 已更新'); loadMapData().then(renderBuilding); }).catch(function(e){ toast('❌ '+e.message); }); }
-function createBuildingRoom(){ var name=prompt('房间名字（如：卧室、厨房）：',''); if(!name) return; var desc=prompt('房间简介（AI 进房间会读，知道这房间是干嘛的）：','')||''; api('/api/map/room',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({building_id:currentBuilding,name:name})}).then(function(d){ if(desc) api('/api/room/desc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:d.room,description:desc})}).then(function(){}); toast('✅ 房间「'+d.room+'」建成！（已自动带上住宅前缀）'); loadMapData().then(function(){ renderBuilding(); loadRooms(); }); }).catch(function(e){ toast('❌ '+e.message); }); }
+function createBuildingRoom(){
+  // 用轻量 Modal 替代原来的 2 个连续 prompt，并加背景选项
+  var mask = document.createElement('div');
+  mask.className = 'modal-mask show';
+  mask.id = 'createRoomModal';
+
+  var modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.style.cssText = 'max-width:360px;';
+
+  modal.innerHTML =
+    '<h3 style="margin-bottom:12px;">🚪 新建房间</h3>' +
+    '<div class="set-group">' +
+      '<label style="font-size:13px;color:#7fa8cf;display:block;margin-bottom:4px;">房间名字</label>' +
+      '<input class="input" id="crRoomName" placeholder="如：卧室、厨房" autocomplete="off">' +
+    '</div>' +
+    '<div class="set-group">' +
+      '<label style="font-size:13px;color:#7fa8cf;display:block;margin-bottom:4px;">房间简介（可选）</label>' +
+      '<textarea class="input" id="crRoomDesc" rows="2" placeholder="AI 进房间会读，知道这房间是干嘛的"></textarea>' +
+    '</div>' +
+    '<div class="set-group">' +
+      '<label style="font-size:13px;color:#7fa8cf;display:block;margin-bottom:4px;">🖼️ 房间背景（可选）</label>' +
+      '<div id="crBgPreview" style="display:none;margin-bottom:6px;"><img style="max-width:100%;max-height:120px;border-radius:6px;border:1px solid #1d3a5f;"></div>' +
+      '<div class="row" style="margin:0;">' +
+        '<button class="btn" id="crBgPickBtn" style="flex:1;margin:0;">📷 选择图片</button>' +
+        '<button class="btn gray" id="crBgClearBtn" style="display:none;margin:0;">✕ 取消选择</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="row" style="margin-top:12px;">' +
+      '<button class="btn green" id="crOkBtn" style="flex:1;">✅ 创建房间</button>' +
+      '<button class="btn gray" id="crCancelBtn" style="flex:1;">取消</button>' +
+    '</div>';
+
+  mask.appendChild(modal);
+  document.querySelector('.app').appendChild(mask);
+
+  var bgData = null;  // 压缩后的 base64 背景图
+
+  setTimeout(function(){
+    var inp = document.getElementById('crRoomName');
+    if(inp) inp.focus();
+  }, 100);
+
+  // 选择背景图片
+  document.getElementById('crBgPickBtn').onclick = function(){
+    var f = document.createElement('input');
+    f.type = 'file';
+    f.accept = 'image/*';
+    f.onchange = function(){
+      var file = f.files[0];
+      if(!file) return;
+      var rd = new FileReader();
+      rd.onload = function(e){
+        // 复用现有的 compressImage
+        compressImage(e.target.result, 1400, 0.8, function(small){
+          bgData = small;
+          var p = document.getElementById('crBgPreview');
+          p.style.display = 'block';
+          p.querySelector('img').src = small;
+          document.getElementById('crBgClearBtn').style.display = 'inline-block';
+        });
+      };
+      rd.readAsDataURL(file);
+    };
+    f.click();
+  };
+
+  // 取消背景选择
+  document.getElementById('crBgClearBtn').onclick = function(){
+    bgData = null;
+    document.getElementById('crBgPreview').style.display = 'none';
+    document.getElementById('crBgClearBtn').style.display = 'none';
+  };
+
+  // 关闭
+  function closeModal(){ try{ mask.remove(); }catch(e){} }
+  document.getElementById('crCancelBtn').onclick = closeModal;
+  mask.onclick = function(e){ if(e.target === mask) closeModal(); };
+
+  // 确认创建
+  document.getElementById('crOkBtn').onclick = function(){
+    var name = document.getElementById('crRoomName').value.trim();
+    var desc = document.getElementById('crRoomDesc').value.trim();
+    if(!name){ toast('请填写房间名字'); return; }
+
+    var okBtn = document.getElementById('crOkBtn');
+    okBtn.disabled = true;
+    okBtn.textContent = '创建中…';
+
+    // 1. 创建房间
+    api('/api/map/room', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({building_id: currentBuilding, name: name})
+    }).then(function(d){
+      if(!d || !d.room){ throw new Error('创建失败'); }
+      var room = d.room;   // 服务器返回的完整房间名（带住宅前缀）
+
+      // 2. 保存简介（失败不影响房间创建）
+      var pDesc = Promise.resolve();
+      if(desc){
+        pDesc = api('/api/room/desc', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({room: room, description: desc})
+        }).catch(function(e){
+          console.warn('[createRoom] 简介保存失败', e);
+        });
+      }
+
+      return pDesc.then(function(){
+        // 3. 保存背景（失败不影响房间创建）
+        var pBg = Promise.resolve();
+        var bgFailed = false;
+        if(bgData){
+          pBg = api('/api/room/bg', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({room: room, image: bgData})
+          }).catch(function(e){
+            console.warn('[createRoom] 背景保存失败', e);
+            bgFailed = true;
+          });
+        }
+
+        return pBg.then(function(){
+          closeModal();
+
+          // 4. 提示
+          if(bgFailed){
+            toast('⚠️ 房间已创建，但背景图片保存失败，可以进入房间后重新设置背景');
+          } else {
+            toast('✅ 房间「' + room + '」建成！（已自动带上住宅前缀）');
+          }
+
+          // 5. 刷新
+          loadMapData().then(function(){
+            renderBuilding();
+            loadRooms();
+          });
+        });
+      });
+    }).catch(function(e){
+      // 房间创建失败，保留 Modal 让用户重试
+      okBtn.disabled = false;
+      okBtn.textContent = '✅ 创建房间';
+      toast('❌ ' + (e && e.message ? e.message : '创建失败'));
+    });
+  };
+}
 function loadMapData(){ return api('/api/map').then(function(d){ mapData=d; mapCacheData=d; mapCacheTs=Date.now(); }).catch(function(){}); }
 function updateRoomUI(){ var b=buildingOfRoom(currentRoom); var isHomeRoom=b!==null; var bar=document.getElementById('roomDescBar'); var privBtn=document.getElementById('privBtn'); var privFooterBtn=document.getElementById('privFooterBtn'); var backHomeBtn=document.getElementById('backHomeBtn'); if(isHomeRoom){ bar.style.display='flex'; var desc=currentRoom==='main'?'':(mapData.rooms&&mapData.rooms[currentRoom]&&mapData.rooms[currentRoom].description||''); document.getElementById('roomDescText').textContent=desc||'（暂无房间简介）'; document.getElementById('roomDescEdit').style.display=(canEdit()&&(b.owner===userName||b.type==='npc'))?'':'none'; privBtn.style.display=''; privFooterBtn.style.display=''; privBuildingId=null; for(var bid in mapData.buildings){ if(mapData.buildings[bid]===b){ privBuildingId=bid; break; } } if(backHomeBtn) backHomeBtn.style.display=''; } else { bar.style.display='none'; privBtn.style.display='none'; privFooterBtn.style.display='none'; privBuildingId=null; if(backHomeBtn) backHomeBtn.style.display='none'; } document.getElementById('roomEmoji').textContent=currentRoom==='main'?'🏠':'🚪'; }
 function editRoomDesc(){ var d=prompt('房间简介：',(mapData.rooms&&mapData.rooms[currentRoom]&&mapData.rooms[currentRoom].description)||''); if(d===null) return; api('/api/room/desc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:currentRoom,description:d})}).then(function(){ toast('✅ 简介已更新'); loadMapData().then(updateRoomUI); }).catch(function(e){ toast('❌ '+e.message); }); }
