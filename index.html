@@ -1117,8 +1117,119 @@ function editRoomDescByName(room){ var d=prompt('房间简介：',(mapData.rooms
 function togglePrivate(){ if(!privBuildingId){ toast('当前房间不属于房子'); return; } document.getElementById('privRoomName').textContent=roomLabel(currentRoom); var bg=mapData.room_bg[currentRoom]; var pm=document.getElementById('privModal'); if(bg){ pm.style.backgroundImage='url('+bg+')'; pm.style.backgroundColor='rgba(16,29,51,.85)'; } else { pm.style.backgroundImage='none'; pm.style.backgroundColor='#101d33'; } document.getElementById('privWrite').style.display=canEdit()?'':'none'; document.getElementById('privateMask').classList.add('show'); setPrivTab(privTab); }
 function hidePrivate(){ document.getElementById('privateMask').classList.remove('show'); }
 function setPrivTab(t){ privTab=t; document.getElementById('ptabNote').className=t==='note'?'on':''; document.getElementById('ptabDiary').className=t==='diary'?'on':''; document.getElementById('ptabStory').className=t==='story'?'on':''; document.getElementById('privInput').placeholder=t==='note'?'写一张纸条…':(t==='diary'?'写一篇随笔…':(t==='story'?'写一段剧情…':'写点什么…')); loadPriv(); }
-function loadPriv(){ var el=document.getElementById('privList'); el.innerHTML='<div class="tip">加载中…</div>'; if(privTab==='note'){ api('/api/notes?room='+encodeURIComponent(currentRoom)).then(function(d){ var items=d.notes||[]; el.innerHTML=''; if(!items.length){ el.innerHTML='<div class="tip">💌 便签墙空空，等 AI 来留言吧</div>'; return; } items.slice().reverse().forEach(function(n){ el.innerHTML+='<div class="note-card"><div class="n-author">✍️ '+esc(n.author)+'</div><div class="n-text">'+esc(n.text)+'</div><div class="n-time">'+esc(n.time)+'</div>'+(n.reply?'<div class="n-reply">💬 '+esc(n.reply.author)+'：'+esc(n.reply.text)+'</div>':'')+'</div>'; }); }).catch(function(e){ el.innerHTML='<div class="tip">'+esc(e.message)+'</div>'; }); } else if(privTab==='diary'){ api('/api/diaries?room='+encodeURIComponent(currentRoom)).then(function(d){ var items=d.diaries||[]; el.innerHTML=''; if(!items.length){ el.innerHTML='<div class="tip">📖 随笔本空白，等 AI 来写心事吧</div>'; return; } items.slice().reverse().forEach(function(n,i){ var idx=items.length-1-i; el.innerHTML+='<div class="note-card"><div class="n-author">📖 '+esc(n.author)+'</div><div class="n-text">'+esc(n.text)+'</div><div class="n-time">'+esc(n.time)+'</div>'+(n.comment?'<div class="n-reply">✍️ '+esc(n.comment.author)+'批注：'+esc(n.comment.text)+'</div>':(canEdit()?'<span class="n-rep-btn" onclick="commentDiary('+idx+')">✍️ 批注</span>':''))+'</div>'; }); }).catch(function(e){ el.innerHTML='<div class="tip">'+esc(e.message)+'</div>'; }); } else { api('/api/story?building_id='+encodeURIComponent(privBuildingId)).then(function(d){ var items=d.stories||[]; el.innerHTML=''; if(!items.length){ el.innerHTML='<div class="tip">🎬 剧情簿空空，等 AI 来逛触发剧情吧</div>'; return; } items.slice().reverse().forEach(function(s){ el.innerHTML+='<div class="story-card"><div class="s-time">'+esc(s.time)+'</div><div class="s-author">'+esc(s.author)+'</div><div class="s-text">'+esc(s.text)+'</div></div>'; }); }).catch(function(e){ el.innerHTML='<div class="tip">'+esc(e.message)+'</div>'; }); } }
-function commentDiary(idx){ var t=prompt('批注这篇随笔：',''); if(!t) return; api('/api/diaries/comment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:currentRoom,index:idx,author:userName,text:t})}).then(function(){ toast('✍️ 批注成功'); loadPriv(); }).catch(function(e){ toast('❌ '+e.message); }); }
+function loadPriv(){ var el=document.getElementById('privList'); el.innerHTML='<div class="tip">加载中…</div>'; if(privTab==='note'){ api('/api/notes?room='+encodeURIComponent(currentRoom)).then(function(d){ var items=d.notes||[]; el.innerHTML=''; if(!items.length){ el.innerHTML='<div class="tip">💌 便签墙空空，等 AI 来留言吧</div>'; return; } items.slice().reverse().forEach(function(n){ el.innerHTML+='<div class="note-card"><div class="n-author">✍️ '+esc(n.author)+'</div><div class="n-text">'+esc(n.text)+'</div><div class="n-time">'+esc(n.time)+'</div>'+(n.reply?'<div class="n-reply">💬 '+esc(n.reply.author)+'：'+esc(n.reply.text)+'</div>':'')+'</div>'; }); }).catch(function(e){ el.innerHTML='<div class="tip">'+esc(e.message)+'</div>'; }); } else if(privTab==='diary'){
+  api('/api/diaries?room='+encodeURIComponent(currentRoom)).then(function(d){
+    var items = d.diaries || [];
+    el.innerHTML = '';
+    if(!items.length){
+      el.innerHTML = '<div class="tip">📖 随笔本空白，等 AI 来写心事吧</div>';
+      return;
+    }
+    items.slice().reverse().forEach(function(n, i){
+      var idx = items.length - 1 - i;
+      var html = '<div class="note-card">';
+      html += '<div class="n-author">📖 ' + esc(n.author) + '</div>';
+      html += '<div class="n-text">' + esc(n.text) + '</div>';
+      html += '<div class="n-time">' + esc(n.time) + '</div>';
+
+      // 兼容旧/新 comment 结构
+      var comment = n.comment;
+      var msgs = [];
+      if(comment){
+        if(comment.messages && Array.isArray(comment.messages)){
+          msgs = comment.messages;
+        } else {
+          // 旧结构兼容
+          if(comment.author && comment.text){
+            msgs.push({author: comment.author, text: comment.text, time: comment.time, role: 'user'});
+          }
+          if(comment.reply && comment.reply.author && comment.reply.text){
+            msgs.push({author: comment.reply.author, text: comment.reply.text, time: comment.reply.time, role: 'ai'});
+          }
+        }
+      }
+
+      var aiCount = 0;
+      msgs.forEach(function(mm){
+        if(mm.role === 'ai'){
+          aiCount++;
+          html += '<div class="n-reply">💬 ' + esc(mm.author) + '：' + esc(mm.text) + '</div>';
+        } else {
+          html += '<div class="n-reply" style="background:#1a2a1a;">✍️ ' + esc(mm.author) + '：' + esc(mm.text) + '</div>';
+        }
+      });
+
+      // 是否允许继续批注
+      if(canEdit()){
+        if(aiCount < 3){
+          html += '<span class="n-rep-btn" onclick="commentDiary(' + idx + ')">✍️ ' + (msgs.length ? '继续批注' : '批注') + '</span>';
+        } else {
+          html += '<div style="text-align:center;color:#6d8bb0;font-size:11px;padding:4px;">💬 这篇随笔已经聊了几轮啦</div>';
+        }
+      }
+      html += '</div>';
+      el.innerHTML += html;
+    });
+  }).catch(function(e){
+    el.innerHTML = '<div class="tip">' + esc(e.message) + '</div>';
+  });
+}
+function commentDiary(idx){
+  var t = prompt('批注这篇随笔：','');
+  if(!t || !t.trim()) return;
+  var text = t.trim();
+
+  // 1. 提交批注
+  api('/api/diaries/comment', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({room:currentRoom, index:idx, author:userName, text:text})
+  }).then(function(d){
+    if(!d || !d.ok){
+      toast('❌ ' + (d && d.msg ? d.msg : '批注失败'));
+      return;
+    }
+    toast('✍️ 批注已提交，AI 正在想怎么回复…');
+    loadPriv();
+
+    // 2. 拿到随笔作者（AI 名）
+    api('/api/diaries?room='+encodeURIComponent(currentRoom)).then(function(dd){
+      var items = dd.diaries || [];
+      var it = items[idx];
+      if(!it || !it.author){
+        toast('❌ 找不到随笔作者');
+        return;
+      }
+      var ai = it.author;
+
+      // 3. loading 提示
+      showDiaryAiThinking();
+
+      // 4. 请求 AI 回复
+      api('/api/diaries/reply', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({room:currentRoom, index:idx, ai:ai})
+      }).then(function(r2){
+        hideDiaryAiThinking();
+        if(r2 && r2.ok){
+          toast('💬 ' + ai + ' 回复了你的批注');
+        } else {
+          toast('⚠️ ' + (r2 && r2.msg ? r2.msg : 'AI 暂时没有回应'));
+        }
+        loadPriv();
+      }).catch(function(e){
+        hideDiaryAiThinking();
+        toast('❌ ' + e.message);
+        loadPriv();
+      });
+    }).catch(function(e){
+      toast('❌ ' + e.message);
+    });
+  }).catch(function(e){
+    toast('❌ ' + e.message);
+  });
+}
 function submitPriv(){ var text=document.getElementById('privInput').value.trim(); if(!text){ toast('写点什么吧'); return; } if(privTab==='note'){ api('/api/notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:currentRoom,author:userName,text:text})}).then(function(){ toast('💌 纸条已贴'); document.getElementById('privInput').value=''; loadPriv(); }).catch(function(e){ toast('❌ '+e.message); }); } else if(privTab==='diary'){ api('/api/diaries',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:currentRoom,author:userName,text:text})}).then(function(){ toast('📖 随笔已写'); document.getElementById('privInput').value=''; loadPriv(); }).catch(function(e){ toast('❌ '+e.message); }); } else { api('/api/story',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({building_id:privBuildingId,author:userName,text:text})}).then(function(){ toast('🎬 剧情已写'); document.getElementById('privInput').value=''; loadPriv(); }).catch(function(e){ toast('❌ '+e.message); }); } }
 function openPerm(){ var b=mapData.buildings[currentBuilding]; document.getElementById('permTitle').textContent='🔑 访问管理 · '+b.name; var el=document.getElementById('permList'); var rooms=b.rooms||[]; var html=''; rooms.forEach(function(r){ if(r.indexOf('·会客厅')>=0) return; var reqs=mapData.room_requests[r]||[]; var acc=mapData.room_access[r]||[]; html+='<div class="set-group"><label>🔒 '+esc(r)+'</label>'; if(reqs.length){ html+='<div class="tip" style="margin-bottom:4px">📨 访问申请：</div>'; reqs.forEach(function(q){ html+='<div class="req-card"><span class="q-name">👤 '+esc(q.applicant)+'</span><span class="q-time">'+esc(q.time)+'</span><button class="btn green" style="margin:0" onclick="grantUser(\''+esc(r)+'\',\''+esc(q.applicant)+'\',true)">同意</button><button class="btn gray" style="margin:0" onclick="grantUser(\''+esc(r)+'\',\''+esc(q.applicant)+'\',false)">拒绝</button></div>'; }); } else { html+='<div class="tip">暂无访问申请</div>'; } if(acc.length){ html+='<div class="tip" style="margin-top:6px">✅ 已授权：</div>'; acc.forEach(function(u){ html+='<div class="req-card"><span class="q-name">👤 '+esc(u)+'</span><button class="btn red" style="margin:0" onclick="revokeUser(\''+esc(r)+'\',\''+esc(u)+'\')">移除</button></div>'; }); } html+='</div>'; }); if(!rooms.length) html='<div class="tip">这个建筑还没有私密房间</div>'; el.innerHTML=html; document.getElementById('permMask').classList.add('show'); }
 function hidePerm(){ document.getElementById('permMask').classList.remove('show'); }
