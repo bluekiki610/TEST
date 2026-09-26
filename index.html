@@ -285,7 +285,7 @@ textarea.input { color:#e6f1ff; }
   <div class="modal-mask" id="permMask" onclick="if(event.target===this)hidePerm()"><div class="modal"><h3 id="permTitle">🔑 访问管理</h3><div id="permList"></div><button class="btn gray" onclick="hidePerm()" style="width:100%;margin-top:8px">关闭</button></div></div>
   <div class="modal-mask" id="storyMask" onclick="if(event.target===this)hideStoryModal()"><div class="modal"><h3>🎬 剧情簿 · <span id="storyTitle"></span></h3><div id="storyList"></div><button class="btn gray" onclick="hideStoryModal()" style="width:100%;margin-top:8px">关闭</button></div></div>
   <div class="modal-mask" id="privateMask" onclick="if(event.target===this)hidePrivate()"><div class="modal" id="privModal" style="background-size:cover;background-position:center;background-repeat:no-repeat;"><h3>🏠 私人空间 · <span id="privRoomName"></span></h3><div class="priv-tab"><button id="ptabNote" class="on" onclick="setPrivTab('note')">💌 纸条</button><button id="ptabDiary" onclick="setPrivTab('diary')">📖 随笔</button><button id="ptabStory" onclick="setPrivTab('story')">🎬 剧情</button></div><div id="privList"></div><div id="privWrite"><textarea class="input" id="privInput" rows="2" placeholder="写点什么…"></textarea><button class="btn" id="privSend" onclick="submitPriv()">写</button></div><button class="btn gray" onclick="hidePrivate()">关闭</button></div></div>
-  <div class="tabbar"><div class="tab" data-t="chat" onclick="showTab('chat')"><span class="ic">💬</span>聊天</div><div class="tab" data-t="map" onclick="showTab('map')"><span class="ic">🗺️</span>地图</div><div class="tab" data-t="sms" onclick="showTab('sms')"><span class="ic">📩</span>短信<span id="smsDot" style="display:none;color:#ff6b6b;margin-left:2px">●</span></div><div class="tab" data-t="me" onclick="showTab('me')"><span class="ic">👤</span>我的</div></div>
+  <div class="tabbar"><div class="tab" data-t="chat" onclick="showTab('chat')"><span class="ic">💬</span>聊天</div><div class="tab" data-t="map" onclick="showTab('map')"><span class="ic">🗺️</span>地图</div><div class="tab" data-t="sms" onclick="showTab('sms')"><span class="ic">📩</span>短信<span id="smsDot" style="display:none;color:#ff6b6b;margin-left:2px">●</span></div><div class="tab" data-t="me" onclick="showTab('me')"><span class="ic">👤</span>我的<span id="myDot" style="display:none;color:#ff6b6b;margin-left:2px">●</span></div>
 </div>
   
 <!-- 烟花画布（绝对悬浮，鼠标穿透） -->
@@ -610,7 +610,7 @@ function goLobby(){ switchRoom('main',''); showChat(); }
 function myHomeBidFind(){ for(var bid in mapData.buildings){ var b=mapData.buildings[bid]; if(b.type==='home'&&b.owner===userName) return bid; } return null; }
 function goMyHome(){ var bid=myHomeBidFind(); if(!bid){ toast('你还没有自己的家（住宅类型）'); return; } openBuilding(bid); }
 function backToBuildingHome(){ if(!privBuildingId){ toast('当前不在住宅里'); return; } openBuilding(privBuildingId); }
-function showMe(){ ['chatView','mapView','regionView','buildingView'].forEach(function(i){document.getElementById(i).style.display='none';}); document.getElementById('myView').style.display='flex'; renderMe(); }
+function showMe(){ ['chatView','mapView','regionView','buildingView'].forEach(function(i){document.getElementById(i).style.display='none';}); document.getElementById('myView').style.display='flex'; try{var md=document.getElementById('myDot'); if(md) md.style.display='none';}catch(e){} renderMe(); }
 function renderMe(){
   var el=document.getElementById('myBody'); var html='';
   html+='<div class="my-card"><button class="btn" style="width:100%;margin:0" onclick="openSettings()">⚙️ 设置</button></div>';
