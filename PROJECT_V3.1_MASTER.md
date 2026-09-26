@@ -43,6 +43,28 @@
   - LongTermProvider 当前仍为 Stub，返回 `[]`
   - Runtime 尚未接入，`agent/runtime.build_context()` 保持 P0-3A Stub
   - 未修改 `agent/runtime.py`、`main.py`、`ext_*.py`
+
+---
+
+## 2. `PROJECT_V3.1_MASTER.md` 阶段状态追加
+
+- ✅ V3.1 Phase B3（ContextAssembler）已 ACCEPTED。
+- ✅ V3.1 Phase B4（Runtime Connection Pre-Flight）已 ACCEPTED。
+- ✅ V3.1 Phase B5-0（Context Contract Decision）已 ACCEPTED。
+  - V3.1 正式 Context 标准 = `AgentContext`
+  - `ContextLayers` = deprecated compatibility stub（保留、不删除、不改名、不别名化）
+  - Runtime 最终接口冻结（待 B5-2 实现）：
+    - `build_context(event: Event, now_ts: Optional[float] = None) -> AgentContext`
+    - `think(context: AgentContext) -> Optional[str]`
+  - 数据来源冻结：
+    - `owner` = `get_state().owner`
+    - `agent_state_dict` = `get_state().to_dict()`
+    - `data` = `self._data`
+    - `now_ts` = 调用方注入
+    - `recall_query` = 当前固定 `None`
+  - Contract Change：CC-20260926-01
+- ⏳ V3.1 Phase B5-1（Contract Change）进行中。
+- ⏳ V3.1 Phase B5-2（Runtime Connection）待启动。
 现在不要直接继续堆 autonomous behavior；
 先完成 Context Foundation，再进入 Agent Decision / Motivation 层。
 
@@ -783,6 +805,16 @@ LLM Cost ≈ LLM Call Count × Context Size
 - 仅完成 Context Assembly
 - 不接入 Runtime；`agent/runtime.build_context()` 保持 P0-3A Stub
 - Runtime 接入属于后续阶段
+
+**B4 Runtime Preflight**            ✅ ACCEPTE
+
+**B5 阶段状态**：
+- B5-0 Context Contract Decision：✅ 已 ACCEPTED
+- B5-1 Contract Change（CC-20260926-01）：⏳ 进行中
+- B5-2 Runtime Connection：⏳ 待启动
+- Runtime 实现仍未修改；`agent/runtime.py` 保持 P0-3A/3B 原状
+- `build_context` 尚未接入 `ContextAssembler`
+- THINK 仍为 Stub
 
 ## 15. Wake / Relevance
 
