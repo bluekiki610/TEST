@@ -157,8 +157,6 @@
 
         // 如果能找到建筑，先建立正确的 currentBuilding / privBuildingId
         if(bid){
-            var b2 = mapData.buildings[bid];
-
             currentBuilding = bid;
             privBuildingId = bid;
 
