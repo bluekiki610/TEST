@@ -1179,56 +1179,67 @@ function commentDiary(idx){
   if(!t || !t.trim()) return;
   var text = t.trim();
 
-  // 1. 提交批注
   api('/api/diaries/comment', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({room:currentRoom, index:idx, author:userName, text:text})
-  }).then(function(d){
+  })
+  .then(function(d){
     if(!d || !d.ok){
       toast('❌ ' + (d && d.msg ? d.msg : '批注失败'));
-      return;
+      return null;
     }
-    toast('✍️ 批注已提交，AI 正在想怎么回复…');
+    var ai = d.ai || '';
+    if(!ai){
+      toast('❌ 找不到随笔作者');
+      return null;
+    }
+    toast('✍️ 批注已提交');
     loadPriv();
+    showDiaryAiThinking();
 
-    // 2. 拿到随笔作者（AI 名）
-    api('/api/diaries?room='+encodeURIComponent(currentRoom)).then(function(dd){
-      var items = dd.diaries || [];
-      var it = items[idx];
-      if(!it || !it.author){
-        toast('❌ 找不到随笔作者');
-        return;
+    return api('/api/diaries/reply', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({room:currentRoom, index:idx, ai:ai})
+    })
+    .then(function(r2){
+      if(r2 && r2.ok){
+        toast('💬 ' + ai + ' 回复了你的批注');
+      } else {
+        toast('⚠️ ' + (r2 && r2.msg ? r2.msg : 'AI 暂时没有回应'));
       }
-      var ai = it.author;
-
-      // 3. loading 提示
-      showDiaryAiThinking();
-
-      // 4. 请求 AI 回复
-      api('/api/diaries/reply', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({room:currentRoom, index:idx, ai:ai})
-      }).then(function(r2){
-        hideDiaryAiThinking();
-        if(r2 && r2.ok){
-          toast('💬 ' + ai + ' 回复了你的批注');
-        } else {
-          toast('⚠️ ' + (r2 && r2.msg ? r2.msg : 'AI 暂时没有回应'));
-        }
-        loadPriv();
-      }).catch(function(e){
-        hideDiaryAiThinking();
-        toast('❌ ' + e.message);
-        loadPriv();
-      });
-    }).catch(function(e){
+    })
+    .catch(function(e){
       toast('❌ ' + e.message);
+    })
+    .then(function(){
+      // 等价于 finally：无论成败都收尾
+      hideDiaryAiThinking();
+      loadPriv();
     });
-  }).catch(function(e){
+  })
+  .catch(function(e){
     toast('❌ ' + e.message);
+    hideDiaryAiThinking();
   });
+}
+function showDiaryAiThinking(){
+  var el = document.getElementById('privList');
+  if(!el) return;
+  var old = document.getElementById('diaryAiThinking');
+  if(old) return;
+  var d = document.createElement('div');
+  d.id = 'diaryAiThinking';
+  d.className = 'tip';
+  d.style.textAlign = 'center';
+  d.style.padding = '8px';
+  d.textContent = '🤔 AI 正在想怎么回复……';
+  el.insertBefore(d, el.firstChild);
+}
+function hideDiaryAiThinking(){
+  var el = document.getElementById('diaryAiThinking');
+  if(el) el.remove();
 }
 function submitPriv(){ var text=document.getElementById('privInput').value.trim(); if(!text){ toast('写点什么吧'); return; } if(privTab==='note'){ api('/api/notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:currentRoom,author:userName,text:text})}).then(function(){ toast('💌 纸条已贴'); document.getElementById('privInput').value=''; loadPriv(); }).catch(function(e){ toast('❌ '+e.message); }); } else if(privTab==='diary'){ api('/api/diaries',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:currentRoom,author:userName,text:text})}).then(function(){ toast('📖 随笔已写'); document.getElementById('privInput').value=''; loadPriv(); }).catch(function(e){ toast('❌ '+e.message); }); } else { api('/api/story',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({building_id:privBuildingId,author:userName,text:text})}).then(function(){ toast('🎬 剧情已写'); document.getElementById('privInput').value=''; loadPriv(); }).catch(function(e){ toast('❌ '+e.message); }); } }
 function openPerm(){ var b=mapData.buildings[currentBuilding]; document.getElementById('permTitle').textContent='🔑 访问管理 · '+b.name; var el=document.getElementById('permList'); var rooms=b.rooms||[]; var html=''; rooms.forEach(function(r){ if(r.indexOf('·会客厅')>=0) return; var reqs=mapData.room_requests[r]||[]; var acc=mapData.room_access[r]||[]; html+='<div class="set-group"><label>🔒 '+esc(r)+'</label>'; if(reqs.length){ html+='<div class="tip" style="margin-bottom:4px">📨 访问申请：</div>'; reqs.forEach(function(q){ html+='<div class="req-card"><span class="q-name">👤 '+esc(q.applicant)+'</span><span class="q-time">'+esc(q.time)+'</span><button class="btn green" style="margin:0" onclick="grantUser(\''+esc(r)+'\',\''+esc(q.applicant)+'\',true)">同意</button><button class="btn gray" style="margin:0" onclick="grantUser(\''+esc(r)+'\',\''+esc(q.applicant)+'\',false)">拒绝</button></div>'; }); } else { html+='<div class="tip">暂无访问申请</div>'; } if(acc.length){ html+='<div class="tip" style="margin-top:6px">✅ 已授权：</div>'; acc.forEach(function(u){ html+='<div class="req-card"><span class="q-name">👤 '+esc(u)+'</span><button class="btn red" style="margin:0" onclick="revokeUser(\''+esc(r)+'\',\''+esc(u)+'\')">移除</button></div>'; }); } html+='</div>'; }); if(!rooms.length) html='<div class="tip">这个建筑还没有私密房间</div>'; el.innerHTML=html; document.getElementById('permMask').classList.add('show'); }
