@@ -149,7 +149,7 @@ def setup(app, data, helpers):
             "role": "user"
         })
         save_data()
-        return {"ok": True, "messages": msgs}
+        return {"ok": True, "ai": diary.get("author", ""), "messages": msgs}
 
     print("!!! === [ext_notes] 开始注册 /api/diaries/reply === !!!", flush=True)
 
