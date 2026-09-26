@@ -1,22 +1,25 @@
 """
-agent/runtime.py - P0-3B: Agent Runtime - First Real Perception Chain
+agent/runtime.py - P0-3B + B5-2: Agent Runtime
 
 P0-3A 定义了 Contract（Stub）。
 P0-3B 第一次让 Runtime 真正处理 Event：
     Event → receive_event() → perceive() → should_wake() → IGNORE / OBSERVE
 
+B5-2 连接 ContextAssembler：
+    build_context(event, now_ts=None) → ContextAssembler → AgentContext
+
 但本阶段仍然：
 1. 0 次 LLM 调用
 2. 不修改 main.data
-3. 不进入 CONTEXT / THINK / DECISION / ACTION
+3. 不进入 THINK / DECISION / ACTION
 4. 不建立 EventBus / EventStore / Scheduler
 5. 不替代旧 Wake（旧 Wake 保持原样）
 
-生命周期（P0-3B 只覆盖前 3 阶段）：
+生命周期：
     1. RECEIVE        ✅ P0-3B 已实现
     2. PERCEIVE       ✅ P0-3B 已实现
     3. WAKE_DECISION  ✅ P0-3B 已实现（只返回 IGNORE / OBSERVE）
-    4. CONTEXT        ❌ 仍是 P0-3A Stub
+    4. CONTEXT        ✅ B5-2 已连接 ContextAssembler（返回 AgentContext）
     5. THINK          ❌ 仍是 P0-3A Stub（绝不调 LLM）
     6. DECISION       ❌ 仍是 P0-3A Stub
     7. ACTION         ❌ 仍是 P0-3A Stub
@@ -31,6 +34,12 @@ from collections import deque
 
 from agent.event import Event
 from agent.state import AgentState, get_agent_state
+from agent.context import AgentContext
+from agent.context_assembler import ContextAssembler
+from agent.stable_core_provider import StableCoreProvider
+from agent.recent_provider import RecentProvider
+from agent.long_term_provider import LongTermProvider
+from agent.dynamic_world_provider import DynamicWorldProvider
 
 
 # =========================================================
@@ -48,10 +57,21 @@ class WakeDecision(str, Enum):
 
 
 # =========================================================
-# 2. Context 分层（P0-3A 保留，P0-3B 未使用）
+# 2. Context 分层（P0-3A 保留，已 DEPRECATED）
 # =========================================================
 @dataclass
 class ContextLayers:
+    """
+    P0-3A ContextLayers —— DEPRECATED compatibility stub.
+
+    B5-1 Contract Change CC-20260926-01 正式废弃本结构：
+    - 不删除
+    - 不改名
+    - 不别名化（不允许 ContextLayers = AgentContext）
+    - 新 V3.1 链不再引用
+
+    V3.1 唯一正式 Context 数据结构 = AgentContext（agent/context.py）。
+    """
     stable_core: Dict[str, Any] = field(default_factory=dict)
     recent: Dict[str, Any] = field(default_factory=dict)
     long_term: Dict[str, Any] = field(default_factory=dict)
@@ -121,14 +141,36 @@ class AgentRuntime:
 
     P0-3B 状态：
     - receive_event / perceive / should_wake：已实现（确定性规则）
-    - build_context / think / decide / execute：仍为 P0-3A Stub
+    - build_context：B5-2 已连接 ContextAssembler，返回 AgentContext
+    - think / decide / execute：仍为 P0-3A Stub
     """
 
-    def __init__(self, ai_name: str, data: Dict[str, Any]):
+    def __init__(
+        self,
+        ai_name: str,
+        data: Dict[str, Any],
+        context_assembler: Optional[ContextAssembler] = None,
+    ):
+        """
+        Args:
+            ai_name:           AI 名字
+            data:              main.data 只读引用（不透明传递）
+            context_assembler: 可选注入；不传则由 Runtime 自行构造默认 Assembler
+        """
         self.ai_name = ai_name
         self._data = data
         # 环形缓冲：maxlen 自动截断，不会无限增长
         self._recent_events: deque = deque(maxlen=MAX_RECENT_EVENTS)
+
+        # B5-2: 连接 ContextAssembler（Dependency Injection）
+        if context_assembler is None:
+            context_assembler = ContextAssembler(
+                stable_core_provider=StableCoreProvider(),
+                recent_provider=RecentProvider(),
+                long_term_provider=LongTermProvider(),
+                dynamic_world_provider=DynamicWorldProvider(),
+            )
+        self._context_assembler = context_assembler
 
     # -----------------------------------------------------
     # 生命周期：RECEIVE → PERCEIVE → WAKE_DECISION
@@ -234,14 +276,57 @@ class AgentRuntime:
         return WakeDecision.OBSERVE if perceived else WakeDecision.IGNORE
 
     # -----------------------------------------------------
-    # 剩余方法（P0-3A Stub 保留，P0-3B 未实现）
+    # CONTEXT（B5-2 已连接 ContextAssembler）
     # -----------------------------------------------------
-    def build_context(self, event: Event) -> ContextLayers:
-        """P0-3A Stub 保留。P0-3B 不实现。"""
-        return ContextLayers()
+    def build_context(
+        self,
+        event: Event,
+        now_ts: Optional[float] = None,
+    ) -> AgentContext:
+        """
+        CONTEXT 阶段：把四个 Provider 组装成统一 AgentContext。
 
-    def think(self, context: ContextLayers) -> Optional[str]:
-        """P0-3A Stub 保留。P0-3B 绝不调用 LLM。"""
+        B5-2：连接 ContextAssembler。
+
+        数据来源（CC-20260926-01 冻结）：
+            ai_name          = self.ai_name
+            owner            = self.get_state().owner
+            data             = self._data
+            now_ts           = 显式传入；未传则 ContextAssembler 使用当前时间
+            agent_state_dict = self.get_state().to_dict()
+            recall_query     = None
+
+        保证：
+        - 返回 AgentContext，不返回 ContextLayers
+        - 不修改 main.data
+        - 不调用 LLM
+        - 不进入 THINK / DECISION / ACTION
+        - 不接入 ext_ai.build_ai_context
+        """
+        state = self.get_state()
+        owner = state.owner if state else ""
+        agent_state_dict = state.to_dict() if state else None
+
+        return self._context_assembler.assemble(
+            ai_name=self.ai_name,
+            owner=owner,
+            data=self._data,
+            now_ts=now_ts,
+            agent_state_dict=agent_state_dict,
+            recall_query=None,
+        )
+
+    # -----------------------------------------------------
+    # 剩余方法（P0-3A Stub 保留，B5-2 未实现）
+    # -----------------------------------------------------
+    def think(self, context: AgentContext) -> Optional[str]:
+        """
+        P0-3A Stub 保留。B5-2 未实现 THINK。
+        绝不调用 LLM。
+
+        签名已在 B5-1 Contract Change CC-20260926-01 冻结：
+            think(context: AgentContext) -> Optional[str]
+        """
         return None
 
     def decide(self, thought: Optional[str]) -> Optional[Decision]:
@@ -282,12 +367,20 @@ class AgentRuntime:
 # =========================================================
 # 7. Runtime 工厂
 # =========================================================
-def get_runtime(ai_name: str, data: Dict[str, Any]) -> AgentRuntime:
+def get_runtime(
+    ai_name: str,
+    data: Dict[str, Any],
+    context_assembler: Optional[ContextAssembler] = None,
+) -> AgentRuntime:
     """
     获取某个 AI 的 AgentRuntime 实例。
 
     P0-3B 保持"每次新建"（无缓存），符合 P0-3A Contract。
     未来可能引入缓存，但保持"一个 AI 一个 Runtime"的原则。
+
+    B5-2：可选择性注入 ContextAssembler（用于测试）。
     """
-    return AgentRuntime(ai_name, data)
+    return AgentRuntime(ai_name, data, context_assembler=context_assembler)
+
+
 P0_STEP3B_PERCEPTION_CHAIN: implement first real perceive + should_wake
