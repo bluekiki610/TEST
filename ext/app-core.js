@@ -122,7 +122,7 @@
         document.getElementById('bellMask').querySelector('h3').textContent='🔔 通知';
         if(!items.length){ el.innerHTML='<div class="tip">还没有新动态～有人来你家 / 留纸条 / 申请权限 / AI 出门时会提醒你。</div>'; }
         else {
-          var ic={visit:'🚶',note:'💌',diary:'📖',request:'📨',ai_note:'💌',ai_diary:'📖',ai_story:'🎬',ai_move:'📍'};
+          var ic={visit:'🚶',note:'💌',diary:'📖',request:'📨',ai_note:'💌',ai_diary:'📖',ai_story:'🎬',ai_move:'📍',ai_date:'💞'};
           items.forEach(function(n){
             var icon=ic[n.type]||'🔔';
             var act='';

@@ -61,6 +61,12 @@ def setup(app, data, helpers):
         h = b.get('name', '') + '·会客厅'
         return h if h in data.get('rooms', {}) else ''
 
+    def _ai_already_at(ai, room):
+        """AI 当前是否已经在指定房间（用于判断是否还需要移动）"""
+        if not ai or not room:
+            return False
+        return data.get('ai_location', {}).get(ai, '') == room
+
     def _active_for(ai):
         for d in data['dates']:
             if d.get('ai') == ai and d.get('status') in ('pending', 'coming', 'active'):
@@ -210,8 +216,8 @@ def setup(app, data, helpers):
                     {'sender': ai, 'content': content, 'role': 'assistant', 'time': room_time(target)})
 
         _notify(owner, f"💞 {ai} 约你去 {bn} 约会")
-        threading.Timer(600, _invite_remind, args=(ai,)).start()
-        threading.Timer(1200, _invite_cancel, args=(ai, 'timeout')).start()
+        threading.Timer(900, _invite_remind, args=(ai,)).start()
+        threading.Timer(1800, _invite_cancel, args=(ai, 'timeout')).start()
         save_data()
 
     def _parse_reply(text):
@@ -237,7 +243,16 @@ def setup(app, data, helpers):
 
         if result == 'accept':
             inv['status'] = 'accepted'
-            arrive_min = random.randint(1, 5)
+            already = _ai_already_at(ai, hall)
+            if already:
+                arrive_min = 0
+                arrive_at = time.time()
+                status = 'active'
+            else:
+                arrive_min = random.randint(1, 5)
+                arrive_at = time.time() + arrive_min * 60
+                status = 'coming'
+
             d = {
                 'id': 'd' + str(data['date_seq']),
                 'user': owner,
@@ -245,9 +260,9 @@ def setup(app, data, helpers):
                 'building_id': bid,
                 'room': hall,
                 'start_ts': time.time(),
-                'status': 'coming',
+                'status': status,
                 'arrive_min': arrive_min,
-                'arrive_at': time.time() + arrive_min * 60,
+                'arrive_at': arrive_at,
                 'bring_gift': random.random() < 0.35,
                 'gift_item': '',
                 'gift_accepted': False,
@@ -256,10 +271,11 @@ def setup(app, data, helpers):
             }
             data['date_seq'] += 1
             data['dates'].append(d)
-            data['ai_pending_moves'][ai] = {'room': hall, 'at_ts': d['arrive_at']}
+            if not already:
+                data['ai_pending_moves'][ai] = {'room': hall, 'at_ts': arrive_at}
             data['date_invites_out'].pop(ai, None)
 
-            # ===== 新增：记录约会约定 =====
+            # ===== 记录约会约定 =====
             asyncio.create_task(enqueue_event(
                 user=owner,
                 ai=ai,
@@ -269,19 +285,34 @@ def setup(app, data, helpers):
                 valence_guess=9,
                 arousal_guess=8
             ))
-            # ===== 新增结束 =====
 
             if hasattr(m, 'drive_ai') and m.ai_integration_enabled():
-                threading.Timer(2.0, m.drive_ai, args=(
-                    ai, 'chat', hall,
-                    f"主人答应了你的约会邀请！说一句开心的话回应他，并告诉他你会在{hall}等他，让他到了告诉你。",
-                    owner
-                )).start()
+                if already:
+                    hint = f"主人答应了你的约会邀请，你本来就在{hall}。说一句自然开心的话，比如'好呀，我就在这里等你'——不要说'我几分钟后到'之类需要移动的话。"
+                else:
+                    hint = f"主人答应了你的约会邀请！说一句开心的话回应他，并告诉他你会在{hall}等他，让他到了告诉你。"
+                threading.Timer(2.0, m.drive_ai, args=(ai, 'chat', hall, hint, owner)).start()
 
-            _broadcast(f"💞 {ai} 和 {owner} 的约会已约定！{ai} 约 {arrive_min} 分钟后到「{b.get('name')}」")
-            _notify(owner, f"💞 你已接受 {ai} 的约会邀请，约 {arrive_min} 分钟后在「{b.get('name')}」见面")
-            save_data()
-            threading.Timer(arrive_min * 60, _arrive_date, args=(ai, d)).start()
+            if already:
+                # 直接激活：记录约会开始 + 广播 + 不启动 Timer
+                asyncio.create_task(enqueue_event(
+                    user=owner,
+                    ai=ai,
+                    action="约会开始",
+                    place=b.get('name', '?'),
+                    raw_text=f"{ai} 和 {owner} 在 {b.get('name', '?')} 开始约会",
+                    valence_guess=9,
+                    arousal_guess=7
+                ))
+                _hall_msg(hall, f"💞 {owner} 和 {ai} 正在这里约会")
+                _broadcast(f"💞 {ai} 和 {owner} 的约会已开始！{ai} 已在「{b.get('name')}」等待")
+                _notify(owner, f"💞 你已接受 {ai} 的约会邀请，TA 已在「{b.get('name')}」等你")
+                save_data()
+            else:
+                _broadcast(f"💞 {ai} 和 {owner} 的约会已约定！{ai} 约 {arrive_min} 分钟后到「{b.get('name')}」")
+                _notify(owner, f"💞 你已接受 {ai} 的约会邀请，约 {arrive_min} 分钟后在「{b.get('name')}」见面")
+                save_data()
+                threading.Timer(arrive_min * 60, _arrive_date, args=(ai, d)).start()
 
         elif result == 'reject':
             inv['status'] = 'rejected'
@@ -420,11 +451,18 @@ def setup(app, data, helpers):
     def _accept_invite(ai, inv, arrive_min=None, ai_said=False):
         bid = inv['building_id']
         hall = inv['room']
-        if arrive_min is None:
-            arrive_min = random.randint(3, 6)
+        already = _ai_already_at(ai, hall)
+        if already:
+            arrive_min = 0
+            arrive_at = time.time()
+            status = 'active'
+        else:
+            if arrive_min is None:
+                arrive_min = random.randint(3, 6)
+            arrive_at = time.time() + arrive_min * 60
+            status = 'coming'
         b = data['buildings'].get(bid)
         bn = b.get('name', '?') if b else '?'
-        arrive_at = time.time() + arrive_min * 60
         bring = random.random() < 0.35
         d = {
             'id': 'd' + str(data['date_seq']),
@@ -433,7 +471,7 @@ def setup(app, data, helpers):
             'building_id': bid,
             'room': hall,
             'start_ts': time.time(),
-            'status': 'coming',
+            'status': status,
             'arrive_min': arrive_min,
             'arrive_at': arrive_at,
             'bring_gift': bring,
@@ -447,9 +485,10 @@ def setup(app, data, helpers):
         data['date_invites'].pop(ai, None)
         data['date_intent'].pop(ai, None)
         data['ai_follow'].pop(ai, None)
-        data['ai_pending_moves'][ai] = {'room': hall, 'at_ts': arrive_at}
+        if not already:
+            data['ai_pending_moves'][ai] = {'room': hall, 'at_ts': arrive_at}
 
-        # ===== 新增：记录约会约定（主人邀约版） =====
+        # ===== 记录约会约定 =====
         asyncio.create_task(enqueue_event(
             user=inv['user'],
             ai=ai,
@@ -459,18 +498,34 @@ def setup(app, data, helpers):
             valence_guess=9,
             arousal_guess=8
         ))
-        # ===== 新增结束 =====
 
-        threading.Timer(arrive_min * 60, _arrive_date, args=(ai, d)).start()
-        if not ai_said:
-            _send_sms(ai, inv['user'], f"好，我大概 {arrive_min} 分钟后到「{bn}」。")
-        _broadcast(f"💞 {ai} 答应了 {inv['user']} 的约会邀请，约 {arrive_min} 分钟后到「{bn}」")
-        _notify(inv['user'], f"💞 {ai} 答应了你的约会邀请，约 {arrive_min} 分钟后在「{bn}」见面")
-        if bring:
-            buy_in = max(1, arrive_min * 60 - 90)
-            threading.Timer(buy_in, _buy_gift_hidden, args=(ai, d)).start()
-        threading.Timer(arrive_min * 60, _arrive_date, args=(ai, d)).start()
-        save_data()
+        if already:
+            asyncio.create_task(enqueue_event(
+                user=inv['user'],
+                ai=ai,
+                action="约会开始",
+                place=bn,
+                raw_text=f"{ai} 和 {inv['user']} 在 {bn} 开始约会",
+                valence_guess=9,
+                arousal_guess=7
+            ))
+            if not ai_said:
+                _send_sms(ai, inv['user'], f"好呀，我就在这里等你。")
+            _hall_msg(hall, f"💞 {inv['user']} 和 {ai} 正在这里约会")
+            _broadcast(f"💞 {ai} 答应了 {inv['user']} 的约会邀请，TA 已在「{bn}」等待")
+            _notify(inv['user'], f"💞 {ai} 答应了你的约会邀请，TA 已在「{bn}」等你")
+            save_data()
+        else:
+            # 只在这里安排一次 _arrive_date Timer（删掉了原来重复的那一行）
+            threading.Timer(arrive_min * 60, _arrive_date, args=(ai, d)).start()
+            if not ai_said:
+                _send_sms(ai, inv['user'], f"好，我大概 {arrive_min} 分钟后到「{bn}」。")
+            _broadcast(f"💞 {ai} 答应了 {inv['user']} 的约会邀请，约 {arrive_min} 分钟后到「{bn}」")
+            _notify(inv['user'], f"💞 {ai} 答应了你的约会邀请，约 {arrive_min} 分钟后在「{bn}」见面")
+            if bring:
+                buy_in = max(1, arrive_min * 60 - 90)
+                threading.Timer(buy_in, _buy_gift_hidden, args=(ai, d)).start()
+            save_data()
 
     def _reject_invite(ai, inv, reason=''):
         data['date_invites'].pop(ai, None)
@@ -671,10 +726,10 @@ def setup(app, data, helpers):
                 for ai, inv in list(data.get('date_invites_out', {}).items()):
                     if inv.get('status') != 'waiting':
                         continue
-                    if now - inv.get('ts', 0) > 1200:
+                    if now - inv.get('ts', 0) > 1800:
                         _invite_cancel(ai, 'timeout')
                         continue
-                    if now - inv.get('ts', 0) > 600 and not inv.get('reminded'):
+                    if now - inv.get('ts', 0) > 900 and not inv.get('reminded'):
                         inv['reminded'] = True
                         _invite_remind(ai)
                         save_data()

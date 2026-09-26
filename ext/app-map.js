@@ -828,12 +828,30 @@ function updateGroupStatus(isMuted, isStay) {
         html='<div class="m-title" style="color:#ff8fab">💌 约会邀请</div>'
           +'<div class="tip">正在等 <b>'+esc(pend.ai)+'</b> 回应…（他可能在上班或考虑中）</div>';
       }
-      if(!html){ if(old) old.remove(); return; }
-      if(old && old.getAttribute('data-html')===html) return;
-      var card=document.createElement('div'); card.className='my-card'; card.id='myDateCard'; card.setAttribute('data-html',html);
-      card.innerHTML=html;
-      if(old) old.remove();
-      el.insertBefore(card, el.firstChild);
+      if(!html){ if(old) old.remove(); }
+      else if(!old || old.getAttribute('data-html')!==html){
+        var card=document.createElement('div'); card.className='my-card'; card.id='myDateCard'; card.setAttribute('data-html',html);
+        card.innerHTML=html;
+        if(old) old.remove();
+        el.insertBefore(card, el.firstChild);
+      }
+
+      // ===== 我的红点：有 AI 主动邀约 / 正在赴约时显示 =====
+      try {
+        var myDot = document.getElementById('myDot');
+        if(myDot){
+          var hasPending = !!(d.pending_invites && d.pending_invites.length);
+          var hasComing = !!(d.comings && d.comings.length);
+          var shouldDot = hasPending || hasComing;
+          if(shouldDot && curTab !== 'me'){
+            myDot.style.display = '';
+          } else if(curTab === 'me'){
+            myDot.style.display = 'none';
+          } else {
+            myDot.style.display = 'none';
+          }
+        }
+      } catch(e) {}
     }).catch(function(){});
   }
   
