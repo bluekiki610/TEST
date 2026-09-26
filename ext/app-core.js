@@ -142,31 +142,88 @@
   };
 
   window.openNotifyRoom = function(room, tab){
-      if(!room) return;
-      // 如果页面有 enterRoom 函数（切换房间），优先使用
-      if(typeof window.enterRoom === 'function'){
-          window.enterRoom(room, function(){
-              // 进入房间后，根据 tab 打开对应面板
-              if(tab === 'story'){
-                  setTimeout(function(){
-                      if(typeof loadStoryModal === 'function') loadStoryModal();
-                  }, 300);
-              } else if(tab === 'note' || tab === 'diary'){
-                  setTimeout(function(){
-                      if(typeof openPrivPanel === 'function') openPrivPanel(tab);
-                  }, 300);
-              } else if(tab === 'chat'){
-                  if(typeof showChat === 'function') showChat();
-              } else {
-                  // 其他情况 fallback
-                  goToTrailSpot(room, tab);
-              }
-          });
-      } else {
-          // 如果没有 enterRoom，用原来的方式（虽然可能不支持 story）
-          goToTrailSpot(room, tab);
-      }
-  };
+    if(!room) return;
+
+    try{
+        // 先根据 room 找到所属建筑
+        var bid = null;
+        for(var k in (mapData.buildings || {})){
+            var b = mapData.buildings[k];
+            if((b.rooms || []).indexOf(room) >= 0){
+                bid = k;
+                break;
+            }
+        }
+
+        // 如果能找到建筑，先建立正确的 currentBuilding / privBuildingId
+        if(bid){
+            var b2 = mapData.buildings[bid];
+
+            currentBuilding = bid;
+            privBuildingId = bid;
+
+            // 记录当前建筑，方便返回
+            try{ window._lastBuilding = bid; }catch(e){}
+
+            // 建筑页本身不强制打开，通知最终目标仍然是具体 room
+        }
+
+        // 使用正常的房间切换流程
+        if(typeof switchRoom === 'function'){
+            switchRoom(room, localStorage.getItem('gc_pwd_'+room) || '');
+        }else{
+            currentRoom = room;
+            localStorage.setItem('gc_room', room);
+        }
+
+        // 进入聊天视图
+        if(typeof showChat === 'function'){
+            showChat();
+        }
+
+        // 等房间状态完成后打开对应内容
+        setTimeout(function(){
+
+            if(tab === 'story'){
+                // 剧情通知：直接打开当前房间的剧情簿
+                if(typeof loadStoryModal === 'function'){
+                    loadStoryModal();
+                }
+                return;
+            }
+
+            if(tab === 'note' || tab === 'diary'){
+                // 纸条 / 随笔：打开私人空间对应标签
+                if(typeof togglePrivate === 'function'){
+                    privTab = tab;
+                    togglePrivate();
+                }
+                return;
+            }
+
+            // 普通聊天通知
+            if(tab === 'chat'){
+                if(typeof showChat === 'function') showChat();
+                return;
+            }
+
+            // 其他情况保留原来的轨迹跳转
+            if(typeof goToTrailSpot === 'function'){
+                goToTrailSpot(room, tab);
+            }
+
+        }, 500);
+
+    }catch(e){
+        console.warn('[notify] openNotifyRoom error', e);
+        try{
+            if(typeof goToTrailSpot === 'function'){
+                goToTrailSpot(room, tab);
+            }
+        }catch(e2){}
+    }
+};
+
   window.openNotifyBid=function(bid){ if(bid) openBuilding(bid); };
 
   var __origRenderMarkers = renderMarkers;
