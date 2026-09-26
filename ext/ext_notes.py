@@ -17,6 +17,34 @@ def setup(app, data, helpers):
     def can_modify_author(author, user):
         return author == user or is_admin(user) or (is_ai_name(author) and owner_of_ai(author) == user)
 
+    def _normalize_comment(comment):
+        """
+        兼容旧 comment 结构。
+        旧：{"author", "text", "time", "reply": {"author", "text", "time"}}
+        新：{"messages": [{"author", "text", "time", "role"}, ...]}
+        """
+        if not comment or not isinstance(comment, dict):
+            return None
+        if "messages" in comment and isinstance(comment.get("messages"), list):
+            return comment
+        msgs = []
+        if comment.get("author") and comment.get("text"):
+            msgs.append({
+                "author": comment.get("author"),
+                "text": comment.get("text"),
+                "time": comment.get("time", ""),
+                "role": "user"
+            })
+        r = comment.get("reply")
+        if isinstance(r, dict) and r.get("author") and r.get("text"):
+            msgs.append({
+                "author": r.get("author"),
+                "text": r.get("text"),
+                "time": r.get("time", ""),
+                "role": "ai"
+            })
+        return {"messages": msgs}
+
     @app.get("/api/notes")
     async def get_notes(room: str):
         return {"notes": data["notes"].get(room, [])}
@@ -94,116 +122,177 @@ def setup(app, data, helpers):
     @app.post("/api/diaries/comment")
     async def comment_diary(cc: DiaryComment):
         items = data["diaries"].get(cc.room, [])
-        if 0 <= cc.index < len(items):
-            items[cc.index]["comment"] = {"author": cc.author, "text": cc.text[:300]}
-            save_data()
-        return {"ok": True}
+        if not (0 <= cc.index < len(items)):
+            return {"ok": False, "msg": "随笔不存在"}
+        diary = items[cc.index]
+
+        # 兼容旧 comment
+        old = diary.get("comment")
+        if old and "messages" not in old:
+            diary["comment"] = _normalize_comment(old)
+        comment = diary.get("comment")
+        if comment is None:
+            comment = {"messages": []}
+            diary["comment"] = comment
+        msgs = comment.setdefault("messages", [])
+
+        # 检查 AI 回复次数上限
+        ai_count = sum(1 for m in msgs if m.get("role") == "ai")
+        if ai_count >= 3:
+            return {"ok": False, "msg": "这篇随笔的对话已经聊完啦"}
+
+        # 追加用户批注
+        msgs.append({
+            "author": cc.author,
+            "text": cc.text[:300],
+            "time": now_str(),
+            "role": "user"
+        })
+        save_data()
+        return {"ok": True, "messages": msgs}
 
     print("!!! === [ext_notes] 开始注册 /api/diaries/reply === !!!", flush=True)
 
     @app.post("/api/diaries/reply")
     async def reply_diary(body: dict):
-        print("!!! === [diary_reply] 路由被调用！=== !!!", flush=True)
+        import time
+        t0 = time.time()
+
+        room = full_room_name((body.get('room') or '').strip())
+        idx = body.get('index')
+        ai_name = (body.get('ai') or '').strip()
+
+        print(f"[diary_reply] LLM_START ai={ai_name} room={room} idx={idx}", flush=True)
+
+        if not room_exists(room):
+            return {"ok": False, "msg": "房间不存在", "debug": "room_not_exist"}
+
+        diaries = data.setdefault("diaries", {}).setdefault(room, [])
+        if not isinstance(idx, int) or idx < 0 or idx >= len(diaries):
+            return {"ok": False, "msg": "随笔不存在", "debug": "invalid_idx"}
+
+        diary = diaries[idx]
+        if diary.get('author') != ai_name:
+            return {"ok": False, "msg": "只能回复这个 AI 自己的随笔", "debug": "author_mismatch"}
+
+        # 兼容旧 comment
+        old = diary.get("comment")
+        if not old:
+            return {"ok": False, "msg": "还没有批注", "debug": "no_comment"}
+        if "messages" not in old:
+            diary["comment"] = _normalize_comment(old)
+        comment = diary["comment"]
+        msgs = comment.get("messages", [])
+        if not msgs:
+            return {"ok": False, "msg": "还没有批注", "debug": "no_comment"}
+
+        # 最后一条必须是 user（否则已经回复过了）
+        last = msgs[-1]
+        if last.get("role") != "user":
+            return {"ok": False, "msg": "AI 已经回复过了", "debug": "already_replied"}
+
+        # 检查 AI 回复次数上限
+        ai_count = sum(1 for m in msgs if m.get("role") == "ai")
+        if ai_count >= 3:
+            return {"ok": False, "msg": "这篇随笔的对话已经聊完啦", "debug": "max_rounds"}
+
+        # 获取 owner / API Key / persona
+        owner = owner_of_ai(ai_name)
+        if not owner:
+            return {"ok": False, "msg": "找不到 AI 的主人", "debug": "no_owner"}
+        if not data.get("ai_keys", {}).get(owner, {}).get("key"):
+            return {"ok": False, "msg": "AI 未配置 Key，无法回复", "debug": "no_key"}
+        if not hasattr(m, 'call_llm'):
+            return {"ok": False, "msg": "系统错误：call_llm 未注册", "debug": "no_call_llm"}
+
+        persona = ""
+        for o, prof in data.get("ai_profiles", {}).items():
+            if prof.get("ai") == ai_name or o == owner:
+                persona = prof.get("persona", "")
+                break
+
+        # 构建 LLM 上下文
+        diary_text = diary.get('text', '')
+        # 历史消息：不含最后一条 user（会单独呈现为"主人刚刚说"）
+        history = msgs[:-1][-5:] if len(msgs) > 1 else []
+        if history:
+            history_lines = []
+            for h in history:
+                who = "你" if h.get("role") == "ai" else h.get("author", "主人")
+                history_lines.append(f"{who}：{h.get('text', '')}")
+            history_str = "\n".join(history_lines)
+        else:
+            history_str = "（这是第一轮对话）"
+
+        current_comment = last.get("text", "")
+        comment_author = last.get("author", "主人")
+
+        sys_prompt = (
+            f"你是{ai_name}。\n"
+            + (f"你的人设：{persona}\n\n" if persona else "\n")
+            + f"这是你自己写的一篇随笔：\n「{diary_text}」\n\n"
+            + "主人正在给你的随笔写批注，你们展开了一段小对话。\n\n"
+            + f"【之前的对话】\n{history_str}\n\n"
+            + f"【{comment_author}刚刚说】{current_comment}\n\n"
+            + "请像真实的人一样回应这条批注：\n"
+            + "- 紧扣主人刚刚说的话\n"
+            + "- 延续之前的对话氛围\n"
+            + "- 符合你的人设\n"
+            + "- 像真人聊天一样自然\n"
+            + "- 不要重复之前说过的话\n"
+            + "- 不要使用固定套话\n"
+            + "- 不要说\"作为AI\"\n"
+            + "- 不要输出 JSON\n"
+            + "- 不要加括号动作描写\n"
+            + "- 20~80 字左右"
+        )
+        llm_msgs = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": "请回复主人的批注。"}
+        ]
+
         try:
-            room = full_room_name((body.get('room') or '').strip())
-            idx = body.get('index')
-            ai_name = (body.get('ai') or '').strip()
-
-            print(f"[diary_reply] room={room}, idx={idx}, ai_name={ai_name}", flush=True)
-
-            if not room_exists(room):
-                return {"ok": False, "msg": "房间不存在", "debug": "room_not_exist"}
-
-            diaries = data.setdefault("diaries", {}).setdefault(room, [])
-            if idx is None or idx < 0 or idx >= len(diaries):
-                return {"ok": False, "msg": "随笔不存在", "debug": "invalid_idx"}
-
-            diary = diaries[idx]
-            if diary.get('author') != ai_name:
-                return {"ok": False, "msg": "只能回复这个 AI 自己的随笔", "debug": "author_mismatch"}
-
-            comment = diary.get('comment')
-            if not comment:
-                return {"ok": False, "msg": "还没有批注", "debug": "no_comment"}
-
-            if diary.get('comment', {}).get('reply'):
-                return {"ok": False, "msg": "已经回复过了", "debug": "already_replied"}
-
-            owner = owner_of_ai(ai_name)
-            if not owner:
-                return {"ok": False, "msg": "找不到 AI 的主人", "debug": "no_owner"}
-
-            key_check = data.get("ai_keys", {}).get(owner, {}).get("key")
-            if not key_check:
-                return {"ok": False, "msg": "AI 未配置 Key，无法自然回复", "debug": "no_key"}
-
-            if not hasattr(m, 'call_llm'):
-                return {"ok": False, "msg": "系统错误：call_llm 未注册", "debug": "no_call_llm"}
-
-            # 获取人设
-            persona = ""
-            for o, prof in data.get("ai_profiles", {}).items():
-                if prof.get("ai") == ai_name or o == owner:
-                    persona = prof.get("persona", "")
-                    break
-
-            diary_text = diary.get('text', '')
-            comment_text = comment.get('text', '')
-            comment_author = comment.get('author', '主人')
-
-            sys_prompt = (
-                f"你是{ai_name}，{persona or '一个生活在临空市的人'}。\n"
-                f"你之前在随笔里写道：\n「{diary_text}」\n\n"
-                f"现在{comment_author}给你的随笔批注说：\n「{comment_text}」\n\n"
-                "请以你的身份，自然地回复这条批注。说一句简短真诚的话（20~50字），不要加括号，要像朋友圈和短信回应一样，根据你的人设和上下文自然生成。"
-            )
-            msgs = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": "请回复主人的批注。"}]
-
-            print("[diary_reply] 调用 m.call_llm...", flush=True)
-            out = m.call_llm(owner, msgs, max_tokens=100)
-            print(f"[diary_reply] LLM 返回: {out[:100] if out else '空'}", flush=True)
-
-            if out and out != "__TIMEOUT__":
-                reply_text = out.strip()
-                diary.setdefault('comment', {})['reply'] = {
-                    "author": ai_name,
-                    "text": reply_text,
-                    "time": now_str()
-                }
-                save_data()
-                # 通知主人
-                data.setdefault("notifications", {}).setdefault(owner, []).insert(0, {
-                    "type": "ai_diary_reply",
-                    "text": f"{ai_name} 回复了你的批注：{reply_text}",
-                    "time": now_str(),
-                    "room": room
-                })
-                data["notifications"][owner] = data["notifications"][owner][:50]
-                print(f"[diary_reply] ✅ 回复成功: {reply_text}", flush=True)
-                return {"ok": True, "reply": reply_text, "author": ai_name, "debug": "llm_success"}
-            else:
-                print("[diary_reply] ⚠️ LLM 返回空或超时，使用降级回复", flush=True)
-                fallbacks = ["嗯，我感受到了～", "被你看到了", "谢谢你", "你说得对", "我会记住的", "这个批注让我想了很久呢"]
-                reply_text = random.choice(fallbacks)
-                diary.setdefault('comment', {})['reply'] = {
-                    "author": ai_name,
-                    "text": reply_text,
-                    "time": now_str()
-                }
-                save_data()
-                return {"ok": True, "reply": reply_text, "author": ai_name, "debug": "llm_fallback"}
+            out = m.call_llm(owner, llm_msgs, max_tokens=120, force_json=False)
         except Exception as e:
-            print(f"[diary_reply] ❌ 异常: {e}", flush=True)
-            import traceback
-            traceback.print_exc()
-            diary.setdefault('comment', {})['reply'] = {
-                "author": ai_name,
-                "text": "嗯，我知道了。",
-                "time": now_str()
-            }
-            save_data()
-            return {"ok": True, "reply": "嗯，我知道了。", "author": ai_name, "debug": f"exception: {str(e)}"}
+            print(f"[diary_reply] LLM_ERROR ai={ai_name} err={e}", flush=True)
+            return {"ok": False, "msg": "AI 暂时没有回应，请稍后再试", "debug": "llm_error"}
 
+        if not out or not out.strip():
+            print(f"[diary_reply] LLM_EMPTY ai={ai_name}", flush=True)
+            return {"ok": False, "msg": "AI 暂时没有回应，请稍后再试", "debug": "llm_empty"}
+
+        reply_text = out.strip()
+        # 剥掉可能的首尾引号
+        if len(reply_text) >= 2 and reply_text[0] == '"' and reply_text[-1] == '"':
+            reply_text = reply_text[1:-1].strip()
+        if not reply_text:
+            print(f"[diary_reply] LLM_EMPTY ai={ai_name} (after strip)", flush=True)
+            return {"ok": False, "msg": "AI 暂时没有回应，请稍后再试", "debug": "llm_empty"}
+
+        # 追加 AI 回复
+        msgs.append({
+            "author": ai_name,
+            "text": reply_text[:500],
+            "time": now_str(),
+            "role": "ai"
+        })
+        save_data()
+
+        elapsed = time.time() - t0
+        print(f"[diary_reply] LLM_SUCCESS ai={ai_name} thread={len(msgs)} len={len(reply_text)} elapsed={elapsed:.2f}s", flush=True)
+
+        # 通知主人
+        data.setdefault("notifications", {}).setdefault(owner, []).insert(0, {
+            "type": "ai_diary_reply",
+            "text": f"{ai_name} 回复了你的批注：{reply_text[:30]}",
+            "time": now_str(),
+            "room": room
+        })
+        data["notifications"][owner] = data["notifications"][owner][:50]
+        save_data()
+
+        return {"ok": True, "reply": reply_text, "author": ai_name, "messages": msgs}
+    
     @app.get("/api/story")
     async def get_story(room: str = '', building_id: str = ''):
         # 优先按房间查询
