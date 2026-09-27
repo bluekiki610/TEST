@@ -27,7 +27,29 @@
   - 新增 `docs/test_b5_runtime_context.py`
   - 覆盖 T1-T12 + 附加测试
   - B5-3 未修改任何架构 `.py`
-- ⏳ V3.1 Phase B5-4（PROJECT Update）进行中（本阶段）。
+- ✅ V3.1 Phase B5-4（PROJECT Update）已完成。
+  - 封板 commit：`a97293d7a312463748cb52029246fb27989e9873`
+- ✅ V3.1 Phase B6（THINK / Decision 架构预检，修订版）已 ACCEPTED。
+  - 明确 `think(context) -> Optional[str]` 是 B5 临时占位，不代表最终 Intent Contract
+  - 修正 Goal / Motivation / Intent / Decision / Action 定义
+  - 明确 World Query 为无副作用信息查询，不是决策层
+  - Goal 最终持久化位置暂不冻结
+- ✅ V3.1 Phase C-0（Goal / Motivation / Commitment / Intent Contract Preflight）已完成。
+  - 新增 `docs/C0_GOAL_MOTIVATION_COMMITMENT_INTENT_PREFLIGHT.md`
+  - 冻结 Goal / Commitment 生命周期与状态机
+  - 冻结 Goal 来源（Relationship / Memory / Commitment）
+  - 冻结 Goal 允许多个并存（优先级待 C-1）
+  - 冻结 Commitment 数据结构草案与强度分级（hard / soft / implicit）
+  - 冻结 Commitment 与 Goal 的关系
+  - 明确 Motivation 是计算结果，不需持久化
+  - 冻结 Intent 结构化原则（可审计、可多候选、携带 reason）
+  - 冻结 Intent → Decision → Action 三层分离
+  - 冻结 Goal / Commitment 必须跨 Event 存在，但**最终持久化位置暂不冻结**
+  - 冻结与 main.data 的兼容边界（不写入、不新增字段）
+  - 冻结 AI↔AI Commitment / Goal 只能由 AI B 自行形成
+  - 冻结取消 / 冲突 / 过期 / 完成后的行为
+  - 本阶段只做设计，**未修改任何 `.py`**
+- ⏳ V3.1 Phase C-1（Contract Change）待启动。
 
 现在不要直接继续堆 autonomous behavior；
 先完成 Context Foundation，再进入 Agent Decision / Motivation 层。
@@ -1094,6 +1116,7 @@ THINK（仍为 Stub）
 - 依赖 Phase C 完成的 Goal / Motivation / Commitment。
 - 不引入新数据源；基于现有 `main.data` 结构。
 - 必须先完成 Preflight。
+- 当前状态：⏳ 未开始（依赖 Phase C 完成）。
 
 ---
 
@@ -1105,6 +1128,7 @@ THINK（仍为 Stub）
 - 依赖 Phase C / D 的语义稳定。
 - 不修复、不直接启用旧 `ext_memory`。
 - 必须先完成 Preflight。
+- 当前状态：⏳ 未开始（依赖 Phase C 完成）。
 
 ---
 
@@ -1115,6 +1139,7 @@ THINK（仍为 Stub）
 - 依赖 Phase B / C / D / E 全部完成。
 - THINK 才从 Stub 变为真实实现。
 - 必须先完成 Preflight。
+- 当前状态：⏳ 未开始（依赖 Phase C 完成）。
 - 在此之前 `think()` 一律保持 Stub。
 
 ---
@@ -1129,6 +1154,8 @@ THINK（仍为 Stub）
 6. 每个阶段完成后停止，等待架构审核。
 7. 不允许跨阶段并行编码。
 8. 不允许绕过 Contract 直接修改 Runtime / Provider / Assembler。
+9. 每个子阶段（C-0 / C-1 / C-2 ...）都必须独立审核。
+10. Preflight 阶段不允许写代码；Contract Change 阶段只允许改 Contract；编码阶段才允许改 `.py`。
 ```
 
 ---
@@ -1307,6 +1334,22 @@ ext_memory	调用失败（见 §22.6）
 - 未调用 LLM / 网络。
 - `main.data` 未被 Runtime 直接写。
 - B5-2 的 `agent/runtime.py` 修改 Commit SHA：`525973ae6ee00c02bbc43a608c6c27cb15b62ebb`。
+
+### 22.12 C-0 阶段事实（2026-09-27）
+
+- C-0 Goal / Motivation / Commitment / Intent Contract Preflight 已完成。
+- 新增 `docs/C0_GOAL_MOTIVATION_COMMITMENT_INTENT_PREFLIGHT.md`。
+- Goal / Commitment 生命周期与状态机已冻结（草案）。
+- Motivation 明确为计算结果，**不需持久化**。
+- Intent 明确为结构化、可审计、可多候选。
+- Goal / Commitment **最终持久化位置暂不冻结**（待 C-1）。
+- Goal / Commitment **不写入 `main.data`**。
+- 未修改任何 `.py`。
+- 未修改 Architecture Contract。
+- 未接 LLM。
+- 未启用 Memory Runtime。
+- 未进入 B7。
+- 未进入 C-1 编码。
 
 ---
 
