@@ -26,7 +26,8 @@ B5-2 连接 ContextAssembler：
     8. WORLD_CHANGE   —— 由现有 ext_* 负责（未改动）
     9. EVENT          —— 由 P0-2B Adapter 负责（未改动）
 """
-
+import time
+from agent.intent import IntentSet
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
@@ -319,15 +320,23 @@ class AgentRuntime:
     # -----------------------------------------------------
     # 剩余方法（P0-3A Stub 保留，B5-2 未实现）
     # -----------------------------------------------------
-    def think(self, context: AgentContext) -> Optional[str]:
+    def think(self, context: AgentContext) -> IntentSet:
         """
-        P0-3A Stub 保留。B5-2 未实现 THINK。
-        绝不调用 LLM。
+        C-2 Stub：签名迁移为 -> IntentSet。
 
-        签名已在 B5-1 Contract Change CC-20260926-01 冻结：
-            think(context: AgentContext) -> Optional[str]
+        依据 Contract §5B.11 / §5B.10：
+        - 签名冻结为 think(self, context: AgentContext) -> IntentSet
+        - C-2 行为仍为 Stub
+        - 返回合法的空 IntentSet
+        - 绝不调用 LLM
+        - 不实现 THINK 内部逻辑
         """
-        return None
+        return IntentSet(
+            actor=self.ai_name,
+            created_at=time.time(),
+            candidates=[],
+            reason_summary="C-2 Stub: THINK not implemented",
+        )
 
     def decide(self, thought: Optional[str]) -> Optional[Decision]:
         """P0-3A Stub 保留。P0-3B 不实现。"""
@@ -383,4 +392,4 @@ def get_runtime(
     return AgentRuntime(ai_name, data, context_assembler=context_assembler)
 
 
-P0_STEP3B_PERCEPTION_CHAIN: implement first real perceive + should_wake
+# P0_STEP3B_PERCEPTION_CHAIN: implement first real perceive + should_wake
