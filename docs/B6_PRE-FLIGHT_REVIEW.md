@@ -1,8 +1,17 @@
-# B6 PRE-FLIGHT REVIEW — THINK / Decision 架构预检
+# B6 PRE-FLIGHT REVIEW — THINK / Decision 架构预检（修订版）
 
 > 本阶段只做架构预检 / 设计文档。
-> **未修改任何 `.py`、前端、数据、Memory、Provider、Assembler、Runtime、main、ext_\*。**
+> **未修改任何 `.py`、前端、数据、Memory、Provider、Assembler、Runtime、main、ext_\*、Contract。**
 > 完成后停止，等待架构审核。
+
+---
+
+## 修订记录
+
+| 版本 | 日期 | 修订点 |
+|------|------|--------|
+| v1 | 2026-09-27 | B6 初版 |
+| v2 | 2026-09-27 | 修订 4 点：① 明确 `think() -> Optional[str]` 是 B5 临时占位；② 修正 Goal / Motivation / Intent / Decision / Action 定义；③ 明确 World Query 为无副作用信息查询；④ Goal 持久化位置暂不冻结 |
 
 ---
 
@@ -43,7 +52,7 @@ ContextAssembler.assemble(...)
   ↓
 AgentContext
   ↓
-think(context: AgentContext)   # 当前仍为 Stub
+think(context: AgentContext)   # 当前为 B5 临时占位，见 §2.5
 ```
 
 ### 1.4 当前仍保持的边界
@@ -51,7 +60,7 @@ think(context: AgentContext)   # 当前仍为 Stub
 - `LongTermProvider` = stub，返回 `[]`。
 - Memory Runtime 未启用。
 - `decision_constraints` = `None`。
-- `think()` 仍为 Stub。
+- `think()` 仍为占位实现（返回 `None`）。
 - 未接 LLM / Decision / Action。
 - `ext_ai.build_ai_context()` 未接入 V3.1 正式链。
 - 未产生"双 Context"。
@@ -81,19 +90,19 @@ think(context: AgentContext)   # 当前仍为 Stub
 
 > World 负责事实和执行，Agent 负责动机与决策。
 
-### 2.2 概念分层（正式定义）
+### 2.2 概念分层（正式定义 · 修订版）
 
-| 概念 | 定义 | 时态 | 属于哪一层 |
-|------|------|------|-----------|
+| 概念 | 定义（修订版） | 时态 | 属于哪一层 |
+|------|----------------|------|-----------|
 | **Event** | 世界刚刚发生了什么（Fact） | 过去 | World → Agent 输入 |
 | **State** | 现在是什么状态（Agent + World 投影） | 现在 | Projection |
-| **Memory** | 记得什么（Experience 的编码/唤醒） | 跨时 | 按需检索 |
+| **Memory** | 记得什么（Experience 的编码 / 唤醒） | 跨时 | 按需检索 |
 | **Commitment** | 已经答应 / 约定 / 承诺什么 | 未来 | Agent 承诺 |
-| **Goal** | 想完成什么（现在/近期） | 未来 | Agent 目标 |
-| **Motivation** | 为什么现在想做（Goal + State + Relationship + Memory + World Condition） | 现在 | Agent 动机 |
-| **Intent** | 当前倾向做什么（候选方向） | 现在 → 未来 | Agent 意图 |
-| **Decision** | 最终决定做什么 | 现在 | Agent 决策 |
-| **Action** | 系统真正执行什么 | 现在 | 执行层 |
+| **Goal** | **我想完成什么** | 未来 | Agent 目标 |
+| **Motivation** | **我为什么现在想完成它** | 现在 | Agent 动机 |
+| **Intent** | **我现在倾向做什么** | 现在 → 未来 | Agent 意图 |
+| **Decision** | **我最终选择做什么** | 现在 | Agent 决策 |
+| **Action** | **系统真正执行什么** | 现在 | 执行层 |
 
 ### 2.3 关系图
 
@@ -115,13 +124,40 @@ World Conditions ───┘
 - **不产出 Decision**（Decision 是下一层）
 - **不产出 Action**（Action 是再下一层）
 
-因此 THINK 的产物是：
+THINK 的产物是：
 
-> “我现在倾向于做什么” + “为什么倾向这样做”
+> “我现在倾向做什么” + “为什么倾向这样做”
 
 而不是“我决定了做什么”。
 
-### 2.5 THINK 不是 LLM 的同义词
+### 2.5 `think(context) -> Optional[str]` 的真实地位（修订点 ①）
+
+**必须明确：**
+
+> `think(context: AgentContext) -> Optional[str]` 是 **B5 阶段的临时占位 / 兼容接口**，
+> **不代表最终 Intent 数据结构已经冻结。**
+
+理由：
+
+1. B5 阶段只完成 Runtime Context Connection，THINK 只更新签名以匹配 `AgentContext`。
+2. B5 阶段 `think()` 行为仍为 Stub（返回 `None`）。
+3. `Optional[str]` 是 P0-3A 遗留占位类型，**不足以代表结构化 Intent**。
+
+**B6 已定义 Intent 为：**
+
+- 结构化；
+- 可审计；
+- 可能包含多个候选；
+- 携带 Motivation 摘要；
+- 不产生副作用。
+
+**因此：**
+
+- `Optional[str]` **不足以**表达最终 Intent Contract。
+- **最终 Intent 数据结构留待后续 Contract Change 冻结。**
+- 本阶段**不修改** `think()` 签名，**不创建** Intent 数据结构。
+
+### 2.6 THINK 不是 LLM 的同义词
 
 - THINK 可以是 LLM 驱动，也可以是非 LLM 驱动。
 - THINK 必须是可审计、可替换的层。
@@ -133,12 +169,14 @@ World Conditions ───┘
 
 ### 3.1 THINK 的输入类型
 
-**当前冻结：**
+**当前（B5 冻结）：**
 
 ```python
 def think(self, context: AgentContext) -> Optional[str]:
     ...
 ```
+
+**注意：** 该签名是 B5 临时占位，见 §2.5。最终签名留待 Intent Contract 冻结。
 
 ### 3.2 是否应扩展为 `think(context, event, state, ...)`
 
@@ -148,9 +186,9 @@ def think(self, context: AgentContext) -> Optional[str]:
 
 1. `AgentContext` 已经是分层结构化对象。
 2. Event / State / Memory / Commitment / Goal 未来应通过 Context 层表达，而不是绕过 Context 让 THINK 直读。
-3. 若让 THINK 直接读取 main.data，会：
+3. 若让 THINK 直接读取 `main.data`，会：
    - 破坏 CA-2（不修改旧 `build_ai_context`）；
-   - 破坏 SOT-1（main.data 是唯一 Source of Truth，但只允许通过 Contract 方法访问）；
+   - 破坏 SOT-1（`main.data` 是唯一 Source of Truth，但只允许通过 Contract 方法访问）；
    - 破坏“单一 Context 数据链”（CA-6）。
 
 ### 3.3 Event 如何进入 THINK
@@ -166,11 +204,6 @@ def think(self, context: AgentContext) -> Optional[str]:
 
 - State 通过 `AgentState` 投影。
 - `AgentState` 通过 `DynamicWorldProvider` 注入 `dynamic_world` 层。
-- B6 阶段只包含：
-  - `current_time`
-  - `current_location`
-  - `current_activity`
-  - `is_working` / `is_dating` / `is_following`
 - 未来若有更多 state 字段，应先在 Contract 中声明，再由 Provider 提供。
 
 ### 3.5 硬边界
@@ -186,8 +219,6 @@ def think(self, context: AgentContext) -> Optional[str]:
 ---
 
 ## 4. Context 是否已经足够支持 THINK
-
-逐层检查。
 
 ### 4.1 Stable Core
 
@@ -209,7 +240,7 @@ def think(self, context: AgentContext) -> Optional[str]:
 | 核心关系 | ⚠️ 部分 | 依赖 `user_profile` 中的文本 |
 | 长期关系快照 | ❌ | 属于 Long-term 或未来 Relationship 层 |
 
-**B6 结论：**
+**结论：**
 
 - Stable Core 已能表达 THINK 所需的基本“我是谁 / 我面对谁 / 世界观”。
 - **不扩展** Stable Core。
@@ -232,11 +263,10 @@ def think(self, context: AgentContext) -> Optional[str]:
 | 最近社交行为 | ⚠️ 部分 | 依赖 trail / timeline 文本 |
 | 当前对话 | ❌ | 属于旧 `build_ai_context` |
 
-**B6 结论：**
+**结论：**
 
 - Recent 已足够表达“最近发生了什么”。
 - **不扩展** Recent。
-- 若未来需要 Event 摘要，先在 Contract 中声明。
 
 ### 4.3 Long-term
 
@@ -253,13 +283,13 @@ def think(self, context: AgentContext) -> Optional[str]:
 | 历史事件 | ❌ | 未实现 |
 | 重要承诺 | ❌ | 属于 Commitment 层 |
 
-**B6 结论：**
+**结论：**
 
-- **没有 Long-term Recall 时，THINK 第一阶段能做到什么：**
+- **没有 Long-term Recall 时，THINK 第一阶段能做到：**
   - 基于 Stable Core + Recent + Dynamic World 做出**短时、局部、无历史依赖**的 Intent 候选。
   - 能处理“现在”和“刚才”，不能处理“上次”“很久以前”。
 
-- **不能做到什么：**
+- **不能做到：**
   - 无法做“跨会话关系延续”。
   - 无法做“长期承诺的兑现”。
   - 无法做“记忆唤醒”。
@@ -294,10 +324,10 @@ def think(self, context: AgentContext) -> Optional[str]:
 | 天气 / 环境 | ❌ | 未来 World State |
 | 经济状况 | ⚠️ | AgentState.wallet 已存在，未注入 Context |
 
-**B6 结论：**
+**结论：**
 
 - Dynamic World 当前覆盖 THINK 第一阶段的“现在”。
-- 未来的世界查询必须走 **World Query**，不允许 Provider 自行扩展地图/建筑字段。
+- 未来的世界查询必须走 **World Query**，不允许 Provider 自行扩展地图 / 建筑字段。
 
 ### 4.5 decision_constraints
 
@@ -305,7 +335,7 @@ def think(self, context: AgentContext) -> Optional[str]:
 
 - 保持 `None`。
 
-**B6 结论：**
+**结论：**
 
 - THINK 第一阶段**不依赖** `decision_constraints`。
 - 未来由 Phase C（Goal / Motivation / Commitment）填充，但必须走 Contract 变更。
@@ -328,15 +358,6 @@ def think(self, context: AgentContext) -> Optional[str]:
 - Action
 
 塞进 `AgentContext` 作为状态字段。
-
-理由：
-
-- Context 描述“我看到什么 / 我知道什么”。
-- Intent / Decision / Action 描述“我决定做什么”。
-- 二者语义不同，混用会导致：
-  - Context 变成可写状态容器；
-  - THINK 与 Decision 边界模糊；
-  - 无法审计“决策原因”。
 
 ### 5.3 未来正式结构
 
@@ -376,9 +397,9 @@ THINK
 
 ## 6. Goal
 
-### 6.1 定义
+### 6.1 定义（修订点 ②）
 
-AI 现在 / 近期想完成什么，以及为什么。
+> **Goal = 我想完成什么。**
 
 ### 6.2 状态
 
@@ -413,26 +434,41 @@ Motivation
 - **不允许凭空生成。**
 - **不允许随机生成。**
 
-### 6.6 持久性
+### 6.6 持久性（修订点 ④）
 
-- Goal 是跨 Event 的。
-- Goal 需要持久化。
-- 但**不写入 `main.data`**（SOT-1 / AS-5）。
-- 未来需单独设计持久化方案。
+**要求：**
+
+- Goal **必须能够跨 Event 持续存在**。
+- Goal 不因单个 Event 结束而消失。
+
+**暂不冻结：**
+
+- **Goal 的最终持久化位置暂不冻结。**
+- 不现在确定独立数据库。
+- 不现在确定是否复用 `main.data`。
+- 不现在确定是否新建持久化文件。
+- **最终持久化位置留待后续 Contract 决定。**
+
+**明确禁止（本阶段）：**
+
+- 不创建 Goal 持久化文件。
+- 不创建 Goal 独立数据库。
+- 不把 Goal 写入 `main.data`（SOT-1 / AS-5 仍生效）。
 
 ### 6.7 B6 禁止
 
 - 不实现 Goal。
 - 不修改 `_plan_auto`。
 - 不引入随机目标。
+- 不创建 Goal 持久化文件 / 数据库。
 
 ---
 
 ## 7. Motivation
 
-### 7.1 定义
+### 7.1 定义（修订点 ②）
 
-Goal + State + Relationship + Memory → 行动动机。
+> **Motivation = 我为什么现在想完成它。**
 
 ### 7.2 状态
 
@@ -456,7 +492,7 @@ Intent
 
 ### 7.4 职责
 
-- Motivation 回答“为什么现在想做”。
+- Motivation 回答“我为什么现在想完成它”。
 - Motivation 不回答“具体做什么”。
 - Motivation 是 Intent 的输入。
 
@@ -525,14 +561,15 @@ Commitment ──→ Decision（作为约束）
 
 ## 9. Intent
 
-### 9.1 定义
+### 9.1 定义（修订点 ②）
 
-当前倾向做什么（候选方向）。
+> **Intent = 我现在倾向做什么。**
 
 ### 9.2 状态
 
 - 未实现。
-- B6 只定义位置与边界。
+- 最终 Intent 数据结构留待后续 Contract Change 冻结。
+- B5 阶段的 `think() -> Optional[str]` 不足以代表最终 Intent Contract（见 §2.5）。
 
 ### 9.3 未来位置
 
@@ -546,7 +583,7 @@ Decision
 
 ### 9.4 职责
 
-- Intent 回答“我倾向做什么”。
+- Intent 回答“我现在倾向做什么”。
 - Intent 可以有多个候选。
 - Intent 不是 Decision。
 - Intent 不产生副作用。
@@ -568,15 +605,16 @@ Decision
 ### 9.7 B6 禁止
 
 - 不实现 Intent。
+- 不冻结最终 Intent 数据结构。
 - 不让 THINK 直接产出 Decision。
 
 ---
 
 ## 10. Decision
 
-### 10.1 定义
+### 10.1 定义（修订点 ②）
 
-最终决定做什么。
+> **Decision = 我最终选择做什么。**
 
 ### 10.2 状态
 
@@ -595,7 +633,7 @@ Action
 
 ### 10.4 职责
 
-- Decision 回答“最终做什么”。
+- Decision 回答“我最终选择做什么”。
 - Decision 是**唯一**能影响 Action 的 Agent 输出。
 - Decision 不直接修改 `main.data`。
 
@@ -615,9 +653,9 @@ Action
 
 ## 11. Action
 
-### 11.1 定义
+### 11.1 定义（修订点 ②）
 
-系统真正执行什么。
+> **Action = 系统真正执行什么。**
 
 ### 11.2 状态
 
@@ -717,11 +755,11 @@ World Change
 
 ---
 
-## 13. World Query
+## 13. World Query（修订点 ③）
 
-### 13.1 定义
+### 13.1 定义（修订）
 
-Brain / Policy 查询世界的方法。
+> **World Query 是**无副作用的信息查询能力**，不是决策层。**
 
 例如：
 
@@ -734,15 +772,31 @@ query_places(purpose="medical", urgency="high", open_now=True)
 - 未实现。
 - B6 只定义位置与边界。
 
-### 13.3 未来位置
+### 13.3 正式链路（修订）
 
-**World Query 属于 THINK / Decision 之间的查询层，不属于 Action。**
+**推荐链：**
 
-理由：
+```text
+Motivation
+    ↓
+Intent
+    ↓
+World Query
+    ↓
+Query Result
+    ↓
+Decision
+    ↓
+Action
+```
 
-- World Query 提供**信息**，不产生副作用。
-- “找到医院”是信息查询，不是动作。
-- “陪用户去医院”才是 Intent / Decision / Action。
+**说明：**
+
+- World Query 可以被 **THINK / Decision 阶段调用**。
+- World Query 可以出现在 Intent 形成后、Decision 前的信息查询环节。
+- World Query **不能自己决定最终行为**。
+- World Query **不能修改 `main.data`**。
+- World Query **不能触发 Action**。
 
 ### 13.4 职责
 
@@ -750,6 +804,8 @@ query_places(purpose="medical", urgency="high", open_now=True)
 - 回答“是否开放 / 是否可进入”。
 - 不修改 `main.data`。
 - 不触发 Action。
+- 不产生副作用。
+- 不产生 Decision。
 
 ### 13.5 与现有数据结构的关系
 
@@ -765,7 +821,12 @@ query_places(purpose="medical", urgency="high", open_now=True)
 - 新 schema
 - 第二套 World
 
-### 13.6 B6 禁止
+### 13.6 医疗案例中的位置（修订）
+
+- “找到医院”是 **World Query 的信息查询**，不是 Decision，不是 Action。
+- “陪用户去医院”是 **Intent → Decision → Activity**，不是 World Query。
+
+### 13.7 B6 禁止
 
 - 不实现 World Query。
 - 不修改 `find_building_of_room` / `resolve_building` / `can_access_room`。
@@ -858,12 +919,7 @@ Action
 底层插件执行（ext_sms / ext_ai / ext_notes / ext_core）
 ```
 
-### 15.4 职责
-
-- Brain 决定沟通的**语义**。
-- 底层插件负责**执行**。
-
-### 15.5 B6 禁止
+### 15.4 B6 禁止
 
 - 不实现 SNS。
 - 不实现 AI↔AI autonomous loop。
@@ -1022,7 +1078,7 @@ AI B Brain
 - 先迁移接口，后迁移实现。
 - 迁移过程必须“旧功能不能坏”。
 - 迁移必须分阶段。
-- 未来 `ext_ai` 从“总控制器”退化为兼容/编排层。
+- 未来 `ext_ai` 从“总控制器”退化为兼容 / 编排层。
 
 ### 19.3 B6 立场
 
@@ -1107,6 +1163,8 @@ Intent（倾向陪用户去医院）
     ↓
 World Query（查询可用医院）
     ↓
+Query Result
+    ↓
 Decision（选择某家医院 + 前往方式）
     ↓
 Action（调用现有 ext_* 执行）
@@ -1116,12 +1174,12 @@ World Change（AI 与用户位置变化）
 Event（location_changed）
 ```
 
-### 21.3 关键问题回答
+### 21.3 关键问题回答（修订）
 
 | 问题 | 回答 |
 |------|------|
-| World Query 属于 THINK、Decision 还是 Action？ | **属于 THINK / Decision 之间的查询层**，不属于 Action |
-| “找到医院”是 Decision 还是 Action？ | **属于 World Query 的信息查询**，不是 Action |
+| World Query 属于 THINK、Decision 还是 Action？ | **无副作用信息查询能力**，可被 THINK / Decision 调用，不属于 Action |
+| “找到医院”是 Decision 还是 Action？ | **World Query 的信息查询**，不是 Decision，不是 Action |
 | “陪用户去医院”是 Intent、Decision 还是 Activity？ | **Intent → Decision → Activity（Lifecycle）→ Action** 多阶段 |
 | 地图数据应怎样提供给 THINK？ | 通过 **World Query 接口**，不作为 Context 层直接注入 |
 
@@ -1131,6 +1189,8 @@ Event（location_changed）
 - Decision 不直接调用 ext_*。
 - Action 不解释动机。
 - 地图查询必须基于现有 `buildings` / `rooms`。
+- World Query 不产生副作用。
+- World Query 不修改 `main.data`。
 
 ---
 
@@ -1177,7 +1237,7 @@ AI 昨天和用户一起在某个住所度过周末。第二天早上，AI 不�
 
 ---
 
-## 23. 完整架构图
+## 23. 完整架构图（修订）
 
 ```text
                          ┌──────────────────┐
@@ -1194,30 +1254,35 @@ AI 昨天和用户一起在某个住所度过周末。第二天早上，AI 不�
                                   ↓
                               THINK
                                   ↓
-              ┌───────────────────┴───────────────────┐
-              ↓                                       ↓
-   Motivation / Intent                      candidate reasoning
-              ↓
-          Decision
-              ↓
-            Action
-              ↓
-        existing ext_*
-              ↓
-        World Change
-              ↓
-            Event
+                              Intent
+                                  ↓
+                  ┌───────────────┴───────────────┐
+                  ↓                               ↓
+            World Query                  candidate reasoning
+                  ↓
+            Query Result
+                  ↓
+              Decision
+                  ↓
+                Action
+                  ↓
+            existing ext_*
+                  ↓
+            World Change
+                  ↓
+                Event
 ```
 
 ### 23.1 各模块位置
 
 | 模块 | 位置 |
 |------|------|
-| **Goal** | 在 THINK 之前，由 Relationship / Memory / Commitment 推导 |
+| **Goal** | 在 THINK 之前，由 Relationship / Memory / Commitment 推导；持久化位置**暂不冻结** |
 | **Motivation** | 在 THINK 内部，由 Goal + State + Relationship + Memory + World Conditions 推导 |
 | **Commitment** | 在 THINK / Decision 之前，作为强约束 |
+| **Intent** | THINK 输出；最终数据结构留待后续 Contract Change 冻结 |
+| **World Query** | 在 Intent 与 Decision 之间，作为无副作用信息查询层 |
 | **Activity** | 在 Action 之后，作为 World Change 的连续性表达 |
-| **World Query** | 在 THINK / Decision 之间，作为信息查询层 |
 | **Memory** | 在 Context Assembly 之前（通过 Recall → LongTermProvider） |
 | **Scheduler** | 在 RECEIVE 之前，作为“什么时候提醒 / 唤醒” |
 | **Communication** | 在 Decision → Action 之间，通过现有 ext_* 执行 |
@@ -1225,19 +1290,19 @@ AI 昨天和用户一起在某个住所度过周末。第二天早上，AI 不�
 ### 23.2 关键边界
 
 ```text
-World  负责事实和执行
-Agent  负责动机与决策
-Event  是世界共同语言
-Context 是 Agent 的信息视图
-Decision 是唯一能影响 Action 的 Agent 输出
-Action 是唯一能修改 main.data 的链环节
+World       负责事实和执行
+Agent       负责动机与决策
+Event       是世界共同语言
+Context     是 Agent 的信息视图
+Intent      是 THINK 的输出，不是 Decision
+World Query 是无副作用信息查询，不是决策层
+Decision    是唯一能影响 Action 的 Agent 输出
+Action      是唯一能修改 main.data 的链环节
 ```
 
 ---
 
 ## 24. B6 禁止事项
-
-B6 阶段**禁止**：
 
 ### 修改类
 
@@ -1251,6 +1316,7 @@ B6 阶段**禁止**：
 - ❌ 修改任何 `ext_*.py`
 - ❌ 修改前端
 - ❌ 修改 Memory
+- ❌ 修改 `docs/V3.1_ARCHITECTURE_CONTRACT.md`
 
 ### 实现类
 
@@ -1263,6 +1329,7 @@ B6 阶段**禁止**：
 - ❌ 实现 Goal
 - ❌ 实现 Motivation
 - ❌ 实现 Commitment
+- ❌ 实现 Intent
 - ❌ 实现 Activity
 - ❌ 实现 World Query
 - ❌ 实现 Scheduler
@@ -1272,6 +1339,7 @@ B6 阶段**禁止**：
 - ❌ 修改 `main.data`
 - ❌ 建立新的数据库
 - ❌ 建立第二套 Agent State
+- ❌ 创建 Goal 持久化文件 / 数据库
 
 ### 阶段纪律类
 
@@ -1279,6 +1347,8 @@ B6 阶段**禁止**：
 - ❌ 跳过架构审核
 - ❌ 绕过 Contract Change 流程
 - ❌ 删除 / 改名 / 别名化 `ContextLayers`
+- ❌ 冻结最终 Intent 数据结构（本阶段）
+- ❌ 冻结 Goal 持久化位置（本阶段）
 
 ---
 
@@ -1290,9 +1360,11 @@ B6 阶段**禁止**：
 
 1. Phase C 的 Goal / Motivation / Commitment 语义尚未冻结。
 2. THINK 的输入 / 输出契约尚未冻结。
-3. Prompt Adapter 的设计尚未冻结。
-4. Decision / Action 的接口尚未冻结。
-5. Scheduler / World Query 的位置尚未冻结。
+3. Intent 数据结构尚未冻结。
+4. Prompt Adapter 的设计尚未冻结。
+5. Decision / Action 的接口尚未冻结。
+6. Scheduler / World Query 的位置尚未冻结。
+7. Goal 持久化位置尚未冻结。
 
 ### 25.2 建议的下一步
 
@@ -1300,9 +1372,13 @@ B6 阶段**禁止**：
 
 顺序：
 
-1. **C-0 Preflight**：定义 Goal / Motivation / Commitment 的数据结构与边界。
-2. **C-1 Contract Change**：更新 `docs/V3.1_ARCHITECTURE_CONTRACT.md`。
-3. **C-2 实现**：只实现 Goal / Motivation / Commitment 的最小核心。
+1. **C-0 Preflight**：定义 Goal / Motivation / Commitment / Intent 的数据结构与边界。
+2. **C-1 Contract Change**：更新 `docs/V3.1_ARCHITECTURE_CONTRACT.md`，包括：
+   - Goal / Motivation / Commitment / Intent 语义；
+   - Goal 持久化位置；
+   - Intent 数据结构；
+   - World Query 调用位置。
+3. **C-2 实现**：只实现 Goal / Motivation / Commitment / Intent 的最小核心。
 4. **C-3 测试**。
 5. **C-4 PROJECT Update**。
 
@@ -1318,6 +1394,7 @@ B6 阶段**禁止**：
 
 - THINK 实现必须在：
   - Goal / Motivation / Commitment 至少部分实现；
+  - Intent 数据结构冻结；
   - Decision / Action 的接口契约冻结；
   - Prompt Adapter 契约冻结；
   - Contract Change 通过。
@@ -1326,7 +1403,7 @@ B6 阶段**禁止**：
 
 ## 26. B6 完成确认
 
-> **B6 只完成 THINK / Decision 架构预检。**
+> **B6 只完成 THINK / Decision 架构预检（修订版）。**
 >
 > **未修改任何 `.py` 文件。**
 > **未修改 `agent/runtime.py`。**
@@ -1339,11 +1416,19 @@ B6 阶段**禁止**：
 > **未修改 Memory。**
 > **未修改 `docs/V3.1_ARCHITECTURE_CONTRACT.md`。**
 >
-> **B6 没有实现 THINK / Decision / Action / Brain / Goal / Motivation / Commitment / Activity / World Query / Scheduler / AI↔AI。**
+> **B6 没有实现 THINK / Decision / Action / Brain / Goal / Motivation / Commitment / Intent / Activity / World Query / Scheduler / AI↔AI。**
 > **B6 没有接 LLM / 网络。**
 > **B6 没有启用 Memory Runtime。**
 > **B6 没有产生"双 Context"。**
+> **B6 没有冻结 Intent 数据结构。**
+> **B6 没有冻结 Goal 持久化位置。**
 >
 > **B6 只输出设计决策文档，不进入 B7 编码。**
 
 ---
+
+
+
+---
+
+**B6 修订版完成后停止，等待架构审核。不进入 B7。**
