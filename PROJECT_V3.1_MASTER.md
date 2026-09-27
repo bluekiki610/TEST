@@ -9,62 +9,26 @@
 - 正式仓库：`bluekiki610/linkong`
 - 当前 V3.0/V3.1 开发与验收：`bluekiki610/TEST`
 - V3.0 P0-1 ~ P0-3B 已完成/接受。
-- V3.1 当前处于：**Context Foundation / Phase B 阶段**。
+- V3.1 当前处于：**Phase B5 已完成（Context Connection 归档）**。
 - V3.1 Phase A（Global Architecture Inventory）已完成。
 - V3.1 Phase B1（Context Data Contract）已完成。
 - V3.1 Phase B2-1（StableCoreProvider）已完成。
 - V3.1 Phase B2-2（DynamicWorldProvider）已完成。
 - V3.1 Phase B2-3（RecentProvider）已完成。
-  - 新增 `agent/recent_provider.py`
-  - 测试 `docs/test_b2_3_recent.py`（可从仓库根目录直接运行：`python docs/test_b2_3_recent.py`）
-  - **实际数据源**：
-    - `ai_timeline[ai]` → `recent_timeline`（上限 5 条）
-    - `trails[ai]` → `recent_trail`（24h 窗口 + 上限 5 条）
-    - `ai_visited[ai]` → `recent_visited_place`（上限 3 个）
-  - **明确不生成**：recent_map / recent_building / recent_region / recent_place / recent_decision / recent_goal / recent_memory / recent_full_chat / recent_full_sms
-  - **限制**：输出条数 ≤ 13，单条 ≤ 120 字符，输入 3000 条 → 输出 ≤ 13 条（非线性）
-- V3.1 Phase B2-4（LongTermProvider Stub）已完成。
-  - 新增 `agent/long_term_provider.py`（Stub，无业务逻辑）
-  - 测试 `docs/test_b2_4_long_term.py`（可从仓库根目录直接运行）
-  - 当前状态：**stub**
-  - 当前无真实 Long-term 数据源，返回 `[]` 是正确行为
-  - Memory Runtime 仍未启用
-  - ext_memory 不修改、不修复
-  - Recall 仅预留接口（`recall_query` 参数），未实现
-  - ContextAssembler 尚未开始
-  - Runtime 尚未接入
-- V3.1 Phase B2-4（LongTermProvider Stub）已 ACCEPTED。
-- V3.1 Phase B3（ContextAssembler）已完成。
-  - 新增 `agent/context_assembler.py`
-  - 测试 `docs/test_b3_context_assembler.py`（从仓库根目录运行：`python docs/test_b3_context_assembler.py`）
-  - 四层组装：Stable Core / Recent / Long-term / Dynamic World
-  - Budget enforcement：四层独立预算 + 总预算
-  - deterministic truncation：保持 Provider 原顺序，超预算时拒绝当前 item，标记 truncated=True
-  - LongTermProvider 当前仍为 Stub，返回 `[]`
-  - Runtime 尚未接入，`agent/runtime.build_context()` 保持 P0-3A Stub
-  - 未修改 `agent/runtime.py`、`main.py`、`ext_*.py`
-
----
-
-## 2. `PROJECT_V3.1_MASTER.md` 阶段状态追加
-
+- ✅ V3.1 Phase B2-4（LongTermProvider Stub）已 ACCEPTED。
 - ✅ V3.1 Phase B3（ContextAssembler）已 ACCEPTED。
 - ✅ V3.1 Phase B4（Runtime Connection Pre-Flight）已 ACCEPTED。
 - ✅ V3.1 Phase B5-0（Context Contract Decision）已 ACCEPTED。
-  - V3.1 正式 Context 标准 = `AgentContext`
-  - `ContextLayers` = deprecated compatibility stub（保留、不删除、不改名、不别名化）
-  - Runtime 最终接口冻结（待 B5-2 实现）：
-    - `build_context(event: Event, now_ts: Optional[float] = None) -> AgentContext`
-    - `think(context: AgentContext) -> Optional[str]`
-  - 数据来源冻结：
-    - `owner` = `get_state().owner`
-    - `agent_state_dict` = `get_state().to_dict()`
-    - `data` = `self._data`
-    - `now_ts` = 调用方注入
-    - `recall_query` = 当前固定 `None`
-  - Contract Change：CC-20260926-01
-- ⏳ V3.1 Phase B5-1（Contract Change）进行中。
-- ⏳ V3.1 Phase B5-2（Runtime Connection）待启动。
+- ✅ V3.1 Phase B5-1（Contract Change CC-20260926-01）已 ACCEPTED。
+- ✅ V3.1 Phase B5-2（Runtime Connection）已 ACCEPTED。
+  - `agent/runtime.py` Commit SHA：`525973ae6ee00c02bbc43a608c6c27cb15b62ebb`
+  - 该 commit 属于 B5-2 阶段；B5-3 未修改 `agent/runtime.py`。
+- ✅ V3.1 Phase B5-3（Runtime Context Connection Tests）已 ACCEPTED。
+  - 新增 `docs/test_b5_runtime_context.py`
+  - 覆盖 T1-T12 + 附加测试
+  - B5-3 未修改任何架构 `.py`
+- ⏳ V3.1 Phase B5-4（PROJECT Update）进行中（本阶段）。
+
 现在不要直接继续堆 autonomous behavior；
 先完成 Context Foundation，再进入 Agent Decision / Motivation 层。
 
@@ -806,15 +770,95 @@ LLM Cost ≈ LLM Call Count × Context Size
 - 不接入 Runtime；`agent/runtime.build_context()` 保持 P0-3A Stub
 - Runtime 接入属于后续阶段
 
-**B4 Runtime Preflight**            ✅ ACCEPTE
-
 **B5 阶段状态**：
-- B5-0 Context Contract Decision：✅ 已 ACCEPTED
-- B5-1 Contract Change（CC-20260926-01）：⏳ 进行中
-- B5-2 Runtime Connection：⏳ 待启动
-- Runtime 实现仍未修改；`agent/runtime.py` 保持 P0-3A/3B 原状
-- `build_context` 尚未接入 `ContextAssembler`
-- THINK 仍为 Stub
+- ✅ B5-0 Context Contract Decision（ACCEPTED）
+- ✅ B5-1 Contract Change（CC-20260926-01，ACCEPTED）
+- ✅ B5-2 Runtime Connection（ACCEPTED）
+- ✅ B5-3 Tests（ACCEPTED）
+- ⏳ B5-4 PROJECT Update（本阶段）
+
+**V3.1 唯一正式 Context 数据链（B5-1 冻结，B5-2 落地，B5-3 验证）**：
+
+```text
+Event
+  ↓
+RECEIVE
+  ↓
+PERCEIVE
+  ↓
+WAKE_DECISION
+  ↓
+build_context(event, now_ts=None)
+  ↓
+ContextAssembler.assemble(...)
+  ↓
+AgentContext
+  ↓
+THINK（仍为 Stub）
+
+B5-1 / B5-2 冻结的关键契约：
+
+V3.1 正式 Context 标准 = AgentContext（agent/context.py）。
+
+ContextLayers = deprecated compatibility stub：
+
+保留、不删除、不改名、不别名化；
+
+新 V3.1 链不再引用。
+
+Runtime 正式接口：
+
+build_context(event: Event, now_ts: Optional[float] = None) -> AgentContext
+
+think(context: AgentContext) -> Optional[str]
+
+数据来源冻结：
+
+ai_name = self.ai_name
+
+owner = self.get_state().owner
+
+data = self._data
+
+now_ts = 调用方注入，缺省由 ContextAssembler 使用当前时间
+
+agent_state_dict = self.get_state().to_dict()
+
+recall_query = 当前固定 None
+
+B5 之后仍然保持不变的边界：
+
+LongTermProvider = stub，返回 []。
+
+Memory Runtime 未启用；ext_memory / ext_mem 未修复、未修改。
+
+decision_constraints = None。
+
+think() 仍为 Stub，未调用 LLM。
+
+未实现 Goal / Motivation / Commitment / Activity / World Query / Scheduler / Brain / Prompt Adapter。
+
+未接 LLM / Decision / Action。
+
+ext_ai.build_ai_context() 未接入 V3.1 正式链；旧路径保持独立。
+
+未产生"双 Context"。
+
+B5 阶段涉及文件（不含本阶段修改的 PROJECT）：
+
+B5-1：docs/V3.1_ARCHITECTURE_CONTRACT.md（+ PROJECT_V3.1_MASTER.md）
+
+B5-2：agent/runtime.py（Commit 525973ae6ee00c02bbc43a608c6c27cb15b62ebb）
+
+B5-3：docs/test_b5_runtime_context.py（新增）
+
+B5-4：PROJECT_V3.1_MASTER.md（本阶段）
+
+下一阶段方向：
+
+不直接进入 Brain / THINK 实现。
+
+下一阶段必须先进行 Phase C 架构设计 / Preflight（Goal / Motivation / Commitment / Activity / World Query / Scheduler 的边界定义），等待架构审核通过后再考虑代码。
 
 ## 15. Wake / Relevance
 
@@ -907,49 +951,201 @@ PROJECT 是“架构地图”，不是代码实现说明书。
 
 ## 20. 当前下一阶段
 
-**现在不是继续写 P0-3C 的时候。**
+### 20.1 当前所处阶段
 
-下一步：
+- Phase A（Global Architecture Inventory）：✅ 已完成
+- Phase B（V3.1 Context Foundation）：✅ 已完成（含 B5-4 归档）
+- Phase C（Motivation / Goal / Commitment）：⏳ 下一步 Preflight
+- Phase D（World Query / Activity Lifecycle）：⏳ 未开始
+- Phase E（Memory Recall）：⏳ 未开始
+- Phase F（Brain / Decision）：⏳ 未开始
 
-### Phase A — Global Architecture Inventory
-先建立整个 TEST 仓库的：
+---
+
+### 20.2 Phase A — Global Architecture Inventory（已完成）
+
+建立整个 TEST 仓库的：
+
 - 文件地图
-- import/call 关系
+- import / call 关系
 - data 字段读写关系
-- Timer/background loop
+- Timer / background loop
 - API 路由
-- Event/Memory/SSE 链
+- Event / Memory / SSE 链
 - 前端依赖
 - 核心功能回归矩阵
 
-### Phase B — V3.1 Context Foundation
+产出：`docs/V3.1_GLOBAL_ARCHITECTURE_INVENTORY.md`
 
-当前正在进行 Context Foundation。
+---
 
-顺序：
-1. Context Data Contract
-2. StableCoreProvider
-3. DynamicWorldProvider
-4. RecentProvider
-5. LongTermProvider
-6. ContextAssembler
-7. 接入 `agent/runtime.build_context()`
+### 20.3 Phase B — V3.1 Context Foundation（已完成）
 
-Home / Frontend Interaction Layer 属于产品表现层建设方向，不应提前打断当前 Context Foundation。
+**B1 ～ B4 阶段总览：**
 
-在 Agent Core 语义冻结后，再进行 Home Shell 的前端架构设计与实现。
+| 阶段 | 内容 | 状态 |
+|------|------|------|
+| B1 | Context Data Contract | ✅ |
+| B2-1 | StableCoreProvider | ✅ |
+| B2-2 | DynamicWorldProvider | ✅ |
+| B2-3 | RecentProvider | ✅ |
+| B2-4 | LongTermProvider Stub | ✅ |
+| B3 | ContextAssembler | ✅ |
+| B4 | Runtime Connection Preflight | ✅ |
 
-### Phase C — Motivation / Goal / Commitment
-再让自主生活、移动、约会开始具有连续原因。
+**B5 阶段总览：**
 
-### Phase D — World Query / Activity Lifecycle
+| 阶段 | 内容 | 状态 |
+|------|------|------|
+| B5-0 | Context Contract Decision | ✅ |
+| B5-1 | Contract Change（CC-20260926-01） | ✅ |
+| B5-2 | Runtime Connection | ✅ |
+| B5-3 | Runtime Context Connection Tests | ✅ |
+| B5-4 | PROJECT Update | ✅ |
+
+**Phase B 已完成内容：**
+
+1. Context Data Contract ✅
+2. StableCoreProvider ✅
+3. DynamicWorldProvider ✅
+4. RecentProvider ✅
+5. LongTermProvider（Stub）✅
+6. ContextAssembler ✅
+7. 接入 `agent/runtime.build_context()` ✅（B5-2）
+8. Context Connection 测试 ✅（B5-3）
+9. PROJECT 归档 ✅（B5-4）
+
+**Phase B 冻结的正式 Context 链：**
+
+```text
+Event
+  ↓
+RECEIVE
+  ↓
+PERCEIVE
+  ↓
+WAKE_DECISION
+  ↓
+build_context(event, now_ts=None)
+  ↓
+ContextAssembler.assemble(...)
+  ↓
+AgentContext
+  ↓
+THINK（仍为 Stub）
+```
+
+**Phase B 完成后仍保持的边界：**
+
+- `LongTermProvider` = stub，返回 `[]`
+- Memory Runtime 未启用
+- `decision_constraints` = `None`
+- THINK 未实现
+- 未接 LLM / Decision / Action
+- `ext_ai.build_ai_context()` 未接入正式链
+- 未产生"双 Context"
+- `ContextLayers` 保留为 deprecated compatibility stub
+
+**Home / Frontend Interaction Layer：**
+
+- 属于产品表现层建设方向。
+- 不应提前打断 Phase B。
+- 在 Agent Core 语义冻结后，再进行 Home Shell 的前端架构设计与实现。
+
+---
+
+### 20.4 Phase C — Motivation / Goal / Commitment（下一步）
+
+**目标：**
+让自主生活、移动、约会开始具有连续原因。
+
+**涉及边界（必须先做 Preflight）：**
+
+- Goal
+- Motivation
+- Commitment
+- Activity Lifecycle
+- World Query
+- Scheduler
+
+**约束：**
+
+- Phase C Preflight 审核通过前，**禁止任何代码修改**。
+- 不允许直接进入 Brain / THINK 实现。
+- 不允许绕过 Contract 变更流程。
+- 不允许在 Preflight 阶段接入 LLM。
+
+**Preflight 必须回答：**
+
+1. Goal 的数据结构、来源、生命周期。
+2. Motivation 如何从 Goal + State + Relationship + Memory 推导。
+3. Commitment 如何从 date / meeting / promise 语义中提取。
+4. Activity Lifecycle 如何从现有 `work_sessions` / `dates` / `ai_shop_state` / `instances` 兼容。
+5. World Query 如何基于现有 `buildings` / `rooms` / `npcs` 提供查询接口。
+6. Scheduler 如何逐步替代散落 `threading.Timer` 与后台循环。
+7. 每一项的 Contract 边界与冻结时机。
+
+---
+
+### 20.5 Phase D — World Query / Activity Lifecycle（未开始）
+
 让 AI 能查询真实世界并保持活动连续性。
 
-### Phase E — Memory Recall
-在已有历史基础上一次性整理/生成历史记忆，再启用召回。
+- 依赖 Phase C 完成的 Goal / Motivation / Commitment。
+- 不引入新数据源；基于现有 `main.data` 结构。
+- 必须先完成 Preflight。
 
-### Phase F — Brain / Decision
-最后把 LLM Think/Decision 接到统一 Runtime。
+---
+
+### 20.6 Phase E — Memory Recall（未开始）
+
+在已有历史基础上一次性整理 / 生成历史记忆，再启用召回。
+
+- 依赖 Phase B 的 Context 分层。
+- 依赖 Phase C / D 的语义稳定。
+- 不修复、不直接启用旧 `ext_memory`。
+- 必须先完成 Preflight。
+
+---
+
+### 20.7 Phase F — Brain / Decision（最后一步）
+
+最后把 LLM Think / Decision 接到统一 Runtime。
+
+- 依赖 Phase B / C / D / E 全部完成。
+- THINK 才从 Stub 变为真实实现。
+- 必须先完成 Preflight。
+- 在此之前 `think()` 一律保持 Stub。
+
+---
+
+### 20.8 通用阶段推进规则
+
+1. 每个 Phase 开始前，必须先做 Preflight。
+2. Preflight 通过后，才可进入 Contract Change。
+3. Contract Change 通过后，才可进入编码。
+4. 编码完成后必须回归测试。
+5. 测试通过后更新 PROJECT。
+6. 每个阶段完成后停止，等待架构审核。
+7. 不允许跨阶段并行编码。
+8. 不允许绕过 Contract 直接修改 Runtime / Provider / Assembler。
+```
+
+---
+
+## 说明
+
+本次替换后第 20 节的差异：
+
+| 原版问题 | 新版处理 |
+|---------|---------|
+| Phase B 列表与 Phase C-F 列表混在一起 | 拆为 20.3 ～ 20.7 五个小节 |
+| "Phase C Preflight（未开始）" 与 Phase C 定义重复 | 统一到 20.4，作为 Phase C 的 Preflight 要求 |
+| Phase B / C / D / E / F 顺序不清晰 | 按 20.2 ～ 20.7 时间顺序排列 |
+| 缺少"通用阶段推进规则" | 新增 20.8，明确 Preflight → Contract Change → 编码的顺序 |
+| Home / Frontend 位置易被误读 | 明确归入 20.3 末尾，作为 Phase B 之后的表现层方向 |
+
+**本阶段只提供替换文本，未修改任何 `.py`、`PROJECT`、`Contract`、前端、数据。**
 
 ---
 ## 21. 设计总原则
@@ -1069,19 +1265,19 @@ pending_events.json 从未被写入
 
 用户聊天历史未被记忆化
 
-22.7 已知不一致 / 未挂载
+### 22.7 已知不一致 / 未挂载
 #	位置	问题
 1	ext_ai.build_ai_context	调用 m.get_date_context，但未找到任何挂载 → 恒返回 ""
 2	ext_ai.drive_ai	调用 m.on_ai_action，但未找到定义 → 死代码
 3	ext_admin.generate_impression	存 key 用 normalize_name(ai_name)，ext_ai 读 key 优先原始名 → key 不一致
-22.8 SNS 当前不存在
+### 22.8 SNS 当前不存在
 当前系统：无朋友圈 / 无评论 / 无点赞 / 无动态。
 
 唯一接近：sms（短信）+ messages（房间/群聊）+ notifications（通知中心）。
 
 SNS 属于未来产品能力，Communication Layer（§11）已为它预留语义位置。
 
-22.9 Event 真空区
+### 22.9 Event 真空区
 模块	状态
 ext_econ	完全未调用 enqueue_event（工作/工资）
 ext_instance	完全未调用 enqueue_event（副本进出）
@@ -1097,7 +1293,20 @@ ext_memory	调用失败（见 §22.6）
 
 任何"顺手重构"必须停，报告给架构审核
 
-text
+### 22.11 B5 阶段事实（2026-09-27）
+
+- V3.1 正式 Context 链已从设计层进入 Runtime。
+- `build_context()` 已返回 `AgentContext`，并由 `ContextAssembler` 组装。
+- `think()` 签名已更新为 `think(context: AgentContext) -> Optional[str]`，行为仍为 Stub。
+- `ContextLayers` 保留为 deprecated compatibility stub。
+- `LongTermProvider` 仍为 stub，返回 `[]`。
+- Memory Runtime 未启用。
+- `decision_constraints` 仍为 `None`。
+- 未接入 `ext_ai.build_ai_context()`。
+- 未产生"双 Context"。
+- 未调用 LLM / 网络。
+- `main.data` 未被 Runtime 直接写。
+- B5-2 的 `agent/runtime.py` 修改 Commit SHA：`525973ae6ee00c02bbc43a608c6c27cb15b62ebb`。
 
 ---
 
