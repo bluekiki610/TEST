@@ -57,6 +57,7 @@ if "main" not in sys.modules:
 # =========================================================
 from agent.runtime import AgentRuntime, ContextLayers
 from agent.context import AgentContext, make_empty_context
+from agent.intent import IntentSet
 
 
 # =========================================================
@@ -237,20 +238,47 @@ print("T8 PASS")
 
 
 # =========================================================
-# T9: THINK 仍为 Stub + 无 LLM 调用
+# T9: THINK 仍为 Stub（Contract §5B.11 迁移后）
 # =========================================================
 print("\n=== T9: THINK 仍为 Stub ===")
 rt9 = AgentRuntime("Dan", sample_data())
 ctx9 = rt9.build_context(None)
 result9 = rt9.think(ctx9)
-assert result9 is None, f"think() 应返回 None，实际 {result9!r}"
 
-# 静态验证 runtime.py 不含 LLM / drive_ai / build_ai_context 调用
+# Contract §5B.11：think(self, context: AgentContext) -> IntentSet
+assert isinstance(result9, IntentSet), (
+    f"think() 应返回 IntentSet，实际 {type(result9).__name__}"
+)
+# Stub 阶段：candidates 必须为空
+assert result9.candidates == [], (
+    f"Stub 阶段 candidates 应为空，实际 {result9.candidates!r}"
+)
+# actor 正确
+assert result9.actor == "Dan", f"actor 应为 'Dan'，实际 {result9.actor!r}"
+# created_at 合法（正数时间戳）
+assert isinstance(result9.created_at, (int, float)) and result9.created_at > 0, (
+    f"created_at 应为正数时间戳，实际 {result9.created_at!r}"
+)
+# 多次调用仍为空（Stub 行为稳定，不制造假 Intent）
+result9b = rt9.think(ctx9)
+assert isinstance(result9b, IntentSet)
+assert result9b.candidates == []
+
+# 静态验证：runtime.py 不含 LLM / drive_ai / build_ai_context 调用
 runtime_src = (REPO_ROOT / "agent" / "runtime.py").read_text(encoding="utf-8")
 assert not re.search(r'\bcall_llm\s*\(', runtime_src), "runtime.py 含 call_llm 调用"
 assert not re.search(r'\bdrive_ai\s*\(', runtime_src), "runtime.py 含 drive_ai 调用"
 assert not re.search(r'\bbuild_ai_context\s*\(', runtime_src), "runtime.py 含 build_ai_context 调用"
-print("T9 PASS: think() 返回 None；runtime.py 无 LLM / drive_ai / build_ai_context 调用")
+
+# 静态验证：Runtime 未内联 Goal / Commitment / Motivation 内部逻辑
+assert "compute_motivation" not in runtime_src, "runtime.py 含 compute_motivation"
+assert "create_goal" not in runtime_src, "runtime.py 含 create_goal"
+assert "create_commitment" not in runtime_src, "runtime.py 含 create_commitment"
+
+print(
+    f"T9 PASS: think() 返回 IntentSet(candidates=[], "
+    f"actor={result9.actor!r}, created_at={result9.created_at})"
+)
 
 
 # =========================================================
