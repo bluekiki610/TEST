@@ -1414,8 +1414,19 @@ window.renderBuilding = function(){
         html += '</div>';
     });
 
-    // 8. 剧情簿
-    html += '<div style="margin:10px 0"><button class="btn" style="width:100%" onclick="loadStoryModal()">🎬 剧情簿</button></div>';
+    // 8. 公共建筑留言区：纸条 / 随笔 / 剧情
+    html += '<div style="margin:10px 0">';
+    html += '<div style="font-size:12px;color:#9fd8ff;margin-bottom:6px">📚 建筑动态</div>';
+    html += '<div style="display:flex;gap:6px">';
+
+    html += '<button class="btn" style="flex:1;padding:8px 4px" onclick="loadPublicBuildingBoard(\'note\')">💌 纸条</button>';
+
+    html += '<button class="btn" style="flex:1;padding:8px 4px" onclick="loadPublicBuildingBoard(\'diary\')">📖 随笔</button>';
+
+    html += '<button class="btn" style="flex:1;padding:8px 4px" onclick="loadPublicBuildingBoard(\'story\')">🎬 剧情</button>';
+
+    html += '</div>';
+    html += '</div>';
 
     // 9. 插入本店按钮（由 renderShopSection 负责，但这里也补一个兜底）
     // 如果 renderShopSection 没加载，这里作为后备
