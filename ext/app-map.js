@@ -1447,6 +1447,271 @@ window.renderBuilding = function(){
   // ===== 本店按钮由 renderShopSection + tryInjectBuilding 负责，不在这里添加 =====
 };
 
+// ============================================================
+// 公共建筑：查看该建筑的公开纸条 / 随笔 / 剧情
+// ============================================================
+function loadPublicBuildingBoard(type){
+
+  var bid = currentBuilding;
+  if(!bid) return;
+
+  var b = mapData.buildings[bid];
+  if(!b) return;
+
+  var titleMap = {
+    note: '💌 纸条',
+    diary: '📖 随笔',
+    story: '🎬 剧情'
+  };
+
+  var title = titleMap[type] || '📚 建筑动态';
+
+  // 获取这个公共建筑里的所有房间
+  var rooms = [];
+
+  if(Array.isArray(b.rooms)){
+    rooms = b.rooms.slice();
+  }else if(b.rooms && typeof b.rooms === 'object'){
+    rooms = Object.keys(b.rooms).map(function(k){
+      var v = b.rooms[k];
+
+      // 兼容：
+      // { "建筑·房间": {...} }
+      // { "房间名": "建筑·房间" }
+      // { "房间名": {...} }
+      if(typeof v === 'string'){
+        return v;
+      }
+
+      if(v && typeof v === 'object'){
+        return v.room || v.key || v.name || k;
+      }
+
+      return k;
+    });
+  }
+
+  // 去重
+  rooms = rooms.filter(function(room, i){
+    return room && rooms.indexOf(room) === i;
+  });
+
+  if(!rooms.length){
+    toast('这个建筑暂时没有可查看的房间内容');
+    return;
+  }
+
+  // 创建查看窗口
+  var old = document.getElementById('publicBuildingBoardMask');
+  if(old) old.remove();
+
+  var mask = document.createElement('div');
+  mask.id = 'publicBuildingBoardMask';
+
+  mask.style.cssText =
+    'position:fixed;inset:0;z-index:99999;' +
+    'background:rgba(0,0,0,.72);' +
+    'display:flex;align-items:center;justify-content:center;' +
+    'padding:18px;box-sizing:border-box;';
+
+  var box = document.createElement('div');
+
+  box.style.cssText =
+    'width:min(560px,100%);max-height:82vh;' +
+    'background:#101b2b;border:1px solid rgba(120,190,255,.35);' +
+    'border-radius:14px;overflow:hidden;' +
+    'box-shadow:0 12px 40px rgba(0,0,0,.5);' +
+    'display:flex;flex-direction:column;';
+
+  box.innerHTML =
+    '<div style="padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.1);display:flex;align-items:center">' +
+      '<div style="font-weight:bold;color:#e6f1ff;font-size:15px;flex:1">' +
+        esc(b.name || '公共建筑') + ' · ' + title +
+      '</div>' +
+      '<button onclick="document.getElementById(\'publicBuildingBoardMask\').remove()" ' +
+        'style="border:0;background:none;color:#9fb4d0;font-size:20px;cursor:pointer">×</button>' +
+    '</div>' +
+
+    '<div id="publicBuildingBoardList" ' +
+      'style="padding:10px;overflow-y:auto;flex:1">' +
+      '<div class="tip">加载中…</div>' +
+    '</div>';
+
+  mask.appendChild(box);
+
+  mask.addEventListener('click', function(e){
+    if(e.target === mask){
+      mask.remove();
+    }
+  });
+
+  document.body.appendChild(mask);
+
+  var list = document.getElementById('publicBuildingBoardList');
+
+  // 一个建筑可能有多个房间，所以并行读取
+  var requests = rooms.map(function(room){
+
+    var url = '';
+
+    if(type === 'note'){
+      url = '/api/notes?room=' + encodeURIComponent(room);
+    }else if(type === 'diary'){
+      url = '/api/diaries?room=' + encodeURIComponent(room);
+    }else{
+      url = '/api/story?room=' + encodeURIComponent(room);
+    }
+
+    return api(url).then(function(d){
+      return {
+        room: room,
+        data: d || {}
+      };
+    }).catch(function(){
+      return {
+        room: room,
+        data: {}
+      };
+    });
+  });
+
+  Promise.all(requests).then(function(results){
+
+    var all = [];
+
+    results.forEach(function(r){
+
+      var items = [];
+
+      if(type === 'note'){
+        items = r.data.notes || [];
+      }else if(type === 'diary'){
+        items = r.data.diaries || [];
+      }else{
+        items = r.data.stories || r.data.story || [];
+      }
+
+      if(!Array.isArray(items)) return;
+
+      items.forEach(function(item){
+        all.push({
+          room: r.room,
+          item: item
+        });
+      });
+    });
+
+    list.innerHTML = '';
+
+    if(!all.length){
+      list.innerHTML =
+        '<div class="tip">这里还没有公开内容，等 AI 来留下痕迹吧</div>';
+      return;
+    }
+
+    // 最新内容优先
+    all.reverse();
+
+    all.forEach(function(entry){
+
+      var room = entry.room;
+      var n = entry.item || {};
+
+      var html = '';
+
+      if(type === 'note'){
+
+        html += '<div class="note-card">';
+        html += '<div class="n-author">💌 ' + esc(n.author || '?') + '</div>';
+        html += '<div class="n-text">' + esc(n.text || '') + '</div>';
+
+        if(n.time){
+          html += '<div class="n-time">' + esc(n.time) + '</div>';
+        }
+
+        html += '<div style="font-size:10px;color:#6d8bb0;margin-top:4px">📍 ' +
+          esc(room) +
+          '</div>';
+
+        if(n.reply){
+          html += '<div class="n-reply">💬 ' +
+            esc(n.reply.author || '') +
+            '：' +
+            esc(n.reply.text || '') +
+            '</div>';
+        }
+
+        html += '</div>';
+
+      }else if(type === 'diary'){
+
+        html += '<div class="note-card">';
+        html += '<div class="n-author">📖 ' +
+          esc(n.author || '?') +
+          '</div>';
+
+        html += '<div class="n-text">' +
+          esc(n.text || '') +
+          '</div>';
+
+        if(n.time){
+          html += '<div class="n-time">' +
+            esc(n.time) +
+            '</div>';
+        }
+
+        html += '<div style="font-size:10px;color:#6d8bb0;margin-top:4px">📍 ' +
+          esc(room) +
+          '</div>';
+
+        html += '</div>';
+
+      }else{
+
+        var storyTitle = n.title || '剧情';
+        var storyText = n.text || n.content || '';
+
+        html += '<div class="note-card">';
+
+        html += '<div class="n-author">🎬 ' +
+          esc(storyTitle) +
+          '</div>';
+
+        if(n.author || n.ai){
+          html += '<div style="color:#9fb4d0;font-size:12px;margin-bottom:5px">' +
+            esc(n.author || n.ai) +
+            '</div>';
+        }
+
+        html += '<div class="n-text">' +
+          esc(storyText) +
+          '</div>';
+
+        if(n.time){
+          html += '<div class="n-time">' +
+            esc(n.time) +
+            '</div>';
+        }
+
+        html += '<div style="font-size:10px;color:#6d8bb0;margin-top:4px">📍 ' +
+          esc(room) +
+          '</div>';
+
+        html += '</div>';
+      }
+
+      list.innerHTML += html;
+    });
+
+  }).catch(function(e){
+
+    list.innerHTML =
+      '<div class="tip">加载失败：' +
+      esc(e.message || '未知错误') +
+      '</div>';
+  });
+}
+
 // ===== 照片上传和删除函数 =====
 window.uploadExterior = function(bid){
   var f=document.createElement('input'); f.type='file'; f.accept='image/*';
