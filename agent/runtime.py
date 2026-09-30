@@ -1,5 +1,5 @@
 """
-agent/runtime.py - P0-3B + B5-2: Agent Runtime
+agent/runtime.py - P0-3B + B5-2 + C-2 Patch: Agent Runtime
 
 P0-3A 定义了 Contract（Stub）。
 P0-3B 第一次让 Runtime 真正处理 Event：
@@ -8,19 +8,28 @@ P0-3B 第一次让 Runtime 真正处理 Event：
 B5-2 连接 ContextAssembler：
     build_context(event, now_ts=None) → ContextAssembler → AgentContext
 
-但本阶段仍然：
+C-2 完成 think() 签名迁移：
+    think(context: AgentContext) -> IntentSet（仍为 Stub，返回空集合）
+
+C-2 Patch（CC-20260928-03）连接 Runtime holder：
+    持有 Goal / Commitment working state
+    最小 holder API：add / get / list / replace
+
+本阶段仍然：
 1. 0 次 LLM 调用
 2. 不修改 main.data
 3. 不进入 THINK / DECISION / ACTION
 4. 不建立 EventBus / EventStore / Scheduler
 5. 不替代旧 Wake（旧 Wake 保持原样）
+6. 不引入持久化
+7. 不自动 transition / 自动过期 / 冲突解决 / 优先级
 
 生命周期：
     1. RECEIVE        ✅ P0-3B 已实现
     2. PERCEIVE       ✅ P0-3B 已实现
     3. WAKE_DECISION  ✅ P0-3B 已实现（只返回 IGNORE / OBSERVE）
     4. CONTEXT        ✅ B5-2 已连接 ContextAssembler（返回 AgentContext）
-    5. THINK          ❌ 仍是 P0-3A Stub（绝不调 LLM）
+    5. THINK          ⏳ C-2 Stub（返回 IntentSet(candidates=[])）
     6. DECISION       ❌ 仍是 P0-3A Stub
     7. ACTION         ❌ 仍是 P0-3A Stub
     8. WORLD_CHANGE   —— 由现有 ext_* 负责（未改动）
@@ -121,7 +130,30 @@ class PerceptionResult:
 
 
 # =========================================================
-# 5. 常量
+# 5. Runtime holder 异常（C-2 Patch 新增）
+# =========================================================
+class RuntimeHolderError(Exception):
+    """Runtime holder 操作错误基类。"""
+
+
+class GoalAlreadyExists(RuntimeHolderError):
+    """goal_id 已存在于 holder。"""
+
+
+class GoalNotFound(RuntimeHolderError):
+    """goal_id 不存在于 holder。"""
+
+
+class CommitmentAlreadyExists(RuntimeHolderError):
+    """commitment_id 已存在于 holder。"""
+
+
+class CommitmentNotFound(RuntimeHolderError):
+    """commitment_id 不存在于 holder。"""
+
+
+# =========================================================
+# 6. 常量
 # =========================================================
 MAX_RECENT_EVENTS = 20
 # 极小的本地环形缓冲，防止 Runtime 内存无限增长。
@@ -129,7 +161,7 @@ MAX_RECENT_EVENTS = 20
 
 
 # =========================================================
-# 6. AgentRuntime
+# 7. AgentRuntime
 # =========================================================
 class AgentRuntime:
     """
@@ -140,10 +172,12 @@ class AgentRuntime:
     - Runtime 只编排，不复制 ext_* 能力
     - Runtime 不修改 World
 
-    P0-3B 状态：
+    当前状态：
     - receive_event / perceive / should_wake：已实现（确定性规则）
     - build_context：B5-2 已连接 ContextAssembler，返回 AgentContext
-    - think / decide / execute：仍为 P0-3A Stub
+    - think：C-2 Stub，返回 IntentSet(candidates=[])
+    - Goal / Commitment holder：C-2 Patch 新增（CC-20260928-03）
+    - decide / execute：仍为 P0-3A Stub
     """
 
     def __init__(
@@ -172,6 +206,13 @@ class AgentRuntime:
                 dynamic_world_provider=DynamicWorldProvider(),
             )
         self._context_assembler = context_assembler
+
+        # C-2 Patch (CC-20260928-03): Runtime working-state holder
+        # 注意：这些是 Runtime working state，不是 Source of Truth。
+        # main.data 仍是唯一 World / Application SOT。
+        # 重启会丢失，是 C-2 已知限制。
+        self._goals: Dict[str, Any] = {}
+        self._commitments: Dict[str, Any] = {}
 
     # -----------------------------------------------------
     # 生命周期：RECEIVE → PERCEIVE → WAKE_DECISION
@@ -318,7 +359,7 @@ class AgentRuntime:
         )
 
     # -----------------------------------------------------
-    # 剩余方法（P0-3A Stub 保留，C-2 已迁移 think 签名）
+    # THINK（C-2 Stub）
     # -----------------------------------------------------
     def think(self, context: AgentContext) -> IntentSet:
         """
@@ -338,6 +379,107 @@ class AgentRuntime:
             reason_summary="C-2 Stub: THINK not implemented",
         )
 
+    # -----------------------------------------------------
+    # Runtime holder：Goal（C-2 Patch, CC-20260928-03）
+    # -----------------------------------------------------
+    def add_goal(self, goal: Any) -> Any:
+        """
+        添加 Goal 到 Runtime holder。
+
+        边界（CC-20260928-03, RS-12）：
+        - goal_id 已存在 → reject（GoalAlreadyExists）
+        - 禁止隐式 upsert
+
+        返回：goal
+        """
+        goal_id = getattr(goal, "goal_id", None)
+        if not isinstance(goal_id, str) or not goal_id:
+            raise RuntimeHolderError("goal must have a non-empty 'goal_id'")
+        if goal_id in self._goals:
+            raise GoalAlreadyExists(f"goal_id already exists: {goal_id}")
+        self._goals[goal_id] = goal
+        return goal
+
+    def get_goal(self, goal_id: str) -> Optional[Any]:
+        """按 goal_id 查找 Goal；不存在 → 返回 None。"""
+        if not isinstance(goal_id, str) or not goal_id:
+            return None
+        return self._goals.get(goal_id)
+
+    def list_goals(self) -> List[Any]:
+        """列出所有 Goal（返回浅拷贝列表，外部不能通过列表修改内部 dict）。"""
+        return list(self._goals.values())
+
+    def replace_goal(self, goal: Any) -> Any:
+        """
+        替换已存在的 Goal。
+
+        边界（CC-20260928-03, RS-13）：
+        - goal_id 不存在 → reject（GoalNotFound）
+        - 不负责状态机转换；调用方须先用 transition_goal() 生成新对象
+
+        返回：goal
+        """
+        goal_id = getattr(goal, "goal_id", None)
+        if not isinstance(goal_id, str) or not goal_id:
+            raise RuntimeHolderError("goal must have a non-empty 'goal_id'")
+        if goal_id not in self._goals:
+            raise GoalNotFound(f"goal_id not found: {goal_id}")
+        self._goals[goal_id] = goal
+        return goal
+
+    # -----------------------------------------------------
+    # Runtime holder：Commitment（C-2 Patch, CC-20260928-03）
+    # -----------------------------------------------------
+    def add_commitment(self, commitment: Any) -> Any:
+        """
+        添加 Commitment 到 Runtime holder。
+
+        边界（CC-20260928-03, RS-12）：
+        - commitment_id 已存在 → reject（CommitmentAlreadyExists）
+        - 禁止隐式 upsert
+
+        返回：commitment
+        """
+        cid = getattr(commitment, "commitment_id", None)
+        if not isinstance(cid, str) or not cid:
+            raise RuntimeHolderError("commitment must have a non-empty 'commitment_id'")
+        if cid in self._commitments:
+            raise CommitmentAlreadyExists(f"commitment_id already exists: {cid}")
+        self._commitments[cid] = commitment
+        return commitment
+
+    def get_commitment(self, commitment_id: str) -> Optional[Any]:
+        """按 commitment_id 查找 Commitment；不存在 → 返回 None。"""
+        if not isinstance(commitment_id, str) or not commitment_id:
+            return None
+        return self._commitments.get(commitment_id)
+
+    def list_commitments(self) -> List[Any]:
+        """列出所有 Commitment（返回浅拷贝列表）。"""
+        return list(self._commitments.values())
+
+    def replace_commitment(self, commitment: Any) -> Any:
+        """
+        替换已存在的 Commitment。
+
+        边界（CC-20260928-03, RS-13）：
+        - commitment_id 不存在 → reject（CommitmentNotFound）
+        - 不负责状态机转换
+
+        返回：commitment
+        """
+        cid = getattr(commitment, "commitment_id", None)
+        if not isinstance(cid, str) or not cid:
+            raise RuntimeHolderError("commitment must have a non-empty 'commitment_id'")
+        if cid not in self._commitments:
+            raise CommitmentNotFound(f"commitment_id not found: {cid}")
+        self._commitments[cid] = commitment
+        return commitment
+
+    # -----------------------------------------------------
+    # 剩余方法（P0-3A Stub 保留）
+    # -----------------------------------------------------
     def decide(self, thought: Optional[str]) -> Optional[Decision]:
         """P0-3A Stub 保留。P0-3B 不实现。"""
         return None
@@ -374,7 +516,7 @@ class AgentRuntime:
 
 
 # =========================================================
-# 7. Runtime 工厂
+# 8. Runtime 工厂
 # =========================================================
 def get_runtime(
     ai_name: str,
