@@ -36,6 +36,7 @@ C-2 Patch（CC-20260928-03）连接 Runtime holder：
     9. EVENT          —— 由 P0-2B Adapter 负责（未改动）
 """
 import time
+import copy
 from agent.intent import IntentSet
 from enum import Enum
 from dataclasses import dataclass, field
@@ -381,6 +382,9 @@ class AgentRuntime:
 
     # -----------------------------------------------------
     # Runtime holder：Goal（C-2 Patch, CC-20260928-03）
+    #
+    # Hardening：所有 get / list 返回副本，所有 add / replace 存储副本。
+    # 目的：外部对 get / list 拿到的对象做字段赋值，不得穿透到 holder。
     # -----------------------------------------------------
     def add_goal(self, goal: Any) -> Any:
         """
@@ -390,25 +394,44 @@ class AgentRuntime:
         - goal_id 已存在 → reject（GoalAlreadyExists）
         - 禁止隐式 upsert
 
-        返回：goal
+        Hardening：
+        - 存储 deepcopy(goal)，外部后续修改传入对象不影响 holder
+
+        返回：holder 中存储的副本
         """
         goal_id = getattr(goal, "goal_id", None)
         if not isinstance(goal_id, str) or not goal_id:
             raise RuntimeHolderError("goal must have a non-empty 'goal_id'")
         if goal_id in self._goals:
             raise GoalAlreadyExists(f"goal_id already exists: {goal_id}")
-        self._goals[goal_id] = goal
-        return goal
+        stored = copy.deepcopy(goal)
+        self._goals[goal_id] = stored
+        return copy.deepcopy(stored)
 
     def get_goal(self, goal_id: str) -> Optional[Any]:
-        """按 goal_id 查找 Goal；不存在 → 返回 None。"""
+        """
+        按 goal_id 查找 Goal；不存在 → 返回 None。
+
+        Hardening：
+        - 返回 deepcopy(holder[goal_id])
+        - 外部修改返回对象，不影响 holder 内部
+        """
         if not isinstance(goal_id, str) or not goal_id:
             return None
-        return self._goals.get(goal_id)
+        stored = self._goals.get(goal_id)
+        if stored is None:
+            return None
+        return copy.deepcopy(stored)
 
     def list_goals(self) -> List[Any]:
-        """列出所有 Goal（返回浅拷贝列表，外部不能通过列表修改内部 dict）。"""
-        return list(self._goals.values())
+        """
+        列出所有 Goal。
+
+        Hardening：
+        - 返回 [deepcopy(g) for g in holder.values()]
+        - 外部修改列表中对象，不影响 holder 内部
+        """
+        return [copy.deepcopy(g) for g in self._goals.values()]
 
     def replace_goal(self, goal: Any) -> Any:
         """
@@ -418,18 +441,24 @@ class AgentRuntime:
         - goal_id 不存在 → reject（GoalNotFound）
         - 不负责状态机转换；调用方须先用 transition_goal() 生成新对象
 
-        返回：goal
+        Hardening：
+        - 存储 deepcopy(goal)
+
+        返回：holder 中存储的副本
         """
         goal_id = getattr(goal, "goal_id", None)
         if not isinstance(goal_id, str) or not goal_id:
             raise RuntimeHolderError("goal must have a non-empty 'goal_id'")
         if goal_id not in self._goals:
             raise GoalNotFound(f"goal_id not found: {goal_id}")
-        self._goals[goal_id] = goal
-        return goal
+        stored = copy.deepcopy(goal)
+        self._goals[goal_id] = stored
+        return copy.deepcopy(stored)
 
     # -----------------------------------------------------
     # Runtime holder：Commitment（C-2 Patch, CC-20260928-03）
+    #
+    # Hardening：同 Goal。
     # -----------------------------------------------------
     def add_commitment(self, commitment: Any) -> Any:
         """
@@ -439,25 +468,42 @@ class AgentRuntime:
         - commitment_id 已存在 → reject（CommitmentAlreadyExists）
         - 禁止隐式 upsert
 
-        返回：commitment
+        Hardening：
+        - 存储 deepcopy(commitment)
+
+        返回：holder 中存储的副本
         """
         cid = getattr(commitment, "commitment_id", None)
         if not isinstance(cid, str) or not cid:
             raise RuntimeHolderError("commitment must have a non-empty 'commitment_id'")
         if cid in self._commitments:
             raise CommitmentAlreadyExists(f"commitment_id already exists: {cid}")
-        self._commitments[cid] = commitment
-        return commitment
+        stored = copy.deepcopy(commitment)
+        self._commitments[cid] = stored
+        return copy.deepcopy(stored)
 
     def get_commitment(self, commitment_id: str) -> Optional[Any]:
-        """按 commitment_id 查找 Commitment；不存在 → 返回 None。"""
+        """
+        按 commitment_id 查找 Commitment；不存在 → 返回 None。
+
+        Hardening：
+        - 返回 deepcopy(holder[commitment_id])
+        """
         if not isinstance(commitment_id, str) or not commitment_id:
             return None
-        return self._commitments.get(commitment_id)
+        stored = self._commitments.get(commitment_id)
+        if stored is None:
+            return None
+        return copy.deepcopy(stored)
 
     def list_commitments(self) -> List[Any]:
-        """列出所有 Commitment（返回浅拷贝列表）。"""
-        return list(self._commitments.values())
+        """
+        列出所有 Commitment。
+
+        Hardening：
+        - 返回 [deepcopy(c) for c in holder.values()]
+        """
+        return [copy.deepcopy(c) for c in self._commitments.values()]
 
     def replace_commitment(self, commitment: Any) -> Any:
         """
@@ -467,15 +513,19 @@ class AgentRuntime:
         - commitment_id 不存在 → reject（CommitmentNotFound）
         - 不负责状态机转换
 
-        返回：commitment
+        Hardening：
+        - 存储 deepcopy(commitment)
+
+        返回：holder 中存储的副本
         """
         cid = getattr(commitment, "commitment_id", None)
         if not isinstance(cid, str) or not cid:
             raise RuntimeHolderError("commitment must have a non-empty 'commitment_id'")
         if cid not in self._commitments:
             raise CommitmentNotFound(f"commitment_id not found: {cid}")
-        self._commitments[cid] = commitment
-        return commitment
+        stored = copy.deepcopy(commitment)
+        self._commitments[cid] = stored
+        return copy.deepcopy(stored)
 
     # -----------------------------------------------------
     # 剩余方法（P0-3A Stub 保留）
