@@ -582,8 +582,7 @@ Recall 1~2。
 
 Memory 不等于完整聊天历史。
 
-## 13. Chat History 
-Infrastructure / 聊天历史基础设施
+## 13. Chat History Infrastructure / 聊天历史基础设施
 
 13.1 职责边界
 13.2 Server Chat Store
@@ -594,7 +593,7 @@ Infrastructure / 聊天历史基础设施
 13.7 Multi-world 数据边界
 13.8 当前实现状态
 
-### chat History与Memory不同
+### 13.6 chat History 与 Memory不同
 Chat History
 = 用户可查看的完整历史
 
