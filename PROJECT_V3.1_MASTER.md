@@ -582,26 +582,27 @@ Recall 1~2。
 
 Memory 不等于完整聊天历史。
 
-## 13. Chat History 与本地归档
+## 13. Chat History 
+Infrastructure / 聊天历史基础设施
 
-建议未来采用“服务器当前窗口 + 本地完整归档”的混合模式。
+13.1 职责边界
+13.2 Server Chat Store
+13.3 History Pagination
+13.4 Device Local Cache
+13.5 Search
+13.6 Chat History 与 Memory 的边界
+13.7 Multi-world 数据边界
+13.8 当前实现状态
 
-### Server
-负责：
-- 当前聊天
-- 最近消息
-- 实时同步
-- 必要的世界事件
-- 多设备/多用户一致性
+### chat History与Memory不同
+Chat History
+= 用户可查看的完整历史
 
-### Device Local Archive
-手机端可以把用户自己的历史聊天异步归档到 IndexedDB/SQLite 等本地持久存储，并建立本地搜索索引。
+Memory
+= AI 从历史中形成的少量长期记忆
 
-服务器不需要每次把所有历史聊天重新下发。
-
-用户搜索旧聊天时：
-优先本地搜索；
-如果本地没有，再向服务器请求缺失片段。
+Context
+= AI 当前一次思考需要的相关信息
 
 ### 重要限制
 
@@ -625,6 +626,18 @@ Stable Core
 
 目标：
 历史增长不导致单次 Context 线性增长。
+Chat History 是外部历史资源，
+不是 Context 的直接输入。
+
+Chat History
+    ↓
+History Retrieval
+    ↓
+Memory / Relevant Recall
+    ↓
+Long-term Provider
+    ↓
+AgentContext
 
 LLM Cost ≈ LLM Call Count × Context Size
 
@@ -923,12 +936,17 @@ Voice 不进入当前 V3.1 核心架构改造。
 
 ## 17. Instance / Multi-world
 
-未来预留：
-world_id
-instance_id
-region_id
-building_id
-room_id
+Chat History 必须具备 world_id / room_id 隔离边界。
+
+未来消息资源至少逻辑上属于：
+
+universe_id
+→ world_id
+→ instance_id（可选）
+→ region_id
+→ building_id
+→ room_id
+→ message_id
 
 现在不开发副本/多元宇宙。
 
@@ -1350,6 +1368,17 @@ ext_memory	调用失败（见 §22.6）
 - 未启用 Memory Runtime。
 - 未进入 B7。
 - 未进入 C-1 编码。
+
+### 22.13 Chat History 当前真实状态
+当前 /api/messages 只返回有限历史窗口
+当前前端存在 localStorage 聊天缓存
+当前缓存约保留最近 400 条
+当前服务器 data["messages"][room] 保存聊天历史
+当前世界数据仍集中在 data.json
+当前没有真正的游标分页
+当前没有完整历史搜索 API
+当前没有 IndexedDB 聊天归档
+当前没有“搜索结果 → 定位原消息”的完整链路
 
 ---
 
