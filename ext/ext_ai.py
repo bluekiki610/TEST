@@ -6,6 +6,7 @@ import time
 import random
 import threading
 import urllib.request
+import urllib.error
 
 DEFAULT_ROLEPLAY = (
     "你是世界一流的演员，现在扮演「{ai}」与「{owner}」在这个世界生活。\n"
@@ -306,7 +307,7 @@ def setup(app, data, helpers):
                 "story": "（你站在某栋建筑前，日光把影子拉得很长。你忽然觉得这地方该有个故事，想往它的故事簿里添上一笔。随时都能写,用旁观者的视角用第三人称写。）",
             }
             hint = hints.get(typ, hints["note"])
-            data["writing_rhythm"][ai] = {"next_ts": time.time() + random.randint(14400, 28800), "type": random.choice(["note", "diary", "story"])}
+            data["writing_rhythm"][ai] = {"next_ts": time.time() + random.randint(21600, 28800), "type": random.choice(["note", "diary", "story"])}
             save_data()
             return (typ, hint)
         except Exception:
@@ -336,10 +337,32 @@ def setup(app, data, helpers):
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + cfg["key"]
             })
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                resp_data = resp.read().decode("utf-8")
-                print(f"[CALL_LLM] 原始响应（前500字符）: {repr(resp_data[:500])}")
-                out = json.loads(resp_data)
+            # ==== HOTFIX: 429 限流指数退避重试（最多 3 次）====
+            _max_retries = 3
+            _resp_data = None
+            for _attempt in range(_max_retries + 1):
+                try:
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        _resp_data = resp.read().decode("utf-8")
+                    break
+                except urllib.error.HTTPError as _he:
+                    if _he.code == 429 and _attempt < _max_retries:
+                        try:
+                            _err_body = _he.read().decode("utf-8", errors="replace")
+                        except Exception:
+                            _err_body = ""
+                        print(f"[CALL_LLM] 429 rate limit, retry {_attempt+1}/{_max_retries}...", flush=True)
+                        if _err_body:
+                            print(f"[CALL_LLM] 429 body: {_err_body[:500]}", flush=True)
+                        _wait = 2 ** _attempt   # 1, 2, 4
+                        time.sleep(_wait)
+                        continue
+                    else:
+                        raise
+            resp_data = _resp_data
+            print(f"[CALL_LLM] 原始响应（前500字符）: {repr(resp_data[:500])}")
+            out = json.loads(resp_data)
+            # ==== END HOTFIX ====
             # 安全获取内容，不抛出 KeyError
             choices = out.get("choices")
             if not choices:
@@ -849,7 +872,7 @@ def setup(app, data, helpers):
                 print(f"[AI_PARSE] story_room={story_room}")
                 data["stories"].setdefault(story_room, []).append({
                     "author": ai,
-                    "text": content[:1500],
+                    "text": content[:3000],
                     "time": now_str()
                 })
                 # ===== 只保留一份轨迹和通知 =====
@@ -995,7 +1018,7 @@ def setup(app, data, helpers):
             # ===== 2. call_llm =====
             _t2 = time.time()
             print(f"⏳ [TIMING] 开始调用 call_llm...")
-            out = call_llm(owner, msgs)
+            out = call_llm(owner, msgs, max_tokens=900 if trigger == "write" else 400)
             _elapsed_llm = time.time() - _t2
             print(f"⏱️ [TIMING] call_llm 耗时: {_elapsed_llm:.2f}秒, 返回长度={len(out) if out else 0}")
 
