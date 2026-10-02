@@ -67,6 +67,7 @@ def default_data():
         "ai_timeline": {},
         "ai_visited": {},
         "ai_follow": {},
+        "ai_vacation": {},          # ← 新增：AI 度假状态
         "ai_pending_moves": {},
         "living_rhythm": {},
         # ====== 新增副本字段 ======
