@@ -252,16 +252,19 @@
       if(!d || !d.ok) return;
       var locs = d.locations || {};
       var pend = d.pending_moves || {};
+      var vacs = d.vacations || {};
       // 同步 mapData 缓存（让地图标记等其他组件也能及时更新）
       mapData.ai_location = locs;
       mapData.ai_pending_moves = pend;
+      mapData.ai_vacation = vacs;
       // 用 API 返回值直接渲染（不依赖缓存）
       var txt = '';
       ais.forEach(function(ai){
         var l = locs[ai];
         if(l === undefined || l === null || l === '') l = '未知';
         if(l === 'main') l = '💬 群聊中（不在具体场所）';
-        var line = '🤖 ' + esc(ai) + '：📍 ' + esc(l);
+        var vacMark = vacs[ai] ? ' <span style="color:#ffd166;font-size:11px">🏖️ 跟随中</span>' : '';
+        var line = '🤖 ' + esc(ai) + '：📍 ' + esc(l) + vacMark;
         var p = pend[ai];
         if(p && p.room){
           var left = Math.max(0, Math.ceil((p.at_ts - Date.now()/1000)/60));

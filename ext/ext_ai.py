@@ -780,6 +780,28 @@ def setup(app, data, helpers):
                 # 【增强】口语化别名解析 + 智能跟随（同建筑直接移动，跨建筑等主人到）
                 # ============================================================
                 got = ""
+                # ===== P4 修复：度假模式下，跟随由 _vacation_follow_check 统一处理 =====
+                # 避免 AI 回复中的 follow:true 与 5 秒轮询跟随逻辑冲突，来回拉扯。
+                # 同时给用户一条明确的"正在跟随"提示。
+                if data.get("ai_vacation", {}).get(ai, False):
+                    _was_follow = bool(action.get("follow"))
+                    _raw_go_hint = (action.get("go_to") or "").strip()
+                    action = dict(action)
+                    action.pop("follow", None)
+                    action.pop("go_to", None)
+                    action.pop("bring_owner", None)
+                    if _was_follow:
+                        _cur_for_hint = data.get("ai_location", {}).get(ai, "main")
+                        if _cur_for_hint and _cur_for_hint in data.get("rooms", {}):
+                            _go_txt = _raw_go_hint or "目的地"
+                            data.setdefault("messages", {}).setdefault(_cur_for_hint, []).append({
+                                "sender": "system",
+                                "content": f"🚶 {ai} 正在跟着你，一起去 {_go_txt}",
+                                "role": "system",
+                                "time": room_time(_cur_for_hint)
+                            })
+                            save_data()
+                # ===== P4 结束 =====
                 if action.get("follow"):
                     raw_go = action.get("go_to") or ""
                     cur_here = data.get("ai_location", {}).get(ai, "main")
@@ -1935,10 +1957,10 @@ def setup(app, data, helpers):
     @app.get("/api/ai/location")
     async def ai_location_realtime(user: str = ""):
         """
-        返回该用户自己的 AI 的实时位置 + pending_moves。
+        返回该用户自己的 AI 的实时位置 + pending_moves + vacation 状态。
         - 只返回这个用户自己的 AI，不泄漏其他用户 AI 位置
         - 不返回地图/建筑/房间等额外数据
-        - 数据源：data["ai_location"] / data["ai_pending_moves"]
+        - 数据源：data["ai_location"] / data["ai_pending_moves"] / data["ai_vacation"]
         """
         u = canonical_contact_name((user or '').strip())
         if not u:
@@ -1946,8 +1968,10 @@ def setup(app, data, helpers):
         ais = data.get("user_ais", {}).get(u, []) or []
         locations = {}
         pending_moves = {}
+        vacations = {}
         ai_location_all = data.get("ai_location", {}) or {}
         pending_all = data.get("ai_pending_moves", {}) or {}
+        vacation_all = data.get("ai_vacation", {}) or {}
         for ai in ais:
             if not ai:
                 continue
@@ -1959,7 +1983,8 @@ def setup(app, data, helpers):
                     "room": pm.get("room"),
                     "at_ts": pm.get("at_ts", 0),
                 }
-        return {"ok": True, "locations": locations, "pending_moves": pending_moves}
+            vacations[ai] = bool(vacation_all.get(ai, False))
+        return {"ok": True, "locations": locations, "pending_moves": pending_moves, "vacations": vacations}
     
     @app.get("/api/ai/impression")
     async def get_impression(ai: str = ""):
