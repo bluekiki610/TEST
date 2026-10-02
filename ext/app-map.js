@@ -174,7 +174,7 @@
                 '<label class="switch" style="margin:0"><input type="checkbox" id="stayPutSwitch" onchange="toggleStayPutSimple(this.checked)"><span class="slider"></span></label>' +
               '</label>' +
             '</div>' +
-            '<div style="font-size:11px;color:#6d8bb0;margin-top:4px">🏖️ 度假时 AI 会跟在你身边，不自己乱跑</div>' +
+            '<div style="font-size:11px;color:#6d8bb0;margin-top:4px">🏖️ 度假时 AI 会跟你一起，不会去工作；💡 原地待命时禁止离开房间</div>' +
             '<div id="groupMuteStatus" style="font-size:11px;color:#7fa8cf;margin-top:2px"></div>';
           el.insertBefore(card2, el.firstChild);
         }

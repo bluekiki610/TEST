@@ -1003,7 +1003,30 @@ def setup(app, data, helpers):
         #   因此必须在最终执行入口 drive_ai 内再检查一次。
         # - invite_date 只由 AI 自主触发（_ai_think_invite / _trigger_invite），
         #   主人主动约会走 /api/date/invite，不经过 drive_ai('invite_date')，不会被误拦。
-        if trigger in ("living", "home_act", "write", "invite_date"):
+        # home_act：P4 特殊处理（度假 + 主人在家 → 允许）
+        if trigger == "home_act":
+            if data.get("ai_stay_put", {}).get(ai, False):
+                print(f"[P2] drive_ai 拦下 {ai} 的自主行为 trigger=home_act (stay_put)")
+                return
+            if data.get("ai_vacation", {}).get(ai, False):
+                _owner_tmp = owner_of_ai(ai)
+                _owner_page = ''
+                if _owner_tmp:
+                    _p = data.get('presence', {}).get(_owner_tmp, {})
+                    if isinstance(_p, dict):
+                        _owner_page = _p.get('page', '')
+                _home_bid_tmp = _home_bid(_owner_tmp) if _owner_tmp else None
+                _owner_at_home = False
+                if _home_bid_tmp:
+                    _home_rooms_tmp = data['buildings'][_home_bid_tmp].get('rooms', [])
+                    if _owner_page and _owner_page in _home_rooms_tmp:
+                        _owner_at_home = True
+                if not _owner_at_home:
+                    print(f"[P2] drive_ai 拦下 {ai} 的自主行为 trigger=home_act (vacation, 主人不在家)")
+                    return
+        # living / invite_date：度假/待命时全拦
+        # write：不拦（P4 保留 AI 度假期间写随笔/便签/剧情）
+        elif trigger in ("living", "invite_date"):
             if data.get("ai_vacation", {}).get(ai, False):
                 print(f"[P2] drive_ai 拦下 {ai} 的自主行为 trigger={trigger} (vacation)")
                 return
@@ -1482,6 +1505,10 @@ def setup(app, data, helpers):
                 _check_follow()
             except Exception:
                 pass
+            try:
+                _vacation_follow_check()
+            except Exception:
+                pass
             time.sleep(5)
 
     def _home_bid(owner):
@@ -1492,12 +1519,9 @@ def setup(app, data, helpers):
 
     def _home_activity(ai, owner):
         try:
-            # ===== P2：Vacation / Stay Put 拦截（双保险） =====
-            if data.get("ai_vacation", {}).get(ai, False):
-                return False
+            # P4：只保留 stay_put 拦截；vacation 由调用方判断（主人在家时允许 home_act）
             if data.get("ai_stay_put", {}).get(ai, False):
                 return False
-            # ===== P2 结束 =====
 
             hb = _home_bid(owner)
             if not hb:
@@ -1527,6 +1551,93 @@ def setup(app, data, helpers):
             return True
         except Exception:
             return False
+
+    def _vacation_home_activity(ai, owner):
+        """P4：度假模式下的在家活动（主人在家时允许 AI 在家自由活动）"""
+        try:
+            if data.get("ai_stay_put", {}).get(ai, False):
+                return
+            home_bid = _home_bid(owner)
+            if not home_bid:
+                return
+            home_rooms = data['buildings'][home_bid].get('rooms', [])
+            ai_loc = data.get('ai_location', {}).get(ai, '')
+            # 如果 AI 不在家 → 拉回家会客厅
+            if ai_loc not in home_rooms:
+                hall = data['buildings'][home_bid].get('name', '') + '·会客厅'
+                if hall in data.get('rooms', {}):
+                    data['ai_location'][ai] = hall
+                    append_timeline(ai, f"你回到了 {hall}")
+                    save_data()
+            # 冷却：30-60 分钟触发一次
+            if time.time() < data.get('ai_home_act_next', {}).get(ai, 0):
+                return
+            data.setdefault('ai_home_act_next', {})[ai] = time.time() + random.randint(1800, 3600)
+            _home_activity(ai, owner)
+        except Exception as e:
+            print(f"[P4] vacation home activity error: {e}", flush=True)
+
+    def _vacation_follow_check():
+        """P4：度假模式下，主人离开家时 AI 跟随主人"""
+        try:
+            pres = {}
+            for k, v in data.get('presence', {}).items():
+                if isinstance(v, dict):
+                    pres[k] = v.get('page', '')
+
+            for owner, ais in data.get('user_ais', {}).items():
+                for ai in ais:
+                    if not ai:
+                        continue
+                    if not data.get('ai_vacation', {}).get(ai, False):
+                        continue
+                    # ===== stay_put 优先：完全静止，不跟随 =====
+                    if data.get('ai_stay_put', {}).get(ai, False):
+                        continue
+                    # ===== 结束 =====
+                    owner_page = pres.get(owner, '')
+                    if not owner_page or owner_page == 'main':
+                        continue
+                    home_bid = _home_bid(owner)
+                    home_rooms = data['buildings'][home_bid].get('rooms', []) if home_bid else []
+                    owner_at_home = bool(owner_page and owner_page in home_rooms)
+                    ai_loc = data.get('ai_location', {}).get(ai, '')
+
+                    if owner_at_home:
+                        # 主人在家 → AI 应该在家
+                        if home_bid and ai_loc not in home_rooms:
+                            hall = data['buildings'][home_bid].get('name', '') + '·会客厅'
+                            if hall in data.get('rooms', {}):
+                                if ai_loc and ai_loc in data.get('rooms', {}):
+                                    data['messages'].setdefault(ai_loc, []).append({
+                                        'sender': 'system', 'content': f"🚶 {ai} 离开了 {ai_loc}",
+                                        'role': 'system', 'time': room_time(ai_loc)
+                                    })
+                                data['ai_location'][ai] = hall
+                                data['messages'].setdefault(hall, []).append({
+                                    'sender': 'system', 'content': f"🚶 {ai} 回到了 {hall}",
+                                    'role': 'system', 'time': room_time(hall)
+                                })
+                                append_timeline(ai, f"你回到了 {hall}（度假）")
+                                save_data()
+                    else:
+                        # 主人离开家 → AI 跟随
+                        if ai_loc != owner_page:
+                            if ai_loc and ai_loc in data.get('rooms', {}):
+                                data['messages'].setdefault(ai_loc, []).append({
+                                    'sender': 'system', 'content': f"🚶 {ai} 离开了 {ai_loc}",
+                                    'role': 'system', 'time': room_time(ai_loc)
+                                })
+                            data['ai_location'][ai] = owner_page
+                            if owner_page in data.get('rooms', {}):
+                                data['messages'].setdefault(owner_page, []).append({
+                                    'sender': 'system', 'content': f"🚶 {ai} 跟着你来到了 {owner_page}",
+                                    'role': 'system', 'time': room_time(owner_page)
+                                })
+                            append_timeline(ai, f"你跟着主人来到了 {owner_page}（度假）")
+                            save_data()
+        except Exception as e:
+            print(f"[P4] vacation follow check error: {e}", flush=True)
 
     def _go_work(ai, job):
         fn = getattr(m, 'auto_start_work', None)
@@ -1694,15 +1805,12 @@ def setup(app, data, helpers):
                                 continue
                             seen.add(ai)
                             if not data.get("ai_keys", {}).get(owner, {}).get("key"):
-                                continue                                                        
-                            # ===== P2：Vacation / Stay Put 统一拦截自主行为 =====
-                            # 主人明确指令（召唤/短信/约会/follow/go_to）不走 auto_ai_loop，
-                            # 因此这里的拦截只影响 AI 的自主生活，不影响主人对 AI 的直接控制。
-                            if data.get("ai_vacation", {}).get(ai, False):
                                 continue
+                            # ===== P2/P4：vacation 分入口处理，stay_put 全局拦截 =====
                             if data.get("ai_stay_put", {}).get(ai, False):
                                 continue
-                            # ===== P2 结束 =====
+                            _vac = data.get("ai_vacation", {}).get(ai, False)
+                            # ===== P2/P4 结束 =====
 
                             # ========== 新增：如果 AI 正在副本中，跳过所有自主行为 ==========
                             in_instance = False
@@ -1727,46 +1835,60 @@ def setup(app, data, helpers):
                                 if rh:
                                     typ, hint = rh
                                     threading.Timer(2.0, drive_ai, args=(ai, "write", "", hint)).start()
-                            # 3) 自主上班（定时）
-                            try:
-                                _hb = now_bj(); _job = data.get("home_jobs", {}).get(ai)
-                                if _hb.weekday() < 5 and 9 <= _hb.hour < 17 and _job and ai not in data.get("work_sessions", {}) and not data.get("work_switch", {}).get(ai, False):
-                                    if data.get("ai_auto_work_mark", {}).get(ai) != _hb.strftime("%Y-%m-%d"):
-                                        data.setdefault("ai_auto_work_mark", {})[ai] = _hb.strftime("%Y-%m-%d")
-                                        fn2 = getattr(m, 'auto_start_work', None)
-                                        if fn2:
-                                            fn2(ai)
-                                            append_timeline(ai, f"你按时去 {_job} 上班了")
-                                        else:
-                                            threading.Timer(2.0, drive_ai, args=(ai, "living", "", f"现在是上班时间，你去 {_job} 上班吧")).start()
-                            except Exception:
-                                pass
+                            # 3) 自主上班（度假时禁用）
+                            if not _vac:
+                                try:
+                                    _hb = now_bj(); _job = data.get("home_jobs", {}).get(ai)
+                                    if _hb.weekday() < 5 and 9 <= _hb.hour < 17 and _job and ai not in data.get("work_sessions", {}) and not data.get("work_switch", {}).get(ai, False):
+                                        if data.get("ai_auto_work_mark", {}).get(ai) != _hb.strftime("%Y-%m-%d"):
+                                            data.setdefault("ai_auto_work_mark", {})[ai] = _hb.strftime("%Y-%m-%d")
+                                            fn2 = getattr(m, 'auto_start_work', None)
+                                            if fn2:
+                                                fn2(ai)
+                                                append_timeline(ai, f"你按时去 {_job} 上班了")
+                                            else:
+                                                threading.Timer(2.0, drive_ai, args=(ai, "living", "", f"现在是上班时间，你去 {_job} 上班吧")).start()
+                                except Exception:
+                                    pass
                             # 4) 自主生活决策
                             try:
-                                # ===== [原地待命] 检查：如果开启待命，跳过所有自主行为 =====
+                                # stay_put 最严格：完全静止（度假时也优先）
                                 if data.get('ai_stay_put', {}).get(ai, False):
                                     continue
-                                # ===== 原地待命检查结束 =====
-                                if time.time() < data.get('ai_auto_next', {}).get(ai, 0):
-                                    continue
-                                if ai in data.get('ai_follow', {}):
-                                    continue
-                                if ai in data.get('ai_meeting', {}):
-                                    continue
-                                _h = now_bj().hour
-                                _hrs = data.get('ai_living_hours', [7, 23])
-                                _in = (_hrs[0] <= _h < _hrs[1]) if _hrs[0] <= _hrs[1] else (_h >= _hrs[0] or _h < _hrs[1])
-                                if not _in:
-                                    continue
-                                if time.time() - data.get('ai_last_human', {}).get(ai, 0) < 1800:
-                                    continue
-                                data.setdefault('ai_last_auto', {})[ai] = time.time()
-                                data.setdefault('ai_auto_next', {})[ai] = time.time() + random.randint(3600, 7200)
-                                _plan_auto(ai, owner)
+                                if _vac:
+                                    # 度假：只在主人在家时让 AI 在家活动；
+                                    # 主人外出时跟随由 follow_watch 处理，这里不动
+                                    _owner_page = ''
+                                    _p = data.get('presence', {}).get(owner, {})
+                                    if isinstance(_p, dict):
+                                        _owner_page = _p.get('page', '')
+                                    _home_bid = _home_bid(owner)
+                                    _home_rooms = data['buildings'][_home_bid].get('rooms', []) if _home_bid else []
+                                    _owner_at_home = bool(_owner_page and _owner_page in _home_rooms)
+                                    if _owner_at_home:
+                                        _vacation_home_activity(ai, owner)
+                                else:
+                                    # 非度假：原逻辑
+                                    if time.time() < data.get('ai_auto_next', {}).get(ai, 0):
+                                        continue
+                                    if ai in data.get('ai_follow', {}):
+                                        continue
+                                    if ai in data.get('ai_meeting', {}):
+                                        continue
+                                    _h = now_bj().hour
+                                    _hrs = data.get('ai_living_hours', [7, 23])
+                                    _in = (_hrs[0] <= _h < _hrs[1]) if _hrs[0] <= _hrs[1] else (_h >= _hrs[0] or _h < _hrs[1])
+                                    if not _in:
+                                        continue
+                                    if time.time() - data.get('ai_last_human', {}).get(ai, 0) < 1800:
+                                        continue
+                                    data.setdefault('ai_last_auto', {})[ai] = time.time()
+                                    data.setdefault('ai_auto_next', {})[ai] = time.time() + random.randint(3600, 7200)
+                                    _plan_auto(ai, owner)
                             except Exception as e:
                                 print(f"[AI] 自主决策异常({ai}): {e}", flush=True)
-                            # 5) 自主思考萌发约会（每2小时检查一次）
-                            if hasattr(m, '_ai_think_invite'):
+                            # 5) 自主思考萌发约会（每2小时检查一次，度假/待命时跳过）
+                            if not _vac and not data.get("ai_stay_put", {}).get(ai, False) and hasattr(m, '_ai_think_invite'):
                                 if ai not in data.get('_last_think_invite', {}) or time.time() - data['_last_think_invite'][ai] > 7200:
                                     data.setdefault('_last_think_invite', {})[ai] = time.time()
                                     threading.Timer(random.randint(5, 15), m._ai_think_invite, args=(ai,)).start()
@@ -2055,6 +2177,27 @@ def setup(app, data, helpers):
         if ai not in data.get("user_ais", {}).get(user, []):
             return {"ok": False, "msg": "这个 AI 不属于你"}
         data.setdefault("ai_vacation", {})[ai] = on
+
+        # ===== P3：开启 vacation 时，结束已在进行的 work_session（不结算工资）=====
+        # 注意：
+        # - 不调用 pay_work，不写 work_history，不结算工资
+        # - 不改 work_switch，关闭 vacation 后由 work_tick 恢复自主上班
+        # - 不挪 AI 位置（保持现场，P4 再处理跟随）
+        if on:
+            ws = data.get("work_sessions", {}).pop(ai, None)
+            if ws:
+                b = data.get("buildings", {}).get(ws.get("building_id"), {})
+                bn = b.get("name", "?") if b else "?"
+                try:
+                    append_timeline(ai, f"你从 {bn} 提前结束了工作")
+                except Exception:
+                    pass
+                try:
+                    add_trail(ai, f"因开启度假，从 {bn} 提前离开（未结算工资）", room=data.get("ai_location", {}).get(ai, ""))
+                except Exception:
+                    pass
+        # ===== P3 结束 =====
+
         save_data()
         return {"ok": True, "ai": ai, "on": on}
 
