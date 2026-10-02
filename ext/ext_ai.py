@@ -1508,7 +1508,7 @@ def setup(app, data, helpers):
         else:
             threading.Timer(2.0, drive_ai, args=(ai, 'living', '', f'现在是上班时间，你去 {job} 上班吧')).start()
 
-    def _plan_auto(ai, owner, on_leave=False):
+    def _plan_auto(ai, owner):
         try:
             if ai in data.get('work_sessions', {}):
                 return
@@ -1517,17 +1517,6 @@ def setup(app, data, helpers):
             weekday = h.weekday() < 5
             workhour = 9 <= h.hour < 17
             rnd = random.random()
-            
-            # ===== 休假：跳过职业日程，保留自由生活 =====
-            if on_leave:
-                if rnd < 0.5:
-                    threading.Timer(2.0, drive_ai, args=(ai, 'living', '', '现在是自由活动时间，去生活吧')).start()
-                else:
-                    if not _home_activity(ai, owner):
-                        threading.Timer(2.0, drive_ai, args=(ai, 'living', '', '你待在家里，做点自己的事')).start()
-                return
-            # ===== 休假分支结束 =====
-            
             if job and weekday and workhour:
                 if rnd < 0.80:
                     _go_work(ai, job)
@@ -1684,24 +1673,18 @@ def setup(app, data, helpers):
                                 if rh:
                                     typ, hint = rh
                                     threading.Timer(2.0, drive_ai, args=(ai, "write", "", hint)).start()
-                            # 3) 自主上班（定时）—— 受 AI Life Policy 约束
+                            # 3) 自主上班（定时）
                             try:
-                                _life = data.get("ai_life_policy", {}).get(ai, {})
-                                _life_status = (_life.get("status") or "work")
-                                if _life_status == "leave":
-                                    # 休假：跳过自动上班，保留自由生活
-                                    pass
-                                else:
-                                    _hb = now_bj(); _job = data.get("home_jobs", {}).get(ai)
-                                    if _hb.weekday() < 5 and 9 <= _hb.hour < 17 and _job and ai not in data.get("work_sessions", {}) and not data.get("work_switch", {}).get(ai, False):
-                                        if data.get("ai_auto_work_mark", {}).get(ai) != _hb.strftime("%Y-%m-%d"):
-                                            data.setdefault("ai_auto_work_mark", {})[ai] = _hb.strftime("%Y-%m-%d")
-                                            fn2 = getattr(m, 'auto_start_work', None)
-                                            if fn2:
-                                                fn2(ai)
-                                                append_timeline(ai, f"你按时去 {_job} 上班了")
-                                            else:
-                                                threading.Timer(2.0, drive_ai, args=(ai, "living", "", f"现在是上班时间，你去 {_job} 上班吧")).start()
+                                _hb = now_bj(); _job = data.get("home_jobs", {}).get(ai)
+                                if _hb.weekday() < 5 and 9 <= _hb.hour < 17 and _job and ai not in data.get("work_sessions", {}) and not data.get("work_switch", {}).get(ai, False):
+                                    if data.get("ai_auto_work_mark", {}).get(ai) != _hb.strftime("%Y-%m-%d"):
+                                        data.setdefault("ai_auto_work_mark", {})[ai] = _hb.strftime("%Y-%m-%d")
+                                        fn2 = getattr(m, 'auto_start_work', None)
+                                        if fn2:
+                                            fn2(ai)
+                                            append_timeline(ai, f"你按时去 {_job} 上班了")
+                                        else:
+                                            threading.Timer(2.0, drive_ai, args=(ai, "living", "", f"现在是上班时间，你去 {_job} 上班吧")).start()
                             except Exception:
                                 pass
                             # 4) 自主生活决策
@@ -1725,9 +1708,7 @@ def setup(app, data, helpers):
                                     continue
                                 data.setdefault('ai_last_auto', {})[ai] = time.time()
                                 data.setdefault('ai_auto_next', {})[ai] = time.time() + random.randint(3600, 7200)
-                                _life2 = data.get("ai_life_policy", {}).get(ai, {})
-                                _on_leave = (_life2.get("status") or "work") == "leave"
-                                _plan_auto(ai, owner, on_leave=_on_leave)
+                                _plan_auto(ai, owner)
                             except Exception as e:
                                 print(f"[AI] 自主决策异常({ai}): {e}", flush=True)
                             # 5) 自主思考萌发约会（每2小时检查一次）
@@ -2002,38 +1983,6 @@ def setup(app, data, helpers):
         save_data()
         return {"ok": True, "ai": ai, "on": on}
     
-    @app.get("/api/ai/life_policy")
-    async def ai_life_policy_get(user: str = ""):
-        ais = data.get("user_ais", {}).get(user, [])
-        result = {}
-        policies = data.get("ai_life_policy", {})
-        for ai in ais:
-            p = policies.get(ai) or {}
-            result[ai] = {
-                "status": p.get("status", "work"),
-                "activity_scope": p.get("activity_scope", {"type": "world", "ids": []}),
-            }
-        return {"policies": result}
-
-    @app.post("/api/ai/life_policy")
-    async def ai_life_policy_set(body: dict):
-        user = (body.get("user") or "").strip()
-        ai = (body.get("ai") or "").strip()
-        status = (body.get("status") or "").strip()
-        if not user or not ai:
-            return {"ok": False, "msg": "缺少参数"}
-        if status not in ("work", "leave"):
-            return {"ok": False, "msg": "status 只能是 work 或 leave"}
-        if ai not in data.get("user_ais", {}).get(user, []):
-            return {"ok": False, "msg": "这个 AI 不属于你"}
-        data.setdefault("ai_life_policy", {})
-        cur = data["ai_life_policy"].get(ai) or {}
-        cur["status"] = status
-        cur.setdefault("activity_scope", {"type": "world", "ids": []})
-        data["ai_life_policy"][ai] = cur
-        save_data()
-        return {"ok": True, "ai": ai, "status": status}
-
     def _build_instance_context(ai, trigger, room, trigger_text, fallback_to, inst, owner):
         """为副本中的 AI 构建独立上下文（不感知现实时间/地点）"""
         # 获取参与者人设（副本内）

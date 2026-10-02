@@ -184,12 +184,7 @@ def setup(app, data, helpers):
             actions.append('story')
             weights.append(35)
 
-        # ===== AI Life Policy：休假时禁止工作事件 =====
-        _life = data.get("ai_life_policy", {}).get(ai, {})
-        _on_leave = (_life.get("status") or "work") == "leave"
-        # ===== 检查结束 =====
-
-        if (not _on_leave) and btype in ('npc', 'nature') and 'work' in feats and ai not in data.get('work_sessions', {}):
+        if btype in ('npc', 'nature') and 'work' in feats and ai not in data.get('work_sessions', {}):
             if is_work_time and is_job_building:
                 work_weight = 60
             elif is_work_time and not is_job_building:
