@@ -991,16 +991,19 @@ def setup(app, data, helpers):
             return
 
         # ===== P2：已排队的自主 Timer 最终拦截（窄范围） =====
-        # 只拦"明确的自主行为 trigger"，不拦主人明确指令。
-        # 白名单（不拦，属于主人明确指令或主人指令的延伸）：
-        #   chat / group / sms / summon / yell / follow_arrive / arrive_sms / invite_date
-        # 拦截列表（自主行为）：
-        #   living / home_act / write
+        # 拦截列表（AI 自主行为，仅这 4 个）：
+        #   living / home_act / write / invite_date
+        # 其他 trigger 一律不拦：
+        #   chat / group / sms / summon / yell / follow_arrive / arrive_sms / arrive
+        #   这些都属于主人明确指令或主人指令的延伸，与 vacation/stay_put 无关。
         #
-        # 说明：living / home_act / write 这几个 trigger 在 auto_ai_loop 入口已被拦，
-        # 但可能在 vacation 开启前就已经以 threading.Timer 的形式排入了队列，
-        # 因此必须在最终执行入口 drive_ai 内再检查一次。
-        if trigger in ("living", "home_act", "write"):
+        # 说明：
+        # - living / home_act / write / invite_date 在 auto_ai_loop / _ai_think_invite
+        #   入口已被拦，但可能在 vacation 开启前就已经以 threading.Timer 排入队列，
+        #   因此必须在最终执行入口 drive_ai 内再检查一次。
+        # - invite_date 只由 AI 自主触发（_ai_think_invite / _trigger_invite），
+        #   主人主动约会走 /api/date/invite，不经过 drive_ai('invite_date')，不会被误拦。
+        if trigger in ("living", "home_act", "write", "invite_date"):
             if data.get("ai_vacation", {}).get(ai, False):
                 print(f"[P2] drive_ai 拦下 {ai} 的自主行为 trigger={trigger} (vacation)")
                 return
