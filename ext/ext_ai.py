@@ -1470,6 +1470,13 @@ def setup(app, data, helpers):
 
     def _home_activity(ai, owner):
         try:
+            # ===== P2：Vacation / Stay Put 拦截（双保险） =====
+            if data.get("ai_vacation", {}).get(ai, False):
+                return False
+            if data.get("ai_stay_put", {}).get(ai, False):
+                return False
+            # ===== P2 结束 =====
+
             hb = _home_bid(owner)
             if not hb:
                 return False
@@ -1510,6 +1517,13 @@ def setup(app, data, helpers):
 
     def _plan_auto(ai, owner):
         try:
+            # ===== P2：Vacation / Stay Put 拦截（双保险，冗余但保留） =====
+            if data.get("ai_vacation", {}).get(ai, False):
+                return
+            if data.get("ai_stay_put", {}).get(ai, False):
+                return
+            # ===== P2 结束 =====
+
             if ai in data.get('work_sessions', {}):
                 return
             job = data.get('home_jobs', {}).get(ai)
@@ -1556,6 +1570,15 @@ def setup(app, data, helpers):
 
     def _ai_think_invite(ai):
         """AI 自主思考时萌发约会意图（不依赖到达建筑）"""
+        # ===== P2：Vacation / Stay Put 拦截 =====
+        # 这个函数通过 threading.Timer 延迟 5-15 秒调用，可能在 vacation 打开后才执行，
+        # 必须在函数内部再检查一次，不能只依赖 auto_ai_loop 入口。
+        if data.get("ai_vacation", {}).get(ai, False):
+            return
+        if data.get("ai_stay_put", {}).get(ai, False):
+            return
+        # ===== P2 结束 =====
+
         # 检查基础条件
         owner = owner_of_ai(ai)
         if not owner:
@@ -1649,7 +1672,16 @@ def setup(app, data, helpers):
                                 continue
                             seen.add(ai)
                             if not data.get("ai_keys", {}).get(owner, {}).get("key"):
+                                continue                                                        
+                            # ===== P2：Vacation / Stay Put 统一拦截自主行为 =====
+                            # 主人明确指令（召唤/短信/约会/follow/go_to）不走 auto_ai_loop，
+                            # 因此这里的拦截只影响 AI 的自主生活，不影响主人对 AI 的直接控制。
+                            if data.get("ai_vacation", {}).get(ai, False):
                                 continue
+                            if data.get("ai_stay_put", {}).get(ai, False):
+                                continue
+                            # ===== P2 结束 =====
+
                             # ========== 新增：如果 AI 正在副本中，跳过所有自主行为 ==========
                             in_instance = False
                             for iid, inst in data.get("instances", {}).get(owner, {}).items():
