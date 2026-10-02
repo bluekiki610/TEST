@@ -359,31 +359,6 @@ window.toggleStayPutSimple = function(checked) {
   });
 };
 
-window.toggleStayPutSimple = function(checked) {
-  var ais = mapData.user_ais[userName] || [];
-  if (!ais.length) { toast('请先登记 AI'); return; }
-  var ai = ais[0];
-  fetch('/api/ai/stay_put', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user: userName, ai: ai, on: checked })
-  })
-  .then(function(r) { return r.json(); })
-  .then(function(d) {
-    if (d.ok) {
-      toast(checked ? '🧘 已原地待命（不会自主离开）' : '⏳ 已恢复自由活动');
-      updateGroupStatus(document.getElementById('vacationSwitch').checked, checked);
-    } else {
-      toast('❌ ' + (d.msg || '设置失败'));
-      document.getElementById('stayPutSwitch').checked = !checked;
-    }
-  })
-  .catch(function(e) {
-    toast('❌ ' + e.message);
-    document.getElementById('stayPutSwitch').checked = !checked;
-  });
-};
-
 function updateGroupStatus(isVac, isStay) {
   var el = document.getElementById('groupMuteStatus');
   if (!el) return;
@@ -1975,3 +1950,33 @@ setTimeout(initHome, 500);
   setTimeout(checkFireworks, 1000);
 })();
 
+
+// ===== [ext_vacation] 度假开关函数（全局，追加于文件末尾确保作用域） =====
+window.toggleVacationSimple = function(checked) {
+  var ais = mapData.user_ais[userName] || [];
+  if (!ais.length) { toast('请先登记 AI'); return; }
+  var ai = ais[0];
+  fetch('/api/ai/vacation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user: userName, ai: ai, on: checked })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    if (d.ok) {
+      toast(checked ? '🏖️ 度假模式已开启' : '⏹️ 度假模式已关闭');
+      var vc = document.getElementById('vacationSwitch');
+      var sc = document.getElementById('stayPutSwitch');
+      updateGroupStatus(vc ? vc.checked : false, sc ? sc.checked : false);
+    } else {
+      toast('❌ ' + (d.msg || '设置失败'));
+      var vc2 = document.getElementById('vacationSwitch');
+      if (vc2) vc2.checked = !checked;
+    }
+  })
+  .catch(function(e) {
+    toast('❌ ' + e.message);
+    var vc3 = document.getElementById('vacationSwitch');
+    if (vc3) vc3.checked = !checked;
+  });
+};
