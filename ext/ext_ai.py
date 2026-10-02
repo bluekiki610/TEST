@@ -989,6 +989,25 @@ def setup(app, data, helpers):
         if not ai_integration_enabled():
             print(f"⏹️ [TIMING] AI 集成未开启，直接返回")
             return
+
+        # ===== P2：已排队的自主 Timer 最终拦截（窄范围） =====
+        # 只拦"明确的自主行为 trigger"，不拦主人明确指令。
+        # 白名单（不拦，属于主人明确指令或主人指令的延伸）：
+        #   chat / group / sms / summon / yell / follow_arrive / arrive_sms / invite_date
+        # 拦截列表（自主行为）：
+        #   living / home_act / write
+        #
+        # 说明：living / home_act / write 这几个 trigger 在 auto_ai_loop 入口已被拦，
+        # 但可能在 vacation 开启前就已经以 threading.Timer 的形式排入了队列，
+        # 因此必须在最终执行入口 drive_ai 内再检查一次。
+        if trigger in ("living", "home_act", "write"):
+            if data.get("ai_vacation", {}).get(ai, False):
+                print(f"[P2] drive_ai 拦下 {ai} 的自主行为 trigger={trigger} (vacation)")
+                return
+            if data.get("ai_stay_put", {}).get(ai, False):
+                print(f"[P2] drive_ai 拦下 {ai} 的自主行为 trigger={trigger} (stay_put)")
+                return
+        # ===== P2 结束 =====
         if trigger in ("arrive", "living", "write", "home_act", "follow_arrive", "arrive_sms"):
             lst = data.setdefault("ai_drive_log", {}).get(ai, 0)
             if time.time() - lst < 30:

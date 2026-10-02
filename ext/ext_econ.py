@@ -74,15 +74,27 @@ def setup(app, data, helpers):
         while True:
             try:
                 now = time.time()
+                # 1) 结算已完成的工作会话
+                # 注意：这是"已完成的工作"结算工资，即使 vacation/stay_put 也不拦，
+                # 否则主人已经在上班的 AI 会拿不到钱。
                 for name in list(data.get('work_sessions', {}).keys()):
                     s = data['work_sessions'][name]
                     if now >= s['start_ts'] + s['hours'] * 3600:
                         pay_work(name, s['building_id'], s['hours'])
+                # 2) 自主上班（受 vacation/stay_put 拦截）
                 for name, on in list(data.get('work_switch', {}).items()):
                     if not on:
                         continue
                     if name in data.get('work_sessions', {}):
                         continue
+                    # ===== P2：Vacation / Stay Put 拦截自主上班 =====
+                    # 只拦 work_tick 这条自主路径；
+                    # 主人通过 /api/work/start 或 /api/work/auto 明确触发的上班不受影响。
+                    if data.get("ai_vacation", {}).get(name, False):
+                        continue
+                    if data.get("ai_stay_put", {}).get(name, False):
+                        continue
+                    # ===== P2 结束 =====
                     auto_start_work(name)
             except Exception:
                 pass
