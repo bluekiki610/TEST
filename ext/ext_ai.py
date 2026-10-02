@@ -1983,6 +1983,27 @@ def setup(app, data, helpers):
         save_data()
         return {"ok": True, "ai": ai, "on": on}
     
+    @app.get("/api/ai/vacation")
+    async def ai_vacation_get(user: str = ""):
+        ais = data.get("user_ais", {}).get(user, [])
+        result = {}
+        for ai in ais:
+            result[ai] = bool(data.get("ai_vacation", {}).get(ai, False))
+        return {"vacation": result}
+
+    @app.post("/api/ai/vacation")
+    async def ai_vacation_set(body: dict):
+        user = body.get('user', '').strip()
+        ai = body.get('ai', '').strip()
+        on = bool(body.get('on', False))
+        if not user or not ai:
+            return {"ok": False, "msg": "缺少参数"}
+        if ai not in data.get("user_ais", {}).get(user, []):
+            return {"ok": False, "msg": "这个 AI 不属于你"}
+        data.setdefault("ai_vacation", {})[ai] = on
+        save_data()
+        return {"ok": True, "ai": ai, "on": on}
+
     def _build_instance_context(ai, trigger, room, trigger_text, fallback_to, inst, owner):
         """为副本中的 AI 构建独立上下文（不感知现实时间/地点）"""
         # 获取参与者人设（副本内）

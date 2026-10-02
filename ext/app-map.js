@@ -158,23 +158,23 @@
         }
       }
 
-      // ===== 群聊静音 + 原地待命 开关 =====
+      // ===== 度假 + 原地待命 开关 =====
       try {
-        var muteCard = document.getElementById('groupMuteCard');
-        if (!muteCard) {
+        var vacCard = document.getElementById('vacationCard');
+        if (!vacCard) {
           var card2 = document.createElement('div');
           card2.className = 'my-card';
-          card2.id = 'groupMuteCard';
+          card2.id = 'vacationCard';
           card2.innerHTML =
             '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">' +
-              '<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#cfe8ff;cursor:pointer">🔇 群聊静音' +
-                '<label class="switch" style="margin:0"><input type="checkbox" id="groupMuteSwitch" onchange="toggleGroupMuteSimple(this.checked)"><span class="slider"></span></label>' +
+              '<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#cfe8ff;cursor:pointer">🏖️ 度假开启' +
+                '<label class="switch" style="margin:0"><input type="checkbox" id="vacationSwitch" onchange="toggleVacationSimple(this.checked)"><span class="slider"></span></label>' +
               '</label>' +
               '<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#cfe8ff;cursor:pointer">🧘 原地待命' +
                 '<label class="switch" style="margin:0"><input type="checkbox" id="stayPutSwitch" onchange="toggleStayPutSimple(this.checked)"><span class="slider"></span></label>' +
               '</label>' +
             '</div>' +
-            '<div style="font-size:11px;color:#6d8bb0;margin-top:4px">💡 do的时候禁止离开或看手机哦</div>' +
+            '<div style="font-size:11px;color:#6d8bb0;margin-top:4px">🏖️ 度假时 AI 会跟在你身边，不自己乱跑</div>' +
             '<div id="groupMuteStatus" style="font-size:11px;color:#7fa8cf;margin-top:2px"></div>';
           el.insertBefore(card2, el.firstChild);
         }
@@ -183,17 +183,17 @@
         if (ais.length) {
           var ai = ais[0];
           Promise.all([
-            fetch('/api/ai/group_mute?user=' + encodeURIComponent(userName)).then(function(r) { return r.json(); }),
+            fetch('/api/ai/vacation?user=' + encodeURIComponent(userName)).then(function(r) { return r.json(); }),
             fetch('/api/ai/stay_put?user=' + encodeURIComponent(userName)).then(function(r) { return r.json(); })
           ])
           .then(function(results) {
-            var mutes = results[0].mutes || {};
+            var vacs = results[0].vacation || {};
             var stayPuts = results[1].stay_put || {};
-            var isMuted = !!mutes[ai];
+            var isVac = !!vacs[ai];
             var isStay = !!stayPuts[ai];
-            document.getElementById('groupMuteSwitch').checked = isMuted;
+            document.getElementById('vacationSwitch').checked = isVac;
             document.getElementById('stayPutSwitch').checked = isStay;
-            updateGroupStatus(isMuted, isStay);
+            updateGroupStatus(isVac, isStay);
           })
           .catch(function() {});
         } else {
@@ -359,12 +359,37 @@ window.toggleStayPutSimple = function(checked) {
   });
 };
 
-function updateGroupStatus(isMuted, isStay) {
+window.toggleVacationSimple = function(checked) {
+  var ais = mapData.user_ais[userName] || [];
+  if (!ais.length) { toast('请先登记 AI'); return; }
+  var ai = ais[0];
+  fetch('/api/ai/vacation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user: userName, ai: ai, on: checked })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    if (d.ok) {
+      toast(checked ? '🏖️ 度假模式已开启' : '⏹️ 度假模式已关闭');
+      updateGroupStatus(checked, document.getElementById('stayPutSwitch').checked);
+    } else {
+      toast('❌ ' + (d.msg || '设置失败'));
+      document.getElementById('vacationSwitch').checked = !checked;
+    }
+  })
+  .catch(function(e) {
+    toast('❌ ' + e.message);
+    document.getElementById('vacationSwitch').checked = !checked;
+  });
+};
+
+function updateGroupStatus(isVac, isStay) {
   var el = document.getElementById('groupMuteStatus');
   if (!el) return;
   var parts = [];
-  if (isMuted) parts.push('🔇 群聊已静音');
-  else parts.push('🔊 群聊在线');
+  if (isVac) parts.push('🏖️ 度假中');
+  else parts.push('💼 正常生活');
   if (isStay) parts.push('🧘 原地待命');
   else parts.push('⏳ 自由活动');
   el.textContent = '当前：' + parts.join(' · ');
