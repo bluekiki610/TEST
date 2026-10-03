@@ -666,7 +666,10 @@ class HomeJobIn(BaseModel): user: str = ""; ai: str = ""; building_id: str
 class SmsIn(BaseModel): sender: str; to: str; text: str
 class SmsClearIn(BaseModel): user: str; contact: str
 class PairsIn(BaseModel): user: str; pairs: list = []
-class PresenceIn(BaseModel): name: str; page: str = "main"
+class PresenceIn(BaseModel):
+    name: str
+    page: str = "main"
+    room: str = ""
 class AiKeyIn(BaseModel): user: str; provider: str = "deepseek"; key: str = ""; model: str = ""
 class AiProfileIn(BaseModel): owner: str; ai: str; persona: str = ""
 class WorldbookIn(BaseModel): owner: str; keys: str; content: str
@@ -706,15 +709,19 @@ async def health():
 async def set_presence(p: PresenceIn):
     name = (p.name or '').strip()
     page = (p.page or '').strip() or 'main'
+    room = (p.room or '').strip()
     if name:
-        data.setdefault("presence", {})[name] = {"page": page, "ts": time.time()}
+        data.setdefault("presence", {})[name] = {"page": page, "room": room, "ts": time.time()}
         data["presence"] = {k: v for k, v in data["presence"].items() if time.time() - v.get("ts", 0) < 25}
     return {"ok": True}
 
 @app.get("/api/presence")
 async def get_presence():
     data["presence"] = {k: v for k, v in data["presence"].items() if time.time() - v.get("ts", 0) < 25}
-    return {"presence": [{"name": k, "page": v.get("page", "main")} for k, v in data["presence"].items()]}
+    return {"presence": [
+        {"name": k, "page": v.get("page", "main"), "room": v.get("room", "")}
+        for k, v in data["presence"].items()
+    ]}
 
 @app.get("/api/messages")
 async def get_messages(room: str = "main", password: str = "", user: str = ""):

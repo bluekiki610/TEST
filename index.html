@@ -638,7 +638,8 @@ function myPage(){ var st={chatView:currentRoom==='main'?'main':currentRoom,mapV
 function pageLabel(p){ return p==='main'?'公共大厅':p; }
 function reportPresence(){
   var page=myPage();
-  api('/api/presence',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:userName,page:page})}).catch(function(){});
+  var room=currentRoom||'main';
+  api('/api/presence',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:userName,page:page,room:room})}).catch(function(){});
   api('/api/presence').then(function(d){
     var nowUsers={}; (d.presence||[]).forEach(function(u){ if(u.page===page&&u.name!==userName) nowUsers[u.name]=1; });
     var prev=lastPageUsers[page]||{};
