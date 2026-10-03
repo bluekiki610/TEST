@@ -638,7 +638,14 @@ function myPage(){ var st={chatView:currentRoom==='main'?'main':currentRoom,mapV
 function pageLabel(p){ return p==='main'?'公共大厅':p; }
 function reportPresence(){
   var page=myPage();
-  var room=currentRoom||'main';
+  // P4 修复：room 用"最后真实世界房间"，不是 UI 页面 
+  // 进入群聊（currentRoom == 'main'）时，room 保持上一次所在的实际房间 
+  var room='';
+  if(currentRoom && currentRoom !== 'main'){
+    room = currentRoom;
+  } else {
+    try{ room = localStorage.getItem('gc_last_world_room') || ''; }catch(e){}
+  }
   api('/api/presence',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:userName,page:page,room:room})}).catch(function(){});
   api('/api/presence').then(function(d){
     var nowUsers={}; (d.presence||[]).forEach(function(u){ if(u.page===page&&u.name!==userName) nowUsers[u.name]=1; });
@@ -1402,6 +1409,10 @@ function showOnline(){ api('/api/online').then(function(d){ var names=(d.online|
 function heartbeat(){ api('/api/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:userName,room:currentRoom})}).catch(function(){}); refreshOnline(); }
 function reportRoom(){ api('/api/current_room',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:currentRoom,password:roomPassword})}).catch(function(){}); }
 function switchRoom(room,pwd){ 
+  // P4 修复：记录最近一次进入的真实世界房间，排除 main（群聊） 
+  if(room && room !== 'main'){ 
+    try{ localStorage.setItem('gc_last_world_room', room); }catch(e){} 
+  } 
   currentRoom=room; 
   roomPassword=pwd||''; 
   localStorage.setItem('gc_room',room); 
@@ -1417,8 +1428,8 @@ function switchRoom(room,pwd){
   updateRoomUI(); 
   var area=document.getElementById('msgArea'); 
   if(area) area.innerHTML='<div class="sys-tip">⏳ 正在加载「'+esc(roomLabel(room))+'」…</div>'; 
-  // 大厅/建筑房间：服务端 restore 本来就返回 0，直接拉消息，省一次网络往返
-  var inBuilding = (room === 'main') || (buildingOfRoom(room) !== null);
+  // 大厅/建筑房间：服务端 restore 本来就返回 0，直接拉消息，省一次网络往返 
+  var inBuilding = (room === 'main') || (buildingOfRoom(room) !== null); 
   if(inBuilding){ 
     loadMessages(false, true); 
   } else { 

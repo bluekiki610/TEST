@@ -597,7 +597,8 @@ def check_pending_moves():
             mv = data["ai_pending_moves"][ai]
             if now >= mv.get("at_ts", 0):
                 r = mv.get("room", "")
-                if room_exists(r):
+                # P4 修复：main 是通信频道，不是物理地点
+                if r and r != "main" and room_exists(r):
                     data.setdefault("ai_location", {})[ai] = r
                     append_timeline(ai, f"你回到了 {r}")
                     append_visited(ai, r)
