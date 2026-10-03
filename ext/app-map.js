@@ -264,11 +264,11 @@
         if(l === undefined || l === null || l === '') l = '未知';
         if(l === 'main') l = '💬 群聊中（不在具体场所）';
         var vacMark = vacs[ai] ? ' <span style="color:#ffd166;font-size:11px">🏖️ 跟随中</span>' : '';
-        var line = '🤖 ' + esc(ai) + '：📍 ' + esc(l) + vacMark;
+        var line = '🤖 ' + esc(ai) + '：📍 ' + esc(displayRoom(l)) + vacMark;
         var p = pend[ai];
         if(p && p.room){
           var left = Math.max(0, Math.ceil((p.at_ts - Date.now()/1000)/60));
-          line += '　🚶 正赶往 ' + esc(p.room) + (left > 0 ? '（约 ' + left + ' 分钟）' : '');
+          line += '　🚶 正赶往 ' + esc(displayRoom(p.room)) + (left > 0 ? '（约 ' + left + ' 分钟）' : '');
         }
         line += ' <span style="color:#7fd0ff;cursor:pointer;font-size:12px" onclick="summonAIHere(currentRoom)">📣召唤</span>';
         txt += '<div style="padding:4px 0">' + line + '</div>';
@@ -627,7 +627,7 @@ function updateGroupStatus(isVac, isStay) {
         var inner='';
         Object.keys(rooms).forEach(function(r){
           var its=rooms[r]||[]; if(!its.length) return;
-          inner+='<div style="margin-bottom:6px;font-size:12px;color:#9fd8ff">📍 '+esc2(r)+'：<span style="font-size:14px;color:#ffd166">'+its.map(function(i){return i.icon;}).join(' ')+'</span></div>';
+          inner+='<div style="margin-bottom:6px;font-size:12px;color:#9fd8ff">📍 '+esc2(displayRoom(r))+'：<span style="font-size:14px;color:#ffd166">'+its.map(function(i){return i.icon;}).join(' ')+'</span></div>';
         });
         box.innerHTML+='<div>'+inner+'</div><div class="tip">这些装饰摆在家里，进房间格下方就能看到</div>';
         el.appendChild(box);
@@ -1159,7 +1159,7 @@ function updateGroupStatus(isVac, isStay) {
           var hall = r.indexOf('·会客厅')>=0;
           var granted = canEnterRoom(r);
           var stateCls = hall?'hall':(granted?'open':'locked');
-          var lockTxt = hall?'<span class="r-hall">🛋️ 公共会客区</span>':(granted?'<span class="r-hall">✅ 已开放</span>':'<span class="r-lock">🔒 私密·需申请</span>');
+          var lockTxt = hall?'<span class="r-hall">🏛️ Hall</span>':(granted?'<span class="r-hall">✅ 已开放</span>':'<span class="r-lock">🔒 私密·需申请</span>');
           var rdesc = (mapData.rooms && mapData.rooms[r] && mapData.rooms[r].description)||'';
           
           // 获取房间背景图
@@ -1175,7 +1175,7 @@ function updateGroupStatus(isVac, isStay) {
           
           html += '<div style="position:relative; z-index:2;">';
           html += '<span class="r-emoji">'+(hall?'🛋️':'🚪')+'</span>';
-          html += '<span class="r-name">'+esc(r)+'</span>'+lockTxt;
+          html += '<span class="r-name">'+esc(displayRoom(r))+'</span>'+lockTxt;
           if(rdesc) html += '<span style="font-size:10px;color:#6d8bb0;display:block;margin-top:2px">'+esc(rdesc.slice(0,12))+(rdesc.length>12?'…':'')+'</span>';
           html += '</div>';
           html += '</div>';
