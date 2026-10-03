@@ -577,7 +577,8 @@ def setup(app, data, helpers):
             scene_hint = "你刚跟着主人来到这个房间。看看四周，说一句自然的话（speak），不要太正式。"
         elif trigger == "arrive_sms":
             pres_owner = data.get('presence', {}).get(owner or '', {})
-            op = pres_owner.get('page', '') if isinstance(pres_owner, dict) else ''
+            # P4 修复：用 presence.room 判断主人是否真的到了这个房间
+            op = pres_owner.get('room', '') if isinstance(pres_owner, dict) else ''
             if op and same_building(op, target):
                 scene_hint = f"你按约定来到了 {target}，主人也在这里。说一句自然的话（speak）迎接他。"
             else:
@@ -806,6 +807,9 @@ def setup(app, data, helpers):
                     raw_go = action.get("go_to") or ""
                     cur_here = data.get("ai_location", {}).get(ai, "main")
                     got = _resolve_room(raw_go, cur_here)
+                    # P4 修复：main 不是物理地点，不执行 follow
+                    if got == "main":
+                        got = ""
 
                 # 如果解析到了有效房间，执行跟随逻辑
                 if action.get("follow") and got and got in data["rooms"]:
@@ -827,8 +831,9 @@ def setup(app, data, helpers):
                                         "role": "system",
                                         "time": room_time(cur0)
                                     })
-                                # 更新位置
-                                data.setdefault("ai_location", {})[ai] = got
+                                # 更新位置（P4 修复：main 不写）
+                                if got and got != "main":
+                                    data.setdefault("ai_location", {})[ai] = got
                                 track_visit(ai, got)
                                 append_timeline(ai, f"你跟着 {owner} 来到了 {got}")
                                 append_visited(ai, got)
@@ -857,11 +862,11 @@ def setup(app, data, helpers):
                 # 如果未触发跟随，或解析失败，则走普通发言逻辑（原样保留）
                 # ============================================================
                 data["messages"].setdefault(r, []).append({"sender": ai, "content": content[:1000], "role": "assistant", "time": room_time(r)})
-                # ...（后续原有的 print、active_room、track 等代码保持不变）
-                # 打印写入后该房间消息数量
                 print(f"📊 [EXEC] 房间 {r} 消息数: {len(data['messages'][r])}")
                 data["active_room"]["current"] = r
-                data.setdefault("ai_location", {})[ai] = r
+                # P4 修复：main 只作为通信频道，不写 ai_location
+                if r != "main":
+                    data.setdefault("ai_location", {})[ai] = r
                 track_visit(ai, r)
                 add_trail(ai, f"在 {r} 说话：{content[:40]}", room=r)
                 append_timeline(ai, f"你在 {r} 说：{content[:50]}")
@@ -869,7 +874,9 @@ def setup(app, data, helpers):
             elif act == "note":
                 r = room if room in data["rooms"] else "main"
                 data["notes"].setdefault(r, []).append({"author": ai, "text": content[:300], "time": now_str()})
-                data.setdefault("ai_location", {})[ai] = r
+                # P4 修复：main 只作为通信频道，不写 ai_location
+                if r != "main":
+                    data.setdefault("ai_location", {})[ai] = r
                 track_note(ai)
                 add_trail(ai, f"在 {r} 贴了张便签", room=r, tab="note")
                 append_timeline(ai, f"你在 {r} 贴了张便签：{content[:30]}")
@@ -879,7 +886,9 @@ def setup(app, data, helpers):
             elif act == "diary":
                 r = room if room in data["rooms"] else "main"
                 data["diaries"].setdefault(r, []).append({"author": ai, "text": content[:1000], "time": now_str()})
-                data.setdefault("ai_location", {})[ai] = r
+                # P4 修复：main 只作为通信频道，不写 ai_location
+                if r != "main":
+                    data.setdefault("ai_location", {})[ai] = r
                 data.setdefault("ai_diary_log", {})[ai] = time.time()
                 data.setdefault("ai_diary_dates", {})[ai] = now_bj().strftime("%Y-%m-%d")
                 add_trail(ai, f"在 {r} 写了随笔", room=r, tab="diary")
@@ -933,7 +942,7 @@ def setup(app, data, helpers):
                                 got = hall
                     except Exception:
                         pass
-                if got in data["rooms"]:
+                if got and got != "main" and got in data["rooms"]:
                     try:
                         amin = int(action.get("arrive_min") or 3)
                     except (TypeError, ValueError):
@@ -1207,6 +1216,10 @@ def setup(app, data, helpers):
             if trigger == "summon":
                 cur = data.get("ai_location", {}).get(ai, "main")
                 tgt = full_room_name(room) if room else cur
+                # P4 修复：main 不是物理地点，不能把 AI 召唤到群聊
+                if not tgt or tgt == "main":
+                    print(f"⏹️ [SUMMON] 目标为 main（群聊），不执行召唤")
+                    return
                 if cur != tgt:
                     if same_building(cur, tgt):
                         msg = action.get("content") or "来了～"
@@ -1480,6 +1493,9 @@ def setup(app, data, helpers):
 
     def _follow_arrive(ai, owner, go):
         try:
+            # P4 修复：main 是通信频道，不是物理地点，不允许跟随到这里
+            if not go or go == "main":
+                return
             # 获取当前位置
             cur = data.get("ai_location", {}).get(ai, "main")
             # 1. 添加离开消息（如果当前位置有效）
@@ -1514,7 +1530,8 @@ def setup(app, data, helpers):
             pres = {}
             for k, v in data.get('presence', {}).items():
                 if isinstance(v, dict):
-                    pres[k] = v.get('page', '')
+                    # P4 修复：用 presence.room（世界位置），不用 presence.page（UI 页面）
+                    pres[k] = v.get('room', '')
             for ai, fl in list(data.get('ai_follow', {}).items()):
                 owner = fl.get('owner'); go = fl.get('go_to')
                 if not owner or not go:
@@ -1621,8 +1638,9 @@ def setup(app, data, helpers):
                 owner_room = ''
                 if isinstance(_pv, dict):
                     owner_room = (_pv.get('room') or '').strip()
-                # room 为空 或 不是真实房间 → 不动 AI
-                if not owner_room or owner_room not in data.get('rooms', {}):
+                # room 为空、或 room == main、或不是真实房间 → 不动 AI
+                # main 是通信频道，不是世界地点
+                if not owner_room or owner_room == 'main' or owner_room not in data.get('rooms', {}):
                     continue
                 # ===== 结束 =====
 
@@ -1731,7 +1749,10 @@ def setup(app, data, helpers):
             try:
                 if time.time() >= mt.get('at_ts', 0) + 3:
                     data['ai_meeting'].pop(ai, None)
-                    data.setdefault('ai_location', {})[ai] = mt.get('room')
+                    _mt_room = mt.get('room')
+                    # P4 修复：main 不写 ai_location
+                    if _mt_room and _mt_room != 'main':
+                        data.setdefault('ai_location', {})[ai] = _mt_room
                     threading.Timer(1.0, drive_ai, args=(ai, 'arrive_sms', mt['room'], f'你到了 {mt["room"]}，按约定赴约')).start()
             except Exception:
                 pass
