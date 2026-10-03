@@ -1444,7 +1444,19 @@ def setup(app, data, helpers):
                 if ai == sender:
                     continue
                 loc = data.get("ai_location", {}).get(ai, "main")
-                if loc == room:
+                # ===== P4 修复：Vacation + 主人消息兜底 =====
+                # 当 AI 度假中、发送者是 AI 的主人、且主人 presence.room == 当前 room 时，
+                # 即使 AI 的 ai_location 瞬时不同步，也允许触发 chat。
+                # 这个兜底只对"度假 + 主人自己发的消息"生效，不影响其他 AI，也不写 ai_location。
+                _vacation_with_owner = False
+                if data.get("ai_vacation", {}).get(ai, False) and sender == owner_of_ai(ai):
+                    _pv = data.get("presence", {}).get(sender, {})
+                    if isinstance(_pv, dict):
+                        _owner_room = (_pv.get("room") or "").strip()
+                        if _owner_room and _owner_room == room:
+                            _vacation_with_owner = True
+                # ===== P4 修复结束 =====
+                if loc == room or _vacation_with_owner:
                     ai_count += 1
                     append_timeline(ai, f"{sender} 在 {room} 说：{(content or '')[:60]}")
                     if sender == owner:
@@ -1600,29 +1612,31 @@ def setup(app, data, helpers):
             print(f"[P4] vacation home activity error: {e}", flush=True)
 
     def _vacation_follow_check():
-        """P4：度假模式下，主人离开家时 AI 跟随主人"""
+        """P4：度假模式下，主人离开家时 AI 跟随主人（用 presence.room 而不是 presence.page）"""
         try:
-            pres = {}
-            for k, v in data.get('presence', {}).items():
-                if isinstance(v, dict):
-                    pres[k] = v.get('page', '')
-
             for owner, ais in data.get('user_ais', {}).items():
+                # ===== P4 修复：只读 presence.room 作为世界位置 =====
+                # page 是 UI 页面（"我的"/"map"/"main"），room 才是真人实际所在房间
+                _pv = data.get('presence', {}).get(owner, {})
+                owner_room = ''
+                if isinstance(_pv, dict):
+                    owner_room = (_pv.get('room') or '').strip()
+                # room 为空 或 不是真实房间 → 不动 AI
+                if not owner_room or owner_room not in data.get('rooms', {}):
+                    continue
+                # ===== 结束 =====
+
                 for ai in ais:
                     if not ai:
                         continue
                     if not data.get('ai_vacation', {}).get(ai, False):
                         continue
-                    # ===== stay_put 优先：完全静止，不跟随 =====
+                    # stay_put 优先：完全静止，不跟随
                     if data.get('ai_stay_put', {}).get(ai, False):
-                        continue
-                    # ===== 结束 =====
-                    owner_page = pres.get(owner, '')
-                    if not owner_page or owner_page == 'main':
                         continue
                     home_bid = _home_bid(owner)
                     home_rooms = data['buildings'][home_bid].get('rooms', []) if home_bid else []
-                    owner_at_home = bool(owner_page and owner_page in home_rooms)
+                    owner_at_home = bool(owner_room and owner_room in home_rooms)
                     ai_loc = data.get('ai_location', {}).get(ai, '')
 
                     if owner_at_home:
@@ -1644,19 +1658,18 @@ def setup(app, data, helpers):
                                 save_data()
                     else:
                         # 主人离开家 → AI 跟随
-                        if ai_loc != owner_page:
+                        if ai_loc != owner_room:
                             if ai_loc and ai_loc in data.get('rooms', {}):
                                 data['messages'].setdefault(ai_loc, []).append({
                                     'sender': 'system', 'content': f"🚶 {ai} 离开了 {ai_loc}",
                                     'role': 'system', 'time': room_time(ai_loc)
                                 })
-                            data['ai_location'][ai] = owner_page
-                            if owner_page in data.get('rooms', {}):
-                                data['messages'].setdefault(owner_page, []).append({
-                                    'sender': 'system', 'content': f"🚶 {ai} 跟着你来到了 {owner_page}",
-                                    'role': 'system', 'time': room_time(owner_page)
-                                })
-                            append_timeline(ai, f"你跟着主人来到了 {owner_page}（度假）")
+                            data['ai_location'][ai] = owner_room
+                            data['messages'].setdefault(owner_room, []).append({
+                                'sender': 'system', 'content': f"🚶 {ai} 跟着你来到了 {owner_room}",
+                                'role': 'system', 'time': room_time(owner_room)
+                            })
+                            append_timeline(ai, f"你跟着主人来到了 {owner_room}（度假）")
                             save_data()
         except Exception as e:
             print(f"[P4] vacation follow check error: {e}", flush=True)
@@ -1880,13 +1893,14 @@ def setup(app, data, helpers):
                                 if _vac:
                                     # 度假：只在主人在家时让 AI 在家活动；
                                     # 主人外出时跟随由 follow_watch 处理，这里不动
-                                    _owner_page = ''
+                                    # P4 修复：用 presence.room（世界位置），不用 presence.page（UI 页面）
+                                    _owner_room = ''
                                     _p = data.get('presence', {}).get(owner, {})
                                     if isinstance(_p, dict):
-                                        _owner_page = _p.get('page', '')
+                                        _owner_room = (_p.get('room') or '').strip()
                                     _home_bid = _home_bid(owner)
                                     _home_rooms = data['buildings'][_home_bid].get('rooms', []) if _home_bid else []
-                                    _owner_at_home = bool(_owner_page and _owner_page in _home_rooms)
+                                    _owner_at_home = bool(_owner_room and _owner_room in _home_rooms)
                                     if _owner_at_home:
                                         _vacation_home_activity(ai, owner)
                                 else:
