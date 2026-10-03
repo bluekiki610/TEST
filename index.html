@@ -327,13 +327,6 @@ var PAIR_COLORS = [
 var GROUP_TITLES = {general:'通用', voice:'语音与朗读', time:'时间', ai_model:'模型与服务', ai_persona:'我的 AI 人设', ai_profile:'用户画像', ai_kb:'知识库·世界书', ai_inject:'提示词注入', ai_toggle:'AI 集成总开关', world:'世界观', admin_clean:'数据清理', admin_backup:'备份与快照', admin_style:'气泡配色', admin_lock:'编辑权限'};
 function api(url, options) { return fetch(url, options).then(function(r){ if(!r.ok) return r.json().then(function(d){ throw new Error(d.detail || ('HTTP '+r.status)); }); return r.json(); }); }
 function esc(s) { var d=document.createElement('div'); d.textContent = s==null?'':String(s); return d.innerHTML; }
-// P5-UI：房间名显示映射（不改底层 key，只改 UI 显示）
-function displayRoom(r){
-  if(!r) return r;
-  if(r === 'main') return '社区群聊';
-  if(r.endsWith('·会客厅')) return 'Hall';
-  return r;
-}
 function compressImage(dataUrl, maxW, quality, cb){ var img=new Image(); img.onload=function(){ try{ var w=img.width||600,h=img.height||400; if(w>maxW){h=h*maxW/w;w=maxW;} var c=document.createElement('canvas'); c.width=Math.round(w); c.height=Math.round(h); c.getContext('2d').drawImage(img,0,0,c.width,c.height); cb(c.toDataURL('image/jpeg',quality)); }catch(err){ cb(dataUrl); } }; img.onerror=function(){ cb(dataUrl); }; img.src=dataUrl; }
 function toast(msg){ var t=document.createElement('div'); t.style.cssText='position:absolute;top:60px;left:50%;transform:translateX(-50%);background:rgba(10,25,45,.95);color:#bfe6ff;padding:8px 16px;border-radius:20px;font-size:13px;z-index:99;border:1px solid rgba(80,180,255,.4);transition:opacity .4s'; t.textContent=msg; document.querySelector('.app').appendChild(t); setTimeout(function(){t.style.opacity='0'; setTimeout(function(){t.remove();},400);},3500); }
 function roomLabel(r){ return displayRoom(r); }
@@ -371,7 +364,7 @@ function renderMemory(){
     var list=memoryData[key]||[];
     if(!list.length){ el.innerHTML='<div class="tip">这个分类还没有内容（显示你和你的 AI 写下的）</div>'; return; }
     list.forEach(function(it){
-      var loc=key==='stories'?('🏗️ '+(it.building||it.building_id)):('📍 '+displayRoom(it.room||''));
+      var loc=key==='stories'?('🏗️ '+(it.building||it.building_id)):('📍 '+(it.room||''));
       var delF=key==='notes'?delNoteItem:key==='diaries'?delDiaryItem:delStoryItem;
       var editF=key==='notes'?editNoteItem:key==='diaries'?editDiaryItem:editStoryItem;
       el.innerHTML+='<div class="note-card"><div class="n-author">'+esc(it.author)+' · '+esc(loc)+'</div><div class="n-text">'+esc(it.text)+'</div><div class="n-time">'+esc((it.time||'').slice(5,16))+'<span style="float:right"><span class="mem-edit" onclick="'+editF.name+'(\''+esc(it.room||'')+'\',\''+esc(it.building_id||'')+'\','+it.index+')">✏️ 编辑</span><span style="color:#ff6b6b;cursor:pointer" onclick="'+delF.name+'(\''+esc(it.room||'')+'\',\''+esc(it.building_id||'')+'\','+it.index+')">🗑️</span></span></div></div>';
@@ -633,7 +626,7 @@ function renderMe(){
   if(ail){
     var txt='';
     if(!ais.length){ txt='（先在设置里登记「我的 AI」）'; }
-    else { ais.forEach(function(ai){ var loc=(mapData.ai_location||{})[ai]||'未知'; var pend=(mapData.ai_pending_moves||{})[ai]; var fl=(mapData.ai_follow||{})[ai]; txt+='<div style="padding:4px 0">🤖 '+esc(ai)+'：📍 '+esc(displayRoom(loc))+(pend?'　🚶 正在赶往 '+esc(displayRoom(pend.room)):(fl?'　👣 会跟随你':''))+'</div>'; }); }
+    else { ais.forEach(function(ai){ var loc=(mapData.ai_location||{})[ai]||'未知'; var pend=(mapData.ai_pending_moves||{})[ai]; var fl=(mapData.ai_follow||{})[ai]; txt+='<div style="padding:4px 0">🤖 '+esc(ai)+'：📍 '+esc(loc)+(pend?'　🚶 正在赶往 '+esc(pend.room):(fl?'　👣 会跟随你':''))+'</div>'; }); }
     ail.innerHTML=txt;
   }
 }
@@ -731,7 +724,7 @@ function checkSms(){ api('/api/sms?user='+encodeURIComponent(userName)).then(fun
 // ===== 建筑对话 =====
 function hallRoomOf(bid){ var b=mapData.buildings[bid]; return (b?b.name:'')+'·会客厅'; }
 function toggleBChat(){ bChatOn=!bChatOn; document.getElementById('bChatWrap').style.display=bChatOn?'flex':'none'; if(bChatOn) loadBChat(); }
-function loadBChat(){ if(!currentBuilding||!bChatOn) return; var hall=hallRoomOf(currentBuilding); document.getElementById('bChatTitle').textContent=displayRoom(hall); api('/api/messages?room='+encodeURIComponent(hall)+'&user='+encodeURIComponent(userName)).then(function(d){ var el=document.getElementById('bChatList'); el.innerHTML=''; (d.messages||[]).forEach(function(m){ el.appendChild(renderBMsg(m)); }); el.scrollTop=el.scrollHeight; }).catch(function(){}); }
+function loadBChat(){ if(!currentBuilding||!bChatOn) return; var hall=hallRoomOf(currentBuilding); document.getElementById('bChatTitle').textContent=hall; api('/api/messages?room='+encodeURIComponent(hall)+'&user='+encodeURIComponent(userName)).then(function(d){ var el=document.getElementById('bChatList'); el.innerHTML=''; (d.messages||[]).forEach(function(m){ el.appendChild(renderBMsg(m)); }); el.scrollTop=el.scrollHeight; }).catch(function(){}); }
 function renderBMsg(m){ var d=document.createElement('div'); var isMe=m.sender===userName; d.style.cssText='display:flex;align-items:flex-end;margin-bottom:8px;'+(isMe?'justify-content:flex-end;':''); if(m.sender==='system'){ var b0=document.createElement('div'); b0.style.cssText='background:transparent;color:#6d8bb0;font-size:12px;text-align:center;width:100%'; b0.textContent=m.content; d.appendChild(b0); return d; } var av=document.createElement('div'); var a=avatars[m.sender]; av.style.cssText='width:26px;height:26px;border-radius:50%;background:#1d3150;display:flex;align-items:center;justify-content:center;font-size:12px;overflow:hidden;flex-shrink:0;margin:0 5px;'+(isMe?'order:2;':'order:0;'); av.innerHTML=a?'<img src="'+a+'" style="width:100%;height:100%;object-fit:cover">':esc((m.sender||'?').charAt(0)); var b=document.createElement('div'); b.style.cssText='max-width:68%;padding:7px 11px;border-radius:9px;font-size:14px;line-height:1.5;word-break:break-word;background:'+(isMe?'#95ec69':'#1c2f4d')+';color:'+(isMe?'#000':'#e6f1ff')+';'+(isMe?'':'border:1px solid rgba(255,255,255,.1);'); b.textContent=m.content; d.appendChild(av); d.appendChild(b); return d; }
 function sendBMsg(){ var inp=document.getElementById('bChatInput'); var content=inp.value.trim(); if(!content) return; var hall=hallRoomOf(currentBuilding); api('/api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sender:userName,content:content,role:'user',room:hall})}).then(function(){ inp.value=''; loadBChat(); }).catch(function(e){ toast('❌ '+e.message); }); }
 // ===== 轨迹 =====
@@ -904,7 +897,7 @@ function renderBuilding(){
           var hall=r.indexOf('·会客厅')>=0;
           var granted=canEnterRoom(r);
           var stateCls=hall?'hall':(granted?'open':'locked');
-          var lockTxt=hall?'<span class="r-hall">🏛️ Hall</span>':(granted?'<span class="r-hall">✅ 已开放</span>':'<span class="r-lock">🔒 私密·需申请</span>');
+          var lockTxt=hall?'<span class="r-hall">🛋️ 公共会客区</span>':(granted?'<span class="r-hall">✅ 已开放</span>':'<span class="r-lock">🔒 私密·需申请</span>');
           var rdesc=(mapData.rooms&&mapData.rooms[r]&&mapData.rooms[r].description)||'';
           
           // ===== 新增：获取房间背景图 =====
@@ -923,7 +916,7 @@ function renderBuilding(){
           // 内容区域（z-index 确保在背景层之上）
           html+='<div style="position:relative; z-index:2;">';
           html+='<span class="r-emoji">'+(hall?'🛋️':'🚪')+'</span>';
-          html+='<span class="r-name">'+esc(displayRoom(r))+'</span>'+lockTxt;
+          html+='<span class="r-name">'+esc(r)+'</span>'+lockTxt;
           if(rdesc) html+='<span style="font-size:10px;color:#6d8bb0;display:block;margin-top:2px">'+esc(rdesc.slice(0,12))+(rdesc.length>12?'…':'')+'</span>';
           html+='</div>';
           
@@ -948,7 +941,7 @@ function loadStoryModal(){
         return;
     }
     // 获取建筑名称用于标题显示
-    document.getElementById('storyTitle').textContent = displayRoom(room);
+    document.getElementById('storyTitle').textContent = room;
     
     // 请求该房间的剧情
     api('/api/story?room=' + encodeURIComponent(room)).then(function(d){
