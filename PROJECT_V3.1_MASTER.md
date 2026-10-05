@@ -1174,6 +1174,26 @@ THINK（仍为 Stub）
 9. 每个子阶段（C-0 / C-1 / C-2 ...）都必须独立审核。
 10. Preflight 阶段不允许写代码；Contract Change 阶段只允许改 Contract；编码阶段才允许改 `.py`。
 ```
+```
+## V3.1-INFRA架构规划
+
+Android 手机作为 Linkong 本地主服务器的长期方案
+手机负责运行 Python Linkong、世界状态和后台 AI 调度
+Zeabur 保留作为云端备用/灾备节点
+GitHub 负责代码版本，不作为实时世界状态数据库
+未来设计 Local Server / Cloud Backup / Health Check / Restore / Failover
+Android Server Prototype
+24 小时运行、自动启动、自动重启
+Cloudflare Tunnel 公网访问
+手机 → 云端增量备份
+新手机恢复世界
+最终目标：一部 Android 手机可以承载一个独立 Linkong 世界
+
+当前状态：PLANNED / 未实施
+
+不冻结具体硬件型号、Termux方案、备份协议、Cloudflare配置和故障切换实现。
+
+这些留到 INFRA-0 设计阶段再正式确定。
 
 ---
 
