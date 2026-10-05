@@ -9,7 +9,7 @@
 - 正式仓库：`bluekiki610/linkong`
 - 当前 V3.0/V3.1 开发与验收：`bluekiki610/TEST`
 - V3.0 P0-1 ~ P0-3B 已完成/接受。
-- V3.1 当前处于：**Phase B5 已完成（Context Connection 归档）**。
+- V3.1 当前处于：**Phase C 已完成（Goal / Motivation / Commitment / Intent 归档）**。
 - V3.1 Phase A（Global Architecture Inventory）已完成。
 - V3.1 Phase B1（Context Data Contract）已完成。
 - V3.1 Phase B2-1（StableCoreProvider）已完成。
@@ -49,7 +49,51 @@
   - 冻结 AI↔AI Commitment / Goal 只能由 AI B 自行形成
   - 冻结取消 / 冲突 / 过期 / 完成后的行为
   - 本阶段只做设计，**未修改任何 `.py`**
-- ⏳ V3.1 Phase C-1（Contract Change）待启动。
+- ✅ V3.1 Phase C-1（Goal / Motivation / Commitment / Intent Contract Change，CC-20260927-01）已 ACCEPTED。
+  - 新增 Contract §5A
+  - 冻结 Goal / Commitment 生命周期、来源、reason 语义
+  - 冻结 `hard` Commitment 正式定义（不等于"永远不可违背"）
+  - 冻结 Intent 结构化、不持久化，跨 Event 连续性由 Activity / Commitment / Goal 承担
+  - 明确 Memory Runtime 未启用，不得假设 Memory 已可产生 Goal
+  - 明确 Goal / Commitment 不得产生第二套平行数据库
+- ✅ V3.1 Phase C-2 Preflight（Goal / Commitment Implementation）已 ACCEPTED。
+  - 新增 `docs/C2_GOAL_COMMITMENT_IMPLEMENTATION_PREFLIGHT.md`
+- ✅ V3.1 Phase C-2 Contract Change（CC-20260927-02）已 ACCEPTED。
+  - 新增 Contract §5B
+  - 冻结 Goal / Commitment 最小结构
+  - 冻结 Runtime-only working state 身份（非 SOT）
+  - 冻结 Goal source 与 creation mechanism 分离（只提供 explicit programmatic create API）
+  - 冻结 Goal.reason / Intent.reason 语义分离
+  - 冻结 Motivation 纯函数 + 最小输入集合（Goal / Commitment / AgentState snapshot / now_ts）
+  - 冻结 Intent / IntentSet 最小结构
+  - 冻结 `think(context: AgentContext) -> IntentSet`
+  - 冻结 Stub 阶段 `IntentSet(candidates=[])` 合法性
+- ✅ V3.1 Phase C-2 Implementation 已 ACCEPTED。
+  - 新增 `agent/goal.py` / `agent/commitment.py` / `agent/motivation.py` / `agent/intent.py`
+  - 修改 `agent/runtime.py`：`think()` 迁移为 `-> IntentSet`
+  - 新增 `docs/test_c2_goal_commitment.py`
+  - Commit SHA：`033ecccfcb3efd90351b5baec6c87cde31a6e737`
+  - Commit SHA：`6e0963765983c7bfcff734505279b481edc99faf`
+- ✅ V3.1 Phase C-3 Tests Preflight 已 ACCEPTED。
+  - 输出 C-3 Tests Preflight Report
+  - 识别 12 项测试缺口（G1 ～ G12）
+- ✅ V3.1 Phase C-2 Runtime Working-State Contract Patch（CC-20260928-03）已 ACCEPTED。
+  - 新增 Contract §5B.5 补丁 / §5B.15 补丁 / §5B.16
+  - 明确 Goal / Commitment = AgentRuntime-owned Runtime working state
+  - 允许 `AgentRuntime` 持有 `_goals: Dict[str, Goal]` / `_commitments: Dict[str, Commitment]`
+  - 允许最小 holder API：add / get / list / replace
+  - 禁止自动 transition / 自动过期 / 冲突解决 / 优先级
+- ✅ V3.1 Phase C-2 Implementation Patch（Runtime Holder + Hardening）已完成。
+  - `agent/runtime.py` 新增 Runtime holder + 8 个 holder 方法
+  - Hardening：所有 get / list 返回 `deepcopy`，add / replace 存储 `deepcopy`
+  - 新增 `docs/test_c2_runtime_holder.py`（H1 ～ H17）
+  - Runtime Holder Commit SHA：`c76391e7fb0406c1aba5d50989363dd583877565`
+  - Runtime Holder Self-Test Commit SHA：`54d510250c91ef56fa267ae099c7826609e2cca0`
+- ✅ V3.1 Phase C-3 Tests Implementation 已完成，等待架构审核。
+  - 新增 `docs/test_c3_contract_structure.py`（A1 ～ A10 + B11 + C9 + C11 + D4 + D11 + F7）
+  - 新增 `docs/test_c3_boundary.py`（E1 ～ E11）
+  - 6 组测试全部通过
+- ✅ V3.1 Phase C-4 PROJECT Update 已完成。
 
 现在不要直接继续堆 autonomous behavior；
 先完成 Context Foundation，再进入 Agent Decision / Motivation 层。
@@ -809,7 +853,7 @@ LLM Cost ≈ LLM Call Count × Context Size
 - ✅ B5-1 Contract Change（CC-20260926-01，ACCEPTED）
 - ✅ B5-2 Runtime Connection（ACCEPTED）
 - ✅ B5-3 Tests（ACCEPTED）
-- ⏳ B5-4 PROJECT Update（本阶段）
+- ✅ B5-4 PROJECT Update（ACCEPTED）
 
 **V3.1 唯一正式 Context 数据链（B5-1 冻结，B5-2 落地，B5-3 验证）**：
 
@@ -829,64 +873,121 @@ ContextAssembler.assemble(...)
 AgentContext
   ↓
 THINK（仍为 Stub）
+```
+**B5-1 / B5-2 冻结的关键契约**：
 
-B5-1 / B5-2 冻结的关键契约：
+- V3.1 正式 Context 标准 = `AgentContext`（`agent/context.py`）。
+- `ContextLayers` = deprecated compatibility stub：
+  - 保留、不删除、不改名、不别名化；
+  - 新 V3.1 链不再引用。
+- Runtime 正式接口：
+  - `build_context(event: Event, now_ts: Optional[float] = None) -> AgentContext`
+  - `think(context: AgentContext) -> Optional[str]`
+- 数据来源冻结：
+  - `ai_name` = `self.ai_name`
+  - `owner` = `self.get_state().owner`
+  - `data` = `self._data`
+  - `now_ts` = 调用方注入，缺省由 `ContextAssembler` 使用当前时间
+  - `agent_state_dict` = `self.get_state().to_dict()`
+  - `recall_query` = 当前固定 `None`
 
-V3.1 正式 Context 标准 = AgentContext（agent/context.py）。
+**B5 之后仍然保持不变的边界**：
 
-ContextLayers = deprecated compatibility stub：
+- `LongTermProvider` = stub，返回 `[]`。
+- Memory Runtime 未启用；`ext_memory` / `ext_mem` 未修复、未修改。
+- `decision_constraints` = `None`。
+- `think()` 仍为 Stub，未调用 LLM。
+- 未实现 Goal / Motivation / Commitment / Activity / World Query / Scheduler / Brain / Prompt Adapter。
+- 未接 LLM / Decision / Action。
+- `ext_ai.build_ai_context()` 未接入 V3.1 正式链；旧路径保持独立。
+- 未产生"双 Context"。
 
-保留、不删除、不改名、不别名化；
+**B5 阶段涉及文件**（不含本阶段修改的 PROJECT）：
 
-新 V3.1 链不再引用。
+- B5-1：`docs/V3.1_ARCHITECTURE_CONTRACT.md`（+ `PROJECT_V3.1_MASTER.md`）
+- B5-2：`agent/runtime.py`（Commit `525973ae6ee00c02bbc43a608c6c27cb15b62ebb`）
+- B5-3：`docs/test_b5_runtime_context.py`（新增）
+- B5-4：`PROJECT_V3.1_MASTER.md`（本阶段）
 
-Runtime 正式接口：
+**C-2 阶段状态**：
+- ✅ C-0 Goal / Motivation / Commitment / Intent Contract Preflight 通过
+- ✅ C-1 Contract Change（CC-20260927-01）通过
+- ✅ C-2 Preflight 通过
+- ✅ C-2 Contract Change（CC-20260927-02）通过
+- ✅ C-2 Implementation 通过
+- ✅ C-2 Runtime Working-State Contract Patch Preflight 通过
+- ✅ C-2 Runtime Working-State Contract Patch（CC-20260928-03）通过
+- ✅ C-2 Implementation Patch（Runtime Holder + Hardening）通过
 
-build_context(event: Event, now_ts: Optional[float] = None) -> AgentContext
+**C-2 Implementation 交付物**：
 
-think(context: AgentContext) -> Optional[str]
+| 文件 | 类型 | 内容 |
+|------|------|------|
+| `agent/goal.py` | 新增 | Goal dataclass + `create_goal()` + `transition_goal()` |
+| `agent/commitment.py` | 新增 | Commitment dataclass + `create_commitment()` + `transition_commitment()` |
+| `agent/motivation.py` | 新增 | `MotivationSummary` + `compute_motivation()` 纯函数 |
+| `agent/intent.py` | 新增 | `Intent` / `IntentSet` + `make_intent()` + `make_empty_intent_set()` |
+| `agent/runtime.py` | 修改 | `think() -> IntentSet`；Runtime holder（`_goals` / `_commitments`）+ 8 个 holder 方法（hardening） |
+| `docs/test_c2_goal_commitment.py` | 新增 | T1 ～ T15 + 附加 |
+| `docs/test_c2_runtime_holder.py` | 新增 | H1 ～ H17（含 hardening H14 ～ H17） |
 
-数据来源冻结：
+**C-3 阶段状态**：
+- ✅ C-3 Tests Preflight 通过
+- ✅ C-3 Tests Implementation 完成（等待架构审核）
 
-ai_name = self.ai_name
+**C-3 Tests Implementation 交付物**：
 
-owner = self.get_state().owner
+| 文件 | 类型 | 内容 |
+|------|------|------|
+| `docs/test_c3_contract_structure.py` | 新增 | T-A Contract Structure + B11 + C9 + C11 + D4 + D11 + F7 |
+| `docs/test_c3_boundary.py` | 新增 | T-E Runtime / SOT / Boundary（E1 ～ E11） |
 
-data = self._data
+**C-3 覆盖缺口**：C-3 Preflight 报告的 12 项缺口（G1 ～ G12）**全部闭合**。
 
-now_ts = 调用方注入，缺省由 ContextAssembler 使用当前时间
+**6 组测试结果**：
 
-agent_state_dict = self.get_state().to_dict()
+| 测试文件 | 结果 |
+|---------|------|
+| `docs/test_c3_contract_structure.py` | ✅ 全部通过 |
+| `docs/test_c3_boundary.py` | ✅ 全部通过 |
+| `docs/test_c2_runtime_holder.py` | ✅ 全部通过（H1 ～ H17） |
+| `docs/test_c2_goal_commitment.py` | ✅ 全部通过 |
+| `docs/test_b3_context_assembler.py` | ✅ 全部通过 |
+| `docs/test_b5_runtime_context.py` | ✅ 全部通过 |
 
-recall_query = 当前固定 None
+**C-2 / C-3 完成后仍保持的边界**：
 
-B5 之后仍然保持不变的边界：
+- `think()` 仍为 Stub，返回 `IntentSet(candidates=[])`。
+- 未实现 THINK 内部逻辑。
+- 未接 LLM / Decision / Action。
+- 未启用 Memory Runtime。
+- 未创建数据库 / 持久化文件。
+- `LongTermProvider` 仍为 stub，返回 `[]`。
+- `decision_constraints` = `None`。
+- Goal / Commitment 是 Runtime-only working state，**非 Source of Truth**。
+- `main.data` 仍是唯一 World / Application SOT。
+- 重启会丢失 Goal / Commitment，是 C-2 已知限制。
+- 未实现自动 Goal / Commitment 创建。
+- 未实现自动 transition / 优先级 / 冲突解决。
+- 未实现 AI↔AI Commitment negotiation。
+- 未产生"双 Context"。
+- `ContextLayers` 保留为 deprecated compatibility stub。
 
-LongTermProvider = stub，返回 []。
+**C-2 / C-3 未冻结项**（必须留待后续 Contract Change）：
 
-Memory Runtime 未启用；ext_memory / ext_mem 未修复、未修改。
-
-decision_constraints = None。
-
-think() 仍为 Stub，未调用 LLM。
-
-未实现 Goal / Motivation / Commitment / Activity / World Query / Scheduler / Brain / Prompt Adapter。
-
-未接 LLM / Decision / Action。
-
-ext_ai.build_ai_context() 未接入 V3.1 正式链；旧路径保持独立。
-
-未产生"双 Context"。
-
-B5 阶段涉及文件（不含本阶段修改的 PROJECT）：
-
-B5-1：docs/V3.1_ARCHITECTURE_CONTRACT.md（+ PROJECT_V3.1_MASTER.md）
-
-B5-2：agent/runtime.py（Commit 525973ae6ee00c02bbc43a608c6c27cb15b62ebb）
-
-B5-3：docs/test_b5_runtime_context.py（新增）
-
-B5-4：PROJECT_V3.1_MASTER.md（本阶段）
+- Goal / Commitment 持久化方案（JSON / SQLite / 内存 + 快照 / 其他）。
+- Goal priority / conflict algorithm。
+- Decision 数据结构与接口。
+- Activity 生命周期。
+- World Query 接口。
+- Scheduler 接口。
+- AI↔AI Commitment negotiation。
+- 用户 Goal vs AI Goal 自动权衡。
+- 真实 THINK 的 candidate 数量要求。
+- Goal source 自动检测。
+- Goal creation 自动机制。
+- Motivation 最终算法。
+- Motivation 完整输入范围。
 
 下一阶段方向：
 
@@ -949,6 +1050,7 @@ universe_id
 
 现在不开发副本/多元宇宙。
 
+
 ## 18. 开发规则：每轮必须更新 PROJECT
 
 每一个 V3.1 开发轮次：
@@ -994,7 +1096,7 @@ PROJECT 是“架构地图”，不是代码实现说明书。
 
 - Phase A（Global Architecture Inventory）：✅ 已完成
 - Phase B（V3.1 Context Foundation）：✅ 已完成（含 B5-4 归档）
-- Phase C（Motivation / Goal / Commitment）：⏳ 下一步 Preflight
+- Phase C（Motivation / Goal / Commitment / Intent）：✅ 已完成（含 C-4 归档）
 - Phase D（World Query / Activity Lifecycle）：⏳ 未开始
 - Phase E（Memory Recall）：⏳ 未开始
 - Phase F（Brain / Decision）：⏳ 未开始
@@ -1093,7 +1195,7 @@ THINK（仍为 Stub）
 
 ---
 
-### 20.4 Phase C — Motivation / Goal / Commitment（下一步）
+### 20.4 Phase C — Motivation / Goal / Commitment / Intent（已完成）
 
 **目标：**
 让自主生活、移动、约会开始具有连续原因。
@@ -1123,6 +1225,39 @@ THINK（仍为 Stub）
 5. World Query 如何基于现有 `buildings` / `rooms` / `npcs` 提供查询接口。
 6. Scheduler 如何逐步替代散落 `threading.Timer` 与后台循环。
 7. 每一项的 Contract 边界与冻结时机。
+
+**Phase C 子阶段状态**：
+
+| 阶段 | 内容 | 状态 |
+|------|------|------|
+| C-0 | Goal / Motivation / Commitment / Intent Contract Preflight | ✅ |
+| C-1 | Contract Change（CC-20260927-01） | ✅ |
+| C-2 | Preflight | ✅ |
+| C-2 | Contract Change（CC-20260927-02） | ✅ |
+| C-2 | Implementation | ✅ |
+| C-2 | Runtime Working-State Contract Patch Preflight | ✅ |
+| C-2 | Runtime Working-State Contract Patch（CC-20260928-03） | ✅ |
+| C-2 | Implementation Patch（Runtime Holder + Hardening） | ✅ |
+| C-3 | Tests Preflight | ✅ |
+| C-3 | Tests Implementation | ✅ |
+| C-4 | PROJECT Update | ✅ |
+
+**Phase C 涉及的正式 Commit**：
+
+- C-2 Contract Change（CC-20260927-02）：`docs/V3.1_ARCHITECTURE_CONTRACT.md` 更新
+- C-2 Implementation：
+  - `033ecccfcb3efd90351b5baec6c87cde31a6e737`
+  - `6e0963765983c7bfcff734505279b481edc99faf`
+- C-2 Runtime Working-State Contract Patch（CC-20260928-03）：`docs/V3.1_ARCHITECTURE_CONTRACT.md` 更新
+- C-2 Runtime Holder：`c76391e7fb0406c1aba5d50989363dd583877565`
+- C-2 Runtime Holder Self-Test：`54d510250c91ef56fa267ae099c7826609e2cca0`
+- C-3 Tests Implementation：**待提交后填写**
+
+**Phase C 完成后进入下一阶段的前置条件**：
+
+- 必须先进行下一阶段的 Preflight。
+- 未通过 Preflight 前，禁止修改任何 `.py`。
+- 不允许跳过 Contract Change 直接编码。
 
 ---
 
@@ -1173,9 +1308,10 @@ THINK（仍为 Stub）
 8. 不允许绕过 Contract 直接修改 Runtime / Provider / Assembler。
 9. 每个子阶段（C-0 / C-1 / C-2 ...）都必须独立审核。
 10. Preflight 阶段不允许写代码；Contract Change 阶段只允许改 Contract；编码阶段才允许改 `.py`。
-```
-```
-## V3.1-INFRA架构规划
+
+---
+
+## V3.1-INFRA 架构规划
 
 Android 手机作为 Linkong 本地主服务器的长期方案
 手机负责运行 Python Linkong、世界状态和后台 AI 调度
@@ -1197,21 +1333,6 @@ Cloudflare Tunnel 公网访问
 
 ---
 
-## 说明
-
-本次替换后第 20 节的差异：
-
-| 原版问题 | 新版处理 |
-|---------|---------|
-| Phase B 列表与 Phase C-F 列表混在一起 | 拆为 20.3 ～ 20.7 五个小节 |
-| "Phase C Preflight（未开始）" 与 Phase C 定义重复 | 统一到 20.4，作为 Phase C 的 Preflight 要求 |
-| Phase B / C / D / E / F 顺序不清晰 | 按 20.2 ～ 20.7 时间顺序排列 |
-| 缺少"通用阶段推进规则" | 新增 20.8，明确 Preflight → Contract Change → 编码的顺序 |
-| Home / Frontend 位置易被误读 | 明确归入 20.3 末尾，作为 Phase B 之后的表现层方向 |
-
-**本阶段只提供替换文本，未修改任何 `.py`、`PROJECT`、`Contract`、前端、数据。**
-
----
 ## 21. 设计总原则
 
 > 不要让 AI 记得更少，而要让 AI 在需要的时候想起正确的东西。
@@ -1398,6 +1519,93 @@ ext_memory	调用失败（见 §22.6）
 当前没有完整历史搜索 API
 当前没有 IndexedDB 聊天归档
 当前没有“搜索结果 → 定位原消息”的完整链路
+
+### 22.14 C-2 阶段事实（2026-09-30）
+
+- C-2 Goal / Commitment / Motivation / Intent Implementation 已完成并 ACCEPTED。
+- Runtime Working-State Contract Patch（CC-20260928-03）已 ACCEPTED。
+- Runtime Holder + Hardening 已完成。
+- `agent/goal.py` / `agent/commitment.py` / `agent/motivation.py` / `agent/intent.py` 已落地。
+- `agent/runtime.py` 的 `think()` 迁移为 `-> IntentSet`。
+- `agent/runtime.py` 新增 Runtime holder（`_goals` / `_commitments`）+ 8 个 holder 方法。
+- Holder hardening：所有 get / list 返回 `deepcopy`，add / replace 存储 `deepcopy`。
+- `docs/test_c2_goal_commitment.py` / `docs/test_c2_runtime_holder.py` 已落地，全部通过。
+- C-2 涉及 Commit SHA：
+  - `033ecccfcb3efd90351b5baec6c87cde31a6e737`
+  - `6e0963765983c7bfcff734505279b481edc99faf`
+  - `c76391e7fb0406c1aba5d50989363dd583877565`
+  - `54d510250c91ef56fa267ae099c7826609e2cca0`
+- 未实现 THINK / Decision / Action / Activity / World Query / Scheduler / AI↔AI。
+- 未接 LLM / 网络。
+- 未启用 Memory Runtime。
+- 未创建数据库 / 持久化文件。
+- 未修改 `main.data`。
+- `LongTermProvider` 仍为 stub，返回 `[]`。
+- `decision_constraints` = `None`。
+- Goal / Commitment = Runtime-only working state，非 SOT。
+- 重启会丢失 Goal / Commitment，是 C-2 已知限制。
+
+### 22.15 C-3 阶段事实（2026-09-30）
+
+- C-3 Tests Preflight 已 ACCEPTED。
+- C-3 Tests Implementation 已完成，等待架构审核。
+- C-3 只新增测试文件，未修改任何业务 `.py`。
+- 新增测试：
+  - `docs/test_c3_contract_structure.py`（T-A Contract Structure + B11 + C9 + C11 + D4 + D11 + F7）
+  - `docs/test_c3_boundary.py`（T-E Runtime / SOT / Boundary，E1 ～ E11）
+- C-3 Preflight 报告的 12 项缺口（G1 ～ G12）**全部闭合**。
+- 6 组测试全部通过：
+  - `test_c3_contract_structure.py`
+  - `test_c3_boundary.py`
+  - `test_c2_runtime_holder.py`
+  - `test_c2_goal_commitment.py`
+  - `test_b3_context_assembler.py`
+  - `test_b5_runtime_context.py`
+- C-3 未修改 Contract / PROJECT / `agent/*.py` / `main.py` / `ext_*` / 前端 / Memory。
+- C-3 未实现 THINK / Decision / Action / Activity / World Query / Scheduler / AI↔AI。
+- C-3 未接 LLM / 网络。
+- C-3 未启用 Memory Runtime。
+- C-3 未创建数据库 / 持久化文件。
+- C-3 未修改 `main.data`。
+
+### 22.16 Phase C 完成状态（2026-09-30）
+
+- Phase C（Goal / Motivation / Commitment / Intent）**全部子阶段已完成**。
+- C-0 ～ C-4 全部状态：✅。
+- Phase C 冻结的 Contract：§5A（CC-20260927-01）+ §5B（CC-20260927-02）+ §5B.5 / §5B.15 / §5B.16 补丁（CC-20260928-03）。
+- Phase C 完成后仍保持的边界：
+  - `think()` 仍为 Stub，返回 `IntentSet(candidates=[])`。
+  - `LongTermProvider` = stub，返回 `[]`。
+  - Memory Runtime 未启用。
+  - `decision_constraints` = `None`。
+  - 未实现 THINK / Decision / Action / Activity / World Query / Scheduler / AI↔AI。
+  - 未接 LLM / 网络。
+  - 未创建数据库 / 持久化文件。
+  - 未修改 `main.data`。
+  - Goal / Commitment = Runtime-only working state。
+  - 未产生"双 Context"。
+  - `ContextLayers` 保留为 deprecated compatibility stub。
+- Phase C 未冻结项（必须留待后续 Contract Change）：
+  - Goal / Commitment 持久化方案。
+  - Goal priority / conflict algorithm。
+  - Decision 数据结构与接口。
+  - Activity 生命周期。
+  - World Query 接口。
+  - Scheduler 接口。
+  - AI↔AI Commitment negotiation。
+  - 用户 Goal vs AI Goal 自动权衡。
+  - 真实 THINK 的 candidate 数量要求。
+  - Goal source 自动检测。
+  - Goal creation 自动机制。
+  - Motivation 最终算法。
+  - Motivation 完整输入范围。
+
+**下一阶段方向**：
+
+- 不直接进入 Phase D 实现。
+- 下一阶段（Phase D：World Query / Activity Lifecycle）必须先进行 Preflight。
+- Preflight 通过后才可进入 Contract Change。
+- Contract Change 通过后才可进入编码。
 
 ---
 
