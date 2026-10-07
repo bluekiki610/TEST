@@ -52,6 +52,18 @@ D-1 静态验证策略（Contract D1G-11 ～ D1G-15、D1G-16 ～ D1G-22）
 
     允许：dict / list 字面量构造、列表推导、`.get()`、`next()`、`len()`、切片。
 
+    ⚠️ 一处**刻意且经审核允许**的例外（D-1 Implementation Hardening / D1-H3）：
+
+        `copy.deepcopy` 用于生成**真正的安全副本**。
+
+        理由：`dict(...)` / `list(...)` 只是浅复制，nested dict / list 仍会
+        引用 main.data 内部对象，违反 `WQ-78` / `WQ-79` / `WQ-103`
+        （"任何嵌套结构都不能暴露 main.data 内部可变引用"）。
+
+        `deepcopy` 是**构造新对象**，不是就地修改输入 ——
+        因此不违反"只读"（WQ-5 ～ WQ-9），也不属于任何被禁的写入模式。
+        该例外已在 Contract §5D.16.3 登记（`D1G-23`）。
+
     因此：本模块**不通过调用会就地修改的现有 helper 完成反查**，
     反查逻辑自行实现（列表推导 + next），代价是重复少量线性扫描逻辑。
 
@@ -83,6 +95,7 @@ World Fact 的来源分类（Contract §5D.1）
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -328,26 +341,214 @@ def _names_equal(left: str, right: str) -> bool:
     return _as_str(left).strip() == _as_str(right).strip()
 
 
-def _owner_invites(requester: str, data: Dict[str, Any]) -> bool:
+def _requester_is_owner(owner: str, requester: str, data: Dict[str, Any]) -> bool:
     """
-    最小可见性判断（WQ-94）：requester 是否是该 owner 的 AI，
-    或 requester 本人就是该 owner。
+    最小可见性（WQ-94）：requester 本人就是该 owner。
 
-    只使用 user_ais（现有事实），不引入新的关系模型。
+    ⚠️ D1-H1 修正要点：
+        本函数**必须**接收目标 owner 并与之比较，
+        而不是判断「requester 是否是系统里认识的任何人」。
     """
-    user_ais = _as_dict(data.get("user_ais"))
+    target_owner = _as_str(owner).strip()
     req = _as_str(requester).strip()
-    if not req:
+    if not target_owner or not req:
         return False
-    if req in user_ais:
-        return True
-    for _owner, ais in user_ais.items():
+    return _names_equal(target_owner, req)
+
+
+def _requester_owns_agent(ai_name: str, requester: str, data: Dict[str, Any]) -> bool:
+    """最小可见性（WQ-94）：requester 是 ai_name 的 owner。"""
+    target = _as_str(ai_name).strip()
+    req = _as_str(requester).strip()
+    if not target or not req:
+        return False
+    user_ais = _as_dict(data.get("user_ais"))
+    for owner, ais in user_ais.items():
+        if not _names_equal(owner, req):
+            continue
         if not isinstance(ais, list):
             continue
         for name in ais:
-            if _names_equal(name, req):
+            if _names_equal(name, target):
                 return True
     return False
+
+
+def _requester_is_agent(ai_name: str, requester: str, data: Dict[str, Any]) -> bool:
+    """最小可见性（WQ-94）：requester 就是该 AI 本身。"""
+    return _names_equal(ai_name, requester)
+
+
+def _requester_has_same_owner(
+    ai_name: str,
+    requester: str,
+    data: Dict[str, Any],
+) -> bool:
+    """最小可见性（WQ-94）：requester 与该 AI 同属一个 owner（如同一位主人的多个 AI）。"""
+    target_owner = _owner_of(ai_name, data)
+    if not target_owner:
+        return False
+    if _names_equal(target_owner, requester):
+        return True
+    # requester 本身也是一个 AI，且属于同一个 owner
+    if _names_equal(_owner_of(requester, data), target_owner):
+        return True
+    return False
+
+
+def _can_view_agent_private(
+    ai_name: str,
+    requester: str,
+    data: Dict[str, Any],
+) -> bool:
+    """
+    「自己的状态」范围（WQ-94 白名单 B）：
+        requester == 该 AI
+        OR requester 是该 AI 的 owner
+        OR requester 与该 AI 同属一个 owner
+
+    超出该范围 → 其他 AI / 用户的私人状态不可见（FORBIDDEN）。
+    """
+    return (
+        _requester_is_agent(ai_name, requester, data)
+        or _requester_owns_agent(ai_name, requester, data)
+        or _requester_has_same_owner(ai_name, requester, data)
+    )
+
+
+def _is_public_flag(flag: Any) -> bool:
+    """
+    公开性标志判定（WQ-94 白名单 C / D）。
+
+    语义：**只有显式声明为公开**才算公开。
+    缺失 / 非 True 一律视为**不公开**（fail-closed）。
+    """
+    return flag is True
+
+
+def _room_is_public(room: str, data: Dict[str, Any]) -> bool:
+    """
+    房间是否公开（WQ-94 白名单 D「公开房间」）。
+
+    公开条件（沿用现有 schema 的事实，不新造字段）：
+        * "main"（公共大厅）
+        * 房间名以 "·会客厅" 结尾（建筑公共会客厅）
+        * 所属建筑 type == "npc"（公共 NPC 建筑）
+        * 所属建筑无 owner（无主建筑）
+        * 所属建筑显式 public / is_public 标志为 True
+
+    其余一律**不公开**（fail-closed）。
+    """
+    resolved = _as_str(room).strip()
+    if not resolved:
+        return False
+    if resolved == "main":
+        return True
+    if resolved.endswith("·会客厅"):
+        return True
+
+    bid = _building_of_room(resolved, data)
+    if not bid:
+        # 无法归属到建筑：fail-closed（不假定公开）
+        return False
+
+    building = _as_dict(_as_dict(data.get("buildings")).get(bid))
+    if _as_str(building.get("type")) == "npc":
+        return True
+    if not _as_str(building.get("owner")):
+        return True
+    if _is_public_flag(building.get("public")) or _is_public_flag(building.get("is_public")):
+        return True
+    return False
+
+
+def _building_is_public(building_id: str, data: Dict[str, Any]) -> bool:
+    """建筑是否公开（WQ-94 白名单 C「公开建筑」）。判据与 `_room_is_public` 一致。"""
+    bid = _as_str(building_id).strip()
+    if not bid:
+        return False
+    building = _as_dict(_as_dict(data.get("buildings")).get(bid))
+    if not building:
+        return False
+    if _as_str(building.get("type")) == "npc":
+        return True
+    if not _as_str(building.get("owner")):
+        return True
+    if _is_public_flag(building.get("public")) or _is_public_flag(building.get("is_public")):
+        return True
+    return False
+
+
+def _can_view_building(
+    building_id: str,
+    requester: str,
+    data: Dict[str, Any],
+) -> bool:
+    """建筑可见性：公开建筑对所有人可见；私人建筑仅 owner / owner 的 AI 可见。"""
+    if _building_is_public(building_id, data):
+        return True
+    building = _as_dict(_as_dict(data.get("buildings")).get(building_id))
+    owner = _as_str(building.get("owner"))
+    if not owner:
+        return True
+    if _requester_is_owner(owner, requester, data):
+        return True
+    return _names_equal(_owner_of(requester, data), owner)
+
+
+def _can_view_room(
+    room: str,
+    requester: str,
+    data: Dict[str, Any],
+) -> bool:
+    """房间可见性：公开房间对所有人可见；私人房间仅所属建筑的 owner / 其 AI 可见。"""
+    resolved = _as_str(room).strip()
+    if not resolved:
+        return False
+    if _room_is_public(resolved, data):
+        return True
+    bid = _building_of_room(resolved, data)
+    if not bid:
+        # 无法归属：fail-closed（不假定公开）
+        return False
+    building = _as_dict(_as_dict(data.get("buildings")).get(bid))
+    owner = _as_str(building.get("owner"))
+    if not owner:
+        return True
+    if _requester_is_owner(owner, requester, data):
+        return True
+    return _names_equal(_owner_of(requester, data), owner)
+
+
+def _agent_is_publicly_visible(ai_name: str, data: Dict[str, Any]) -> bool:
+    """
+    「公开可见人员」判定（WQ-94 白名单 E）：
+
+    AI 当前所在是**公开房间**时，其「在场」这一事实对所有人可见。
+    否则其在场信息只对其 owner 范围可见。
+    """
+    loc = _agent_location(ai_name, data)
+    if not loc:
+        return False
+    if loc == "main" or loc.endswith("·会客厅"):
+        return True
+    return _room_is_public(loc, data)
+
+
+def _copy_value(value: Any) -> Any:
+    """
+    D1-H3：返回**真正的安全副本**（深拷贝）。
+
+    浅复制（`dict(...)` / `list(...)`）会让 nested dict / list 继续引用
+    main.data 内部对象，违反 `WQ-78` / `WQ-79` / `WQ-103`。
+
+    注意：这是**构造新对象**，不是就地修改输入 —— 因此不违反只读要求。
+    """
+    try:
+        return copy.deepcopy(value)
+    except Exception:
+        # 深拷贝失败时 fail-closed：不返回可能穿透的引用
+        return None
 
 
 def _owner_of(agent: str, data: Dict[str, Any]) -> str:
@@ -595,9 +796,30 @@ def describe_capabilities() -> Dict[str, Any]:
             "event production or consumption",
             "memory recall",
         ),
+        # D1-H2：诚实声明实际执行的可见性范围（WQ-94 白名单 A ～ E）
+        "visibility_whitelist": (
+            "A. 自己的位置",
+            "B. 自己的状态",
+            "C. 公开建筑",
+            "D. 公开房间",
+            "E. 公开可见人员",
+        ),
+        "visibility_policy": {
+            "default": "fail-closed（缺省不可见）",
+            "public_building": "type == npc / 无 owner / public == True",
+            "public_room": "main / 以 ·会客厅 结尾 / 所属建筑公开",
+            "own_state": "requester == AI 本人 / 其 owner / 同一 owner 范围",
+            "private_state": "其他 AI 的私人状态 → FORBIDDEN",
+            "private_room": "非公开房间 → FORBIDDEN（除非 owner 范围）",
+            "unresolvable_room": "无法归属到建筑 → 按不公开处理（fail-closed）",
+        },
+        "return_value_policy": (
+            "value 一律为深拷贝（D1-H3）：不含 main.data 内部可变对象引用"
+        ),
         "notes": (
             "本模块只回答「现在是什么」。"
             "不回答「应该去哪 / 选谁 / 做什么」（WQ-90 ～ WQ-93）。"
+            "只读 + 有边界的世界认知（不是只读的世界数据库查询器）。"
         ),
     }
 
@@ -703,14 +925,20 @@ def get_agent_owner(
     """
     AI 的 owner（`FACT`，来自 main.data.user_ais 的静态事实）。
 
+    ⚠️ 可见性（D1-H2）：归属关系属**私人**信息。
+        仅在 requester 与该 AI 属于同一可见范围时返回；
+        其余 → `FORBIDDEN`。
+
     注意：不依赖 main.owner_of_ai 的猴补丁版本（D0-036）。
     """
     src = "main.data.user_ais"
     ts = now_ts if isinstance(now_ts, (int, float)) else 0.0
     owner = _owner_of(agent, data)
-    if owner:
-        return _result(value=owner, status=STATUS_FOUND, source=src, derived=False, as_of=ts)
-    return _absent(src, ts, notes="未在 user_ais 中找到该 AI。")
+    if not owner:
+        return _absent(src, ts, notes="未在 user_ais 中找到该 AI。")
+    if not _can_view_agent_private(agent, requester, data):
+        return _forbidden(src, ts)
+    return _result(value=owner, status=STATUS_FOUND, source=src, derived=False, as_of=ts)
 
 
 def get_building(
@@ -723,9 +951,12 @@ def get_building(
     按 id / name / name 子串查找建筑（`FACT`）。
 
     可能的 status：
-        FOUND      唯一命中 → value 为建筑 dict 的**副本**
+        FOUND      唯一命中 → value 为建筑 dict 的**深拷贝**
         AMBIGUOUS  多个候选 → 必须消歧（不得替调用方挑一个）
         ABSENT     无命中
+
+    ⚠️ 可见性（D1-H2 / WQ-94 白名单 C「公开建筑」）：
+        私人建筑仅 owner / owner 的 AI 可见；其余 → `FORBIDDEN`。
     """
     src = "main.data.buildings"
     ts = now_ts if isinstance(now_ts, (int, float)) else 0.0
@@ -735,29 +966,31 @@ def get_building(
         return _absent(src, ts, notes=f"未找到匹配 {key!r} 的建筑。")
 
     if len(candidates) > 1:
+        # 消歧候选本身也是事实；仅暴露 requester 有权看到的候选
+        visible = [bid for bid in candidates if _can_view_building(bid, requester, data)]
+        if not visible:
+            return _forbidden(src, ts)
         return _result(
-            value=sorted(candidates),
+            value=sorted(visible),
             status=STATUS_AMBIGUOUS,
             source=src,
             derived=False,
             as_of=ts,
-            notes=f"{key!r} 命中 {len(candidates)} 个建筑，需要消歧。",
+            notes=f"{key!r} 命中 {len(visible)} 个建筑，需要消歧。",
         )
 
     bid = candidates[0]
+    if not _can_view_building(bid, requester, data):
+        return _forbidden(src, ts)
+
     building = _as_dict(_as_dict(data.get("buildings")).get(bid))
-    # 复制为新的 dict（浅拷贝 + 列表重建），不暴露 main.data 内部对象引用
-    copy_of_building = {
-        k: (list(v) if isinstance(v, list) else v)
-        for k, v in building.items()
-    }
     return _result(
-        value=copy_of_building,
+        value=_copy_value(building),
         status=STATUS_FOUND,
         source=src,
         derived=False,
         as_of=ts,
-        notes=f"building_id = {bid}",
+        notes=f"building_id = {bid}（value 为深拷贝，不含 main.data 内部引用）。",
     )
 
 
@@ -767,7 +1000,13 @@ def list_building_rooms(
     requester: str = "",
     now_ts: Optional[float] = None,
 ) -> QueryResult:
-    """某建筑当前拥有的房间全名列表（`FACT`，直接读取 buildings[bid].rooms）。"""
+    """
+    某建筑当前拥有的房间全名列表（`FACT`，直接读取 buildings[bid].rooms）。
+
+    ⚠️ 可见性（D1-H2）：
+        私人建筑的房间清单只对 owner / owner 的 AI 可见；其余 → `FORBIDDEN`。
+    返回值同时做深拷贝（list 为新列表）。
+    """
     src = "main.data.buildings[*].rooms"
     ts = now_ts if isinstance(now_ts, (int, float)) else 0.0
 
@@ -775,16 +1014,23 @@ def list_building_rooms(
     if not candidates:
         return _absent(src, ts, notes=f"未找到匹配 {building!r} 的建筑。")
     if len(candidates) > 1:
+        visible = [bid for bid in candidates if _can_view_building(bid, requester, data)]
+        if not visible:
+            return _forbidden(src, ts)
         return _result(
-            value=sorted(candidates),
+            value=sorted(visible),
             status=STATUS_AMBIGUOUS,
             source=src,
             derived=False,
             as_of=ts,
-            notes=f"{building!r} 命中 {len(candidates)} 个建筑，需要消歧。",
+            notes=f"{building!r} 命中 {len(visible)} 个建筑，需要消歧。",
         )
 
-    rooms = _as_dict(_as_dict(data.get("buildings")).get(candidates[0])).get("rooms")
+    bid = candidates[0]
+    if not _can_view_building(bid, requester, data):
+        return _forbidden(src, ts)
+
+    rooms = _as_dict(_as_dict(data.get("buildings")).get(bid)).get("rooms")
     room_list = [r for r in rooms if isinstance(r, str)] if isinstance(rooms, list) else []
     return _result(
         value=room_list,
@@ -792,6 +1038,7 @@ def list_building_rooms(
         source=src,
         derived=False,
         as_of=ts,
+        notes="value 为新列表（深拷贝）。",
     )
 
 
@@ -804,8 +1051,15 @@ def get_room(
     """
     房间信息（`FACT`）。
 
-    注意：visibility 最小规则（WQ-94）—— 非公开房间仅对
-    owner 本人 / owner 的 AI 可见；否则返回 FORBIDDEN。
+    ⚠️ 可见性（D1-H2 / WQ-94 白名单 D「公开房间」）：
+
+        公开房间 → 对所有 requester 可见
+        私人房间 → 仅所属建筑的 owner、或该 owner 名下的 AI 可见
+        其余     → `FORBIDDEN`（不返回任何房间内容）
+
+        D1-H1 修正：授权判断以**目标房间所属建筑的 owner** 为中心，
+        **不是**判断「requester 是否是系统里认识的任何人」。
+        fail-closed：无法归属到建筑时按不公开处理。
     """
     src = "main.data.rooms"
     ts = now_ts if isinstance(now_ts, (int, float)) else 0.0
@@ -814,25 +1068,24 @@ def get_room(
     if not resolved:
         return _absent(src, ts, notes=f"未找到房间 {room!r}。")
 
-    if resolved != "main" and not resolved.endswith("·会客厅"):
-        bid = _building_of_room(resolved, data)
-        building = _as_dict(_as_dict(data.get("buildings")).get(bid)) if bid else {}
-        btype = _as_str(building.get("type"))
-        owner = _as_str(building.get("owner"))
-        is_public = btype == "npc" or not owner
-        if not is_public:
-            req = _as_str(requester).strip()
-            if not (_names_equal(req, owner) or _owner_invites(req, data)):
-                return _forbidden(src, ts)
+    if not _can_view_room(resolved, requester, data):
+        return _forbidden(src, ts)
 
     info = _as_dict(_as_dict(data.get("rooms")).get(resolved))
-    copy_of_info = {
-        k: (list(v) if isinstance(v, list) else v)
+    # 深拷贝 + 剔除密码字段（Presentation 之外也不应泄漏凭据）
+    safe = {
+        k: _copy_value(v)
         for k, v in info.items()
-        # 不返回密码字段（Presentation 之外也不应泄漏）
         if k != "password"
     }
-    return _result(value=copy_of_info, status=STATUS_FOUND, source=src, derived=False, as_of=ts)
+    return _result(
+        value=safe,
+        status=STATUS_FOUND,
+        source=src,
+        derived=False,
+        as_of=ts,
+        notes="已剔除 password 字段。",
+    )
 
 
 # =========================================================
@@ -850,11 +1103,17 @@ def list_users_present_in_room(
     当前在该房间的**真人**（`DERIVED`：presence 经观测时间窗口计算）。
 
     presence 只包含真人（G-4）；AI 请用 list_agents_in_room，NPC 请用 NPC 查询。
+
+    ⚠️ 可见性（D1-H2 / WQ-94 白名单 D「公开房间」）：
+        仅**公开房间**的在场人员对所有人可见；私人房间 → `FORBIDDEN`。
     """
     src = "main.data.presence"
     ts = now_ts if isinstance(now_ts, (int, float)) else 0.0
     resolved = _resolve_room(room, data)
     target = resolved or _as_str(room).strip()
+
+    if not _can_view_room(target, requester, data):
+        return _forbidden(src, ts)
 
     presence = _as_dict(data.get("presence"))
     names = [
@@ -883,12 +1142,19 @@ def list_agents_in_room(
     """
     当前在该房间的 AI（`DERIVED`：由 ai_location 反查）。
 
+    ⚠️ 可见性（D1-H2 / WQ-94 白名单 D / E）：
+        仅**公开房间**的在场 AI 对所有人可见；
+        私人房间 → 仅该建筑 owner 范围可见，否则 `FORBIDDEN`。
+
     无法解析自身位置的 AI 不会出现在 value 中，但仍会记入 notes（不假装不存在）。
     """
     src = "main.data.ai_location"
     ts = now_ts if isinstance(now_ts, (int, float)) else 0.0
     resolved = _resolve_room(room, data)
     target = resolved or _as_str(room).strip()
+
+    if not _can_view_room(target, requester, data):
+        return _forbidden(src, ts)
 
     locs = _as_dict(data.get("ai_location"))
     found = [
@@ -922,6 +1188,9 @@ def list_agents_in_building(
 
     ⚠️ 高频限制（WQ-81 / WQ-82）：禁止接入任何 tick / loop。
 
+    ⚠️ 可见性（D1-H2 / WQ-94 白名单 C / E）：
+        私人建筑内的 AI 清单只对 owner 范围可见；其余 → `FORBIDDEN`。
+
     这不是 `UNSUPPORTED` —— 当前 schema 确实可以回答（架构侧 Q-U3 裁决）。
     """
     src = "main.data.ai_location + main.data.buildings[*].rooms"
@@ -931,16 +1200,22 @@ def list_agents_in_building(
     if not candidates:
         return _absent(src, ts, notes=f"未找到匹配 {building!r} 的建筑。")
     if len(candidates) > 1:
+        visible = [bid for bid in candidates if _can_view_building(bid, requester, data)]
+        if not visible:
+            return _forbidden(src, ts)
         return _result(
-            value=sorted(candidates),
+            value=sorted(visible),
             status=STATUS_AMBIGUOUS,
             source=src,
             derived=True,
             as_of=ts,
-            notes=f"{building!r} 命中 {len(candidates)} 个建筑，需要消歧。",
+            notes=f"{building!r} 命中 {len(visible)} 个建筑，需要消歧。",
         )
 
     bid = candidates[0]
+    if not _can_view_building(bid, requester, data):
+        return _forbidden(src, ts)
+
     building_obj = _as_dict(_as_dict(data.get("buildings")).get(bid))
     rooms = building_obj.get("rooms")
     room_set = [r for r in rooms if isinstance(r, str)] if isinstance(rooms, list) else []
@@ -995,8 +1270,12 @@ def list_npcs_in_building(
     """
     某建筑的 NPC 列表（`FACT`，main.data.npcs[building_id]）。
 
+    ⚠️ 可见性（D1-H2 / WQ-94 白名单 C「公开建筑」）：
+        私人建筑的 NPC 清单只对 owner 范围可见；其余 → `FORBIDDEN`。
+
     注意：NPC **没有位置 / 状态字段**，因此
     「某 NPC 现在在哪里」属 `UNSUPPORTED`（见 get_npc_location）。
+    返回 value 为新建列表 + 每项新 dict（深拷贝）。
     """
     src = "main.data.npcs"
     ts = now_ts if isinstance(now_ts, (int, float)) else 0.0
@@ -1005,16 +1284,23 @@ def list_npcs_in_building(
     if not candidates:
         return _absent(src, ts, notes=f"未找到匹配 {building!r} 的建筑。")
     if len(candidates) > 1:
+        visible = [bid for bid in candidates if _can_view_building(bid, requester, data)]
+        if not visible:
+            return _forbidden(src, ts)
         return _result(
-            value=sorted(candidates),
+            value=sorted(visible),
             status=STATUS_AMBIGUOUS,
             source=src,
             derived=False,
             as_of=ts,
-            notes=f"{building!r} 命中 {len(candidates)} 个建筑，需要消歧。",
+            notes=f"{building!r} 命中 {len(visible)} 个建筑，需要消歧。",
         )
 
-    npcs = _as_dict(data.get("npcs")).get(candidates[0])
+    bid = candidates[0]
+    if not _can_view_building(bid, requester, data):
+        return _forbidden(src, ts)
+
+    npcs = _as_dict(data.get("npcs")).get(bid)
     items = [
         {"name": _as_str(n.get("name")), "emoji": _as_str(n.get("emoji")), "desc": _as_str(n.get("desc"))}
         for n in (npcs if isinstance(npcs, list) else [])
@@ -1047,9 +1333,22 @@ def list_agent_owning_user(
     requester: str = "",
     now_ts: Optional[float] = None,
 ) -> QueryResult:
-    """某 owner 名下的所有 AI（`FACT`，main.data.user_ais）。"""
+    """
+    某 owner 名下的所有 AI（`FACT`，main.data.user_ais）。
+
+    ⚠️ 可见性（D1-H2）：私人归属清单 ——
+        仅 owner 本人、或该 owner 名下的 AI 可见；其余 → `FORBIDDEN`。
+    返回 value 为新建列表（深拷贝语义）。
+    """
     src = "main.data.user_ais"
     ts = now_ts if isinstance(now_ts, (int, float)) else 0.0
+
+    allowed = (
+        _requester_is_owner(agent, requester, data)
+        or _names_equal(_owner_of(requester, data), agent)
+    )
+    if not allowed:
+        return _forbidden(src, ts)
 
     user_ais = _as_dict(data.get("user_ais"))
     ais = [
@@ -1065,6 +1364,7 @@ def list_agent_owning_user(
         source=src,
         derived=False,
         as_of=ts,
+        notes="value 为新列表（深拷贝）。",
     )
 
 
@@ -1078,12 +1378,20 @@ def get_agent_wallet(
     requester: str = "",
     now_ts: Optional[float] = None,
 ) -> QueryResult:
-    """AI 钱包余额（`FACT`，main.data.wallets）。"""
+    """
+    AI 钱包余额（`FACT`，main.data.wallets）。
+
+    ⚠️ 可见性（D1-H2 / WQ-94 白名单 B「自己的状态」）：
+        仅该 AI 本人、其 owner、或与 owner 相关的 requester 可见；
+        其余 requester → `FORBIDDEN`（不返回金额）。
+    """
     src = "main.data.wallets"
     ts = now_ts if isinstance(now_ts, (int, float)) else 0.0
-    wallets = _as_dict(data.get("wallets"))
     if not _agent_exists(agent, data):
         return _absent(src, ts, notes="该 AI 不在 user_ais 中。")
+    if not _can_view_agent_private(agent, requester, data):
+        return _forbidden(src, ts)
+    wallets = _as_dict(data.get("wallets"))
     for name, amount in wallets.items():
         if _names_equal(name, agent):
             return _result(value=amount, status=STATUS_FOUND, source=src, derived=False, as_of=ts)
@@ -1098,12 +1406,16 @@ def get_agent_affection(
 ) -> QueryResult:
     """AI 好感度数值（`FACT`，main.data.affection）。
 
+    ⚠️ 可见性（D1-H2 / WQ-94 白名单 B）：与 `get_agent_wallet` 相同，超出范围 → `FORBIDDEN`。
+
     注意：这只是数值，**不是** relationship 结构（见 get_relationship）。
     """
     src = "main.data.affection"
     ts = now_ts if isinstance(now_ts, (int, float)) else 0.0
     if not _agent_exists(agent, data):
         return _absent(src, ts, notes="该 AI 不在 user_ais 中。")
+    if not _can_view_agent_private(agent, requester, data):
+        return _forbidden(src, ts)
     for name, value in _as_dict(data.get("affection")).items():
         if _names_equal(name, agent):
             return _result(value=value, status=STATUS_FOUND, source=src, derived=False, as_of=ts)
@@ -1119,10 +1431,14 @@ def is_agent_dating(
     """
     AI 是否正在约会（`FACT`，基于 main.data.dates 的 Legacy 状态）。
 
+    ⚠️ 可见性（D1-H2）：属「自己的状态」，超出范围 → `FORBIDDEN`。
+
     ⚠️ 这是 **Legacy Activity State**，不是正式 Activity（AC-6 / AC-9）。
     """
     src = "main.data.dates"
     ts = now_ts if isinstance(now_ts, (int, float)) else 0.0
+    if not _can_view_agent_private(agent, requester, data):
+        return _forbidden(src, ts)
     return _result(
         value=_agent_dating(agent, data),
         status=STATUS_FOUND,
@@ -1139,9 +1455,14 @@ def is_agent_working(
     requester: str = "",
     now_ts: Optional[float] = None,
 ) -> QueryResult:
-    """AI 是否在工作中（`FACT`，main.data.work_sessions；Legacy Activity State）。"""
+    """AI 是否在工作中（`FACT`，main.data.work_sessions；Legacy Activity State）。
+
+    ⚠️ 可见性（D1-H2）：属「自己的状态」，超出范围 → `FORBIDDEN`。
+    """
     src = "main.data.work_sessions"
     ts = now_ts if isinstance(now_ts, (int, float)) else 0.0
+    if not _can_view_agent_private(agent, requester, data):
+        return _forbidden(src, ts)
     return _result(
         value=_agent_working(agent, data),
         status=STATUS_FOUND,
@@ -1158,9 +1479,14 @@ def is_agent_following(
     requester: str = "",
     now_ts: Optional[float] = None,
 ) -> QueryResult:
-    """AI 是否在跟随中（`FACT`，main.data.ai_follow；Legacy Activity State）。"""
+    """AI 是否在跟随中（`FACT`，main.data.ai_follow；Legacy Activity State）。
+
+    ⚠️ 可见性（D1-H2）：属「自己的状态」，超出范围 → `FORBIDDEN`。
+    """
     src = "main.data.ai_follow"
     ts = now_ts if isinstance(now_ts, (int, float)) else 0.0
+    if not _can_view_agent_private(agent, requester, data):
+        return _forbidden(src, ts)
     return _result(
         value=_agent_following(agent, data),
         status=STATUS_FOUND,
@@ -1180,6 +1506,8 @@ def get_agent_current_activity_legacy(
     """
     AI 当前活动 —— **Legacy 推导值**（`DERIVED`）。
 
+    ⚠️ 可见性（D1-H2）：属「自己的状态」，超出范围 → `FORBIDDEN`。
+
     ⚠️ 严格边界（WQ-42 ～ WQ-46）：
         * 返回的是 **Legacy 推导结果**，不是正式 Activity
         * 必须 `derived=True` 并注明来源为 Legacy 推导
@@ -1192,6 +1520,8 @@ def get_agent_current_activity_legacy(
     ts = now_ts if isinstance(now_ts, (int, float)) else 0.0
     if not _agent_exists(agent, data):
         return _absent(src, ts, notes="该 AI 不在 user_ais 中。")
+    if not _can_view_agent_private(agent, requester, data):
+        return _forbidden(src, ts)
     return _result(
         value=_derive_activity_legacy(agent, data),
         status=STATUS_FOUND,
