@@ -188,6 +188,7 @@ textarea.input { color:#e6f1ff; }
         <button class="hbtn" onclick="goLobby()">🏠大厅</button>
         <button class="hbtn" onclick="goMyHome()">🏡我家</button>
         <button class="hbtn" onclick="openBell()">🔔<span id="bellDot" style="display:none;color:#ff6b6b;margin-left:2px">●</span></button>
+        <button class="hbtn" id="voiceBtn" onclick="toggleChatVoice()" title="语音朗读开关">🔇</button>
         <button class="hbtn" id="privBtn" onclick="togglePrivate()" style="display:none">🏠</button>
       </div>
     </header>
@@ -360,10 +361,6 @@ function renderMemory(){
       var tag=m.type==='ai'?'🤖 自动':'👤 手动';
       el.innerHTML+='<div class="note-card"><div class="n-author">'+tag+' · '+esc(m.ai)+'</div><div class="n-text">'+esc(m.text)+'</div><div class="n-time">'+esc((m.time||'').slice(5,16))+'<span style="float:right"><span class="mem-edit" onclick="editMemory(\''+esc(m.id)+'\')">✏️ 编辑</span><span style="color:#ff6b6b;cursor:pointer" onclick="delMemory(\''+esc(m.id)+'\')">🗑️</span></span></div></div>';
     });
-  } else if(memoryTab==='review'){
-    w.innerHTML='';
-    el.innerHTML='<div class="tip">加载副本中…</div>';
-    loadInstanceReviews(el);
   } else {
     var key=memoryTab==='note'?'notes':(memoryTab==='diary'?'diaries':'stories');
     var list=memoryData[key]||[];
@@ -474,6 +471,54 @@ function editDiaryItem(room,bid,idx){ var t=prompt('编辑随笔：',''); if(t==
 function delDiaryItem(room,bid,idx){ if(!confirm('删除这篇随笔？')) return; api('/api/diaries/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:room,index:idx,user:userName})}).then(function(){ toast('🗑️ 已删除'); loadMemory(); }).catch(function(e){ toast('❌ '+e.message); }); }
 function editStoryItem(room,bid,idx){ var t=prompt('编辑剧情：',''); if(t===null||!t.trim()) return; api('/api/story/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({building_id:bid,index:idx,user:userName,text:t.trim()})}).then(function(){ toast('✅ 已更新'); loadMemory(); }).catch(function(e){ toast('❌ '+e.message); }); }
 function delStoryItem(room,bid,idx){ if(!confirm('删除这段剧情？')) return; api('/api/story/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({building_id:bid,index:idx,user:userName})}).then(function(){ toast('🗑️ 已删除'); loadMemory(); }).catch(function(e){ toast('❌ '+e.message); }); }
+// ===== 住宅聊天 · 头部语音朗读开关（与 设置→语音与朗读 共用同一套开关） =====
+// 复用已有的 speakAll / speakNames / gc_speak*，不另建一套朗读设置。
+function updateChatVoiceBtn(){
+  var b=document.getElementById('voiceBtn'); if(!b) return;
+  var on=(typeof speakAll!=='undefined' && speakAll) ||
+         (typeof speakNames!=='undefined' && speakNames && speakNames.length>0);
+  b.textContent=on?'🔊':'🔇';
+  b.title=on?'语音朗读：开（点一下关闭）':'语音朗读：关（点一下开启，将朗读所有新消息）';
+  b.style.background=on?'rgba(14,127,212,.55)':'';
+}
+function toggleChatVoice(){
+  var on=(typeof speakAll!=='undefined' && speakAll) ||
+         (typeof speakNames!=='undefined' && speakNames && speakNames.length>0);
+  if(on){
+    speakAll=false;
+    setSpeakList([]);
+    toast('🔇 已关闭语音朗读');
+  } else {
+    speakAll=true;
+    setSpeakList([]);
+    // 立刻读一句做确认（顺便激活安卓 WebView 的语音引擎）
+    try{
+      if('speechSynthesis' in window){
+        var v=speechSynthesis.getVoices();
+        if(!v || v.length===0){
+          speechSynthesis.onvoiceschanged=function(){
+            speechSynthesis.onvoiceschanged=null; testSpeak();
+          };
+          speechSynthesis.getVoices();
+        } else {
+          testSpeak();
+        }
+      }
+    }catch(e){}
+    toast('🔊 已开启：将朗读所有新消息');
+  }
+  updateChatVoiceBtn();
+}
+function setSpeakList(names){
+  try{
+    speakNames.length=0;
+    (names||[]).forEach(function(n){ speakNames.push(n); });
+    localStorage.setItem('gc_speak', speakNames.join(','));
+    localStorage.setItem('gc_speakAll', speakAll?'1':'0');
+  }catch(e){}
+}
+setTimeout(updateChatVoiceBtn, 500);
+setInterval(updateChatVoiceBtn, 3000);
 // ===== 设置分组导航 =====
 function openSettings(){
   var admin = isAdminUser();
