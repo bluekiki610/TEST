@@ -108,9 +108,11 @@
   | **D-1 Contract §5D** | ✅ **APPROVED**（CC-20260930-05，`docs/V3.1_ARCHITECTURE_CONTRACT.md` §5D） |
   | **D-1 Architecture Tests** | ✅ **RAN / PASSED**（`docs/test_d1_world_query.py`：**Ran 49 tests … OK**，`GATE STATE: CLOSED`，真实运行） |
   | **D-1 Gate Correction** | ✅ **APPROVED**（T-A / T-B 生命周期分离 + 静态验证策略定位 + FORBIDDEN / 五态分离） |
-  | **D-1 Implementation** | ✅ **DONE** —— 新增 `agent/world_query.py`（World Query Foundation，只读） |
-  | **D-1 Post-Implementation Gate（T-B）** | ✅ **RAN / PASSED**（**Ran 51 tests … OK**，`GATE STATE: OPEN`，skipped=1 属预期） |
-  | **D-1 Seal** | ⏸ **待架构审核批准** |
+  | **D-1 Implementation** | 🔧 **HARDENING APPLIED（D1-H1 ～ H4，待重跑验证）** —— `agent/world_query.py` |
+  | **D-1 Post-Implementation Gate（T-B）** | ✅ RAN / PASSED（静态边界，**Ran 51 tests … OK**） |
+  | **D-1 Behavior Tests（D1-H4）** | ⏳ **待运行**（`python docs/test_d1_world_query_behavior.py`） |
+  | **D-1 Implementation Review** | 🔴 **NOT SEALED**（H1 ～ H4 修正后待复审） |
+  | **D-1 Seal** | ⏸ 待架构侧复审 |
   | D-2 | 🔴 **BLOCKED** |
 
   **D-1 门状态（当前）：**
@@ -170,8 +172,34 @@
      修正：改为「门感知」——门关闭断言不存在；门打开断言存在
   ```
 
-  **结论：D-1 World Query Foundation 已完成并通过全部架构边界测试。**
-  **D-1 至此具备 Seal 候选资格，等待架构审核。**
+  **D-1 Implementation Review（架构侧）→ Hardening：**
+
+  ```text
+  D-1 Implementation Review = ❌ NOT SEALED（发现 4 项 Contract 实际违规）
+        ↓
+  D-1 Implementation Hardening（D1-H1 ～ D1-H4）
+        ↓
+  待重跑验证
+  ```
+
+  | 编号 | 问题（架构侧审核） | 修正 |
+  |------|------------------|------|
+  | **D1-H1** | `_owner_invites()` 未接收**目标 owner**，导致私人房间授权可被「任意认识的用户/AI」绕过 | 改为以**目标 owner** 为中心的授权族：`_requester_is_owner` / `_requester_owns_agent` / `_requester_is_agent` / `_requester_has_same_owner` / `_can_view_room` / `_can_view_building`；**fail-closed**（无法归属 → 按不公开） |
+  | **D1-H2** | 暴露范围超出 `WQ-94` 白名单（钱包 / 好感 / 归属 / legacy 活动 / dating / working / following / owner 清单均未做权限限制） | 全部接入可见性检查：私人状态仅**本人 / 其 owner / 同一 owner 范围**；其余 → `FORBIDDEN`。缺省 `requester` **不得**视为上帝视角 |
+  | **D1-H3** | `get_building()` / `get_room()` 为**浅复制**，nested dict / list 仍引用 `main.data` | 引入 `copy.deepcopy` 生成**真正安全副本**（唯一允许的例外，Contract `D1G-23` ～ `D1G-25`） |
+  | **D1-H4** | 51 tests OK ≠ 实现满足 D-1（静态边界测试不验证行为） | 新增 [`docs/test_d1_world_query_behavior.py`](docs/test_d1_world_query_behavior.py)：**68 项行为级断言**（B1 私人房间授权 / B2-B3 公开性 / B4 私人状态不泄露 / B5 返回值不穿透 / B6 五态语义 / B7 反模式守卫 / B8 回归） |
+
+  **新增 Contract 规则：** `D1G-23` ～ `D1G-32`（§5D.16.3 深拷贝例外 + §5D.16.4 白名单实现级要求）。
+
+  **公开性判定（冻结，未新增 schema 字段）：**
+
+  ```text
+  建筑  ： type == "npc" / 无 owner / public == True
+  房间  ： main / 以 ·会客厅 结尾 / 所属建筑公开
+  AI 在场： 该 AI 当前位于公开房间
+  AI 私人： 仅本人 / 其 owner / 同一 owner 范围
+  其他  ： 默认不可见（fail-closed）
+  ```
 
   **Phase D 当前门状态（必须最先读）：**
 
@@ -1324,7 +1352,7 @@ PROJECT 是“架构地图”，不是代码实现说明书。
 - Phase A（Global Architecture Inventory）：✅ 已完成
 - Phase B（V3.1 Context Foundation）：✅ 已完成（含 B5-4 归档）
 - Phase C（Motivation / Goal / Commitment / Intent）：✅ 已完成（含 C-4 归档）
-- Phase D（World Query / Activity / Capability）：🟢 **D-0 SEALED；D-1 实现完成并通过全部架构边界测试，待 Seal 审核；D-2 BLOCKED**
+- Phase D（World Query / Activity / Capability）：🟡 **D-0 SEALED；D-1 实现已完成 Hardening（D1-H1 ～ H4），待重跑行为测试与架构复审；D-2 BLOCKED**
 - Phase E（Memory Recall）：⏳ 未开始
 - Phase F（Brain / Decision）：⏳ 未开始
 
@@ -1511,9 +1539,11 @@ THINK（仍为 Stub）
 | **D-1** | **Contract §5D（CC-20260930-05）** | ✅ **APPROVED** |
 | **D-1** | **Architecture Tests** | ✅ **RAN / PASSED**（`docs/test_d1_world_query.py`：**Ran 49 tests … OK**，`GATE STATE: CLOSED`，真实运行） |
 | **D-1** | **Gate Correction（T-A / T-B 生命周期 + 静态策略定位 + FORBIDDEN/五态分离）** | ✅ **APPROVED** |
-| **D-1** | **Implementation** | ✅ **DONE**（`agent/world_query.py`，只读 World Query Foundation） |
-| **D-1** | **Post-Implementation Gate（T-B）** | ✅ **RAN / PASSED**（**Ran 51 tests … OK**，`GATE STATE: OPEN`） |
-| **D-1** | **Seal** | ⏸ **待架构审核批准** |
+| **D-1** | **Implementation** | 🔧 **HARDENING APPLIED**（D1-H1 ～ H4）—— `agent/world_query.py` |
+| **D-1** | **Post-Implementation Gate（T-B）** | ✅ **RAN / PASSED**（静态边界，**Ran 51 tests … OK**） |
+| **D-1** | **Behavior Tests（D1-H4）** | ⏳ **待运行**（`docs/test_d1_world_query_behavior.py`） |
+| **D-1** | **Implementation Review** | 🔴 **NOT SEALED**（待 H1 ～ H4 复审） |
+| **D-1** | **Seal** | ⏸ **待架构侧复审** |
 | D-2 | Activity Contract | 🔴 **BLOCKED** |
 | D-3 | Location / Movement Continuity | ⛔ 未开始（前置 Blocker：World Tick 可靠性，见 Contract §5C.6） |
 | D-4 | Capability / Action Port | ⛔ 未开始 |
