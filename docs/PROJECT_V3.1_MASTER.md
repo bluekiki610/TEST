@@ -117,7 +117,8 @@
   | **D-2 Contract §5E** | ✅ **APPROVED**（CC-20260930-06，含 §5E.22 D-2 阶段门） |
   | **D-2 Architecture Tests** | ✅ **APPROVED**（架构审核 SHA `a622e537…`，Ran 53 tests … OK）<br>✅ **SEALED**（门控修正后 **Ran 64 tests … OK**，见 §20.5.3 Seal Record） |
   | **D-2 Gate** | 🔓 **OPEN**（`D2G-GATE-STATUS: OPEN` / `D2G-3-MARKER: true`；架构侧正式授权） |
-  | **D-2 Implementation** | 🔵 **IN PROGRESS — Implementation Verification**（`agent/activity.py` 已交付，待行为测试验证） |
+  | **D-2 Implementation** | ✅ **VERIFIED / APPROVED** |
+  | **D-2 Implementation Seal** | ✅ **SEALED**（见 §20.5.4 Seal Record） |
   | **D-2 Behavior Tests** | ✅ **RAN / PASSED**（`docs/test_d2_activity_behavior.py`：**Ran 74 tests … OK**）<br>→ 含 E 组 **15 项 immutable-boundary 行为证明** |
 
   **Immutable Boundary 修复（架构侧裁决 A / 只修隔离，不扩大 D-2）：**
@@ -216,18 +217,25 @@
   ```text
   D-2 Preflight                ✅ APPROVED WITH ARCHITECTURAL CORRECTIONS
   D-2 Contract §5E             ✅ APPROVED（CC-20260930-06）
-  D-2 Architecture Tests       ✅ APPROVED（SHA a622e537，Ran 53 tests … OK）
-  D-2 Architecture Tests SEAL  ✅ SEALED（Ran 64 tests … OK）
-  D-2 Implementation 授权       ✅ AUTHORIZED
-                                （Architecture Review SHA a622e537 /
-                                  D-2 Seal Commit c676abd… / 64-64 tests OK）
+  D-2 Architecture Tests       ✅ SEALED（64/64 PASS）
   D-2 Gate                     🔓 OPEN（D2G-GATE-STATUS: OPEN / marker true）
-  D-2 Implementation 交付       agent/activity.py（Activity Domain Object +
-                                  Runtime-scoped Activity Registry）
-  D-2 测试（门开后首次真实运行）  Ran 64 tests … FAILED (failures=2)
-                                  → 2 处均为**测试断言自身**问题，非实现问题
-                                  → 已修正，待重跑
+  D-2 Implementation           ✅ VERIFIED / APPROVED
+  D-2 Implementation Seal      ✅ SEALED（见 §20.5.4 Seal Record）
+  D-2 五套回归                  ✅ 全绿
+                                  D-0 54/54 · D-1 51/51 · D-1 behavior 70/70
+                                  D-2 architecture 64/64 · D-2 behavior 74/74
   D-3                          🔴 BLOCKED
+  ```
+
+  **D-2 Immutable Boundary（架构侧裁决 A）—— 已闭合：**
+
+  ```text
+  input isolation        ✅ PASS（构造期 _deep_freeze）
+  output isolation       ✅ PASS（全部读取路径 _copy_for_read）
+  deep nested isolation  ✅ PASS（dict → dict → list 不穿透）
+
+  Implementation SHA : b7a201979ab9ba26ac6b658e8ae85866702cb625
+  Docs SHA           : ec40f53d619f68c8d4cb4d5aa83d0e4ce63dd38e
   ```
 
   **门开后首次真实运行结果（必须记录）：**
@@ -2066,6 +2074,165 @@ D-2 Implementation 授权      : ✅ AUTHORIZED
 
 Final decision            : D-2 Architecture Tests = APPROVED / SEALED
 Next                      : 等待架构侧审核；D-2 Implementation 仍 NOT AUTHORIZED
+================================================================
+```
+
+---
+
+#### 20.5.4 D-2 IMPLEMENTATION SEAL RECORD
+
+```text
+D-2 IMPLEMENTATION SEAL
+================================================================
+Date                      : 2026-09-30
+
+D-2 Implementation Verification : APPROVED
+D-2 Implementation Seal         : AUTHORIZED → SEALED
+
+Implementation SHA        : b7a201979ab9ba26ac6b658e8ae85866702cb625
+Docs SHA                  : ec40f53d619f68c8d4cb4d5aa83d0e4ce63dd38e
+
+----------------------------------------------------------------
+Immutable Boundary（架构侧裁决 A 的闭合项）
+----------------------------------------------------------------
+    input isolation          : PASS
+        调用方输入 → _deep_freeze()（构造期递归冻结）
+        role_map / metadata 的嵌套 dict → MappingProxyType
+        list → tuple
+        → 调用方事后修改自己传入的 dict 不影响 Activity
+
+    output isolation         : PASS
+        内部真相 → _copy_for_read() → 独立快照
+        已接入**全部**返回 Activity 的路径：
+            create_activity / get / require / list_*（经 list_all）
+            / primary_activity / bound_activities / transition().activity
+
+    deep nested isolation    : PASS
+        深层结构（dict → dict → list）同样不穿透
+
+    修复前的缺陷（已闭合）：
+        @dataclass(frozen=True) 只冻结属性重绑定，不冻结容器内容 →
+        三层穿透（metadata / role_map / 嵌套 list）已由行为测试证实
+        依赖：PEP 557（frozen dataclass 非真正不可变）
+
+----------------------------------------------------------------
+Regression（五套全部真实运行 —— EV-16 / EV-18 / EV-19）
+----------------------------------------------------------------
+    D-0 architecture          54/54  PASS
+    D-1 architecture          51/51  PASS
+    D-1 behavior              70/70  PASS
+    D-2 architecture          64/64  PASS
+    D-2 behavior              74/74  PASS
+
+    注：五套均为**真实运行**结果，非静态声称。
+        DS 侧 Shell 不可执行（0xC0000142），执行由架构侧完成。
+
+----------------------------------------------------------------
+Behavior Coverage（docs/test_d2_activity_behavior.py = 74 项）
+----------------------------------------------------------------
+    A  Activity 创建与字段校验              11
+    B  lifecycle（合法转换/非法跳跃/终态/EP-5） 12
+    C  primary / secondary binding             9
+    D  Registry 唯一真相与容器隔离             8
+    E  Immutable Boundary（行为证明）          15
+    F  不产生 Event / 不写 World / 不持久化 /
+       不依赖 scheduler / 不接 Motivation      9
+    G  Activity Domain Object 语义             6
+    H  环境能力                                4
+    ----------------------------------------------
+    TOTAL                                     74
+
+    E 组 15 项（含架构侧指定的两条反向测试）：
+        e1  frozen 阻止属性重绑定
+        e2  转换不分叉真相
+        e3  get() 不允许嵌套 metadata 穿透          ← 架构侧指定
+        e4  get() 不允许 role_map 穿透              ← 架构侧指定
+        e5  深层嵌套（dict→dict→list）不穿透
+        e6  require() 路径不穿透
+        e7  全部 list_* 路径不穿透
+        e8  primary_activity() / bound_activities() 不穿透
+        e9  transition().activity 不穿透
+        e10 create_activity() 返回值不穿透
+        e11 输入 metadata 不产生外部别名
+        e12 输入 role_map 不产生外部别名
+        e13 两次读取互相独立
+        e14 绕过 Registry 直接构造也被构造期冻结
+        e15 Activity 仍是 frozen dataclass
+
+----------------------------------------------------------------
+Gate
+----------------------------------------------------------------
+    Contract §5E.22 门状态块（唯一来源）：
+        D2G-GATE-STATUS: OPEN
+        D2G-3-MARKER: true
+
+----------------------------------------------------------------
+架构语义确认（架构侧明确认可）
+----------------------------------------------------------------
+    EC-4 的准确含义：
+        「同一 activity_id 只有一个 **Registry truth**」
+        ≠ 「所有调用方必须拿到同一个 Python object identity」
+
+    因此把 `assertIs(a, b)` 改为
+        「identity 一致 + 读取快照彼此隔离 + 快照不能修改 Registry truth」
+    是正确的架构解释。
+    否则会强迫实现暴露内部引用，重新制造刚修掉的 immutable-boundary 漏洞。
+
+----------------------------------------------------------------
+NON-BLOCKING IMPLEMENTATION NOTE（架构侧 Seal 审核记录）
+----------------------------------------------------------------
+    `_copy_for_read()` 使用 `replace()`，会再次触发
+    `Activity.__post_init__()` → `_deep_freeze()`，
+    因此对外快照的**实际**形态是：
+
+        内部 truth       = frozen
+        外部 snapshot    = frozen + 独立
+
+    而早期注释曾写作「外部 snapshot = **mutable** + 独立」，与行为不符。
+
+    结论：
+        * **不构成 D-2 Seal 阻塞项**
+          —— 架构真正要求的是「外部不能穿透修改内部 Truth」，
+             74 项行为测试已证明。
+        * **不需要 Contract Change**
+        * 本次 Seal **已顺带修正文档**，使描述与行为一致：
+              _deep_thaw()      补充「独立副本 / 可变只是中间态」
+              _copy_for_read()  改为「frozen 独立快照」并记录该 note
+              Activity 类文档   改为「内部 frozen；对外 frozen + 独立」
+              to_dict()         明确「不经过 __post_init__，故为可变副本」
+              测试 test_d6 文档 同步修正
+        * 隔离的真正来源是「**新构造 + 零共享引用**」，
+          与快照可变与否无关。
+
+----------------------------------------------------------------
+D-2 边界未扩张（确认）
+----------------------------------------------------------------
+    ❌ Event          ❌ World 写入     ❌ main.data
+    ❌ persistence    ❌ scheduler      ❌ Motivation
+    ❌ Capability     ❌ Movement       ❌ Legacy 反向写
+    ❌ AgentState     ❌ Context        ❌ World Query
+    ❌ D-3
+
+    定性：本轮属于 **D-2 内部实现硬化**，不是架构范围扩张。
+
+----------------------------------------------------------------
+生产代码变更（D-2 累计）
+----------------------------------------------------------------
+    新增  agent/activity.py
+          —— Activity Domain Object（frozen + 双向隔离）
+          —— Runtime-scoped Activity Registry（唯一管理入口）
+          —— lifecycle（7 状态 / 冻结转换表 / 终态不可逆）
+          —— actor / participant / role
+          —— primary / secondary binding（binding ≠ ownership）
+          —— 基础查询 / 管理能力
+
+    既有文件修改：0
+        main.py / ext_* / agent 其他模块 /
+        前端 / HTTP API / Memory 全部未改
+
+----------------------------------------------------------------
+Final decision            : D-2 IMPLEMENTATION SEALED
+Next                      : 等待架构侧审核；D-3 仍 BLOCKED
 ================================================================
 ```
 

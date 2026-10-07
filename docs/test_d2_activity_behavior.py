@@ -682,11 +682,13 @@ class DD2RegistryTruth(unittest.TestCase):
 
     def test_d6_to_dict_returns_copy(self) -> None:
         """
-        `to_dict()` 返回**可变副本**，但与内部真相**无共享引用**。
+        `to_dict()` 返回**独立副本**，与内部真相**无共享引用**。
 
-        注：输出侧隔离后，返回的 `role_map` / `metadata` 是**新构造**的
-        dict（内部真相保存冻结版本），因此这里的修改是安全的 ——
-        只要它们不穿透到 Registry 即可。
+        ⚠️ 与 `get()` 等读取路径不同（那些返回 **frozen 独立快照**），
+           `to_dict()` **不经过** `__post_init__`，因此返回的
+           `role_map` / `metadata` 是**可变** dict/list —— 这正是序列化应有形态。
+
+           关键要求一致：**与内部真相零共享引用**。
         """
         activity = _sample_activity(self.reg)
         aid = activity.activity_id
