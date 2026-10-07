@@ -1597,29 +1597,76 @@ function enterRoom(room){
 function loadRooms(){ api('/api/rooms').then(function(d){ var tabs=document.getElementById('roomTabs'); tabs.innerHTML=''; (d.rooms||[]).forEach(function(r){ if(r.name==='main'||r.creator==='home'||r.creator==='hall') return; var b=document.createElement('button'); b.className='room-tab'+(r.name===currentRoom?' active':''); b.id='tab_'+r.name; b.innerHTML=(r.has_password?'🔒':'')+esc(roomLabel(r.name)); b.onclick=function(){ enterRoom(r.name); }; tabs.appendChild(b); }); }).catch(function(){}); }
 function saveName(){ var n=document.getElementById('setName').value.trim(); if(!n){toast('名字不能为空');return;} userName=n; localStorage.setItem('gc_name',n); toast('✅ 名字已改为 '+n); }
 function saveSpeak(){ speakNames=document.getElementById('setSpeak').value.split(/[,，]/).map(function(s){return s.trim();}).filter(Boolean); speakAll=document.getElementById('speakAll').checked; localStorage.setItem('gc_speak',speakNames.join(',')); localStorage.setItem('gc_speakAll',speakAll?'1':'0'); toast('✅ 朗读设置已保存'); }
-// 测试系统语音（用于激活手机 TTS 权限）
+// 测试语音：浏览器系统语音不可用时，自动改测服务器 TTS（这才是 APK 里能出声的路）
 function testSpeak() {
+  var ttsUrl='/api/tts?user='+encodeURIComponent(userName)+'&text='+encodeURIComponent('你好，语音测试成功，现在可以自动朗读了');
   if (!('speechSynthesis' in window)) {
-    toast('❌ 手机浏览器不支持语音朗读');
+    toast('本机 WebView 没有系统语音，改用服务器 TTS 测试…');
+    tryServerTts(ttsUrl);
     return;
   }
   // 强制刷新一下语音列表（安卓 WebView 必须这样做）
   var voices = speechSynthesis.getVoices();
   if (voices.length === 0) {
-    toast('⏳ 正在加载语音引擎，请再点一次...');
-    // 触发加载事件
+    toast('⏳ 正在加载语音引擎…');
+    // 触发加载事件；若迟迟不出来，再退回服务器 TTS
+    var fell=false;
     speechSynthesis.onvoiceschanged = function() {
       speechSynthesis.onvoiceschanged = null;
-      testSpeak(); // 加载完成后自动再试一次
+      if(!fell) testSpeak();
     };
+    speechSynthesis.getVoices();
+    setTimeout(function(){
+      if(!fell && speechSynthesis.getVoices().length===0){
+        fell=true;
+        toast('系统语音引擎没有可用声音，改测服务器 TTS…');
+        tryServerTts(ttsUrl);
+      }
+    }, 1200);
     return;
   }
-  
-  var u = new SpeechSynthesisUtterance('你好，语音测试成功，现在可以自动朗读了');
-  u.lang = 'zh-CN';
-  u.rate = 0.9;
-  speechSynthesis.speak(u);
-  toast('🔊 正在朗读，请听手机声音...');
+  try{
+    speechSynthesis.cancel();
+    var u = new SpeechSynthesisUtterance('你好，语音测试成功，现在可以自动朗读了');
+    u.lang = 'zh-CN';
+    u.rate = 0.9;
+    speechSynthesis.speak(u);
+    toast('🔊 正在朗读（系统语音），请听手机声音…');
+  }catch(e){
+    toast('系统语音播放失败：'+e.message);
+    tryServerTts(ttsUrl);
+  }
+}
+
+// 服务器 TTS 试听：把失败原因明确说出来，不静默
+function tryServerTts(url){
+  toast('⏳ 服务器 TTS 生成中…');
+  fetch(url).then(function(r){
+    if(!r.ok){
+      return r.json().then(function(d){ throw new Error(d.msg||d.detail||('HTTP '+r.status)); })
+                     .catch(function(){ throw new Error('HTTP '+r.status); });
+    }
+    return r.blob();
+  }).then(function(blob){
+    if(!blob || !blob.size) throw new Error('返回了空音频');
+    // 后端出错时会返回 200 + JSON，这里要识别出来
+    if(blob.type && blob.type.indexOf('application/json')>=0){
+      return blob.text().then(function(t){
+        var msg=''; try{ msg=(JSON.parse(t)||{}).msg||''; }catch(e){}
+        throw new Error(msg||'服务器返回错误');
+      });
+    }
+    var u2=URL.createObjectURL(blob);
+    var a2=new Audio(u2);
+    a2.onended=function(){ URL.revokeObjectURL(u2); };
+    return a2.play().then(function(){
+      toast('🔊 服务器 TTS 正常，已出声');
+    }).catch(function(e){
+      throw new Error('播放被拦截：'+(e.message||e));
+    });
+  }).catch(function(e){
+    toast('❌ 语音不可用：'+e.message);
+  });
 }
 function uploadAvatar(){ var name=document.getElementById('avatarName').value.trim(); var file=document.getElementById('avatarFile').files[0]; if(!name){toast('请输入成员名字');return;} if(!file){toast('请选择图片');return;} var reader=new FileReader(); reader.onload=function(e){ compressImage(e.target.result,240,0.85,function(small){ api('/api/avatar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,image:small})}).then(function(){ toast('✅ '+name+' 头像已更新'); loadAvatars(); }).catch(function(err){ toast('❌ '+err.message); }); }); }; reader.readAsDataURL(file); }
 function loadAvatars(){ api('/api/avatar').then(function(d){ avatars=d.avatars||{}; try{ localStorage.setItem('gc_avatars', JSON.stringify(avatars)); }catch(e){} }).catch(function(){}); }
