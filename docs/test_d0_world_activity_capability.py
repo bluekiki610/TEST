@@ -399,6 +399,45 @@ def _d1_gate_open() -> bool:
 
 
 # =========================================================
+# 1.2 D-2 阶段门状态（供阶段感知断言使用）
+# =========================================================
+#
+# 同一原则的延续（架构侧 D-2 Architecture Tests Review）：
+#
+#     「实现存在」≠「架构授权实现」。
+#
+# D-0 的 test_t5_1 / test_t5_2 与 test_t6_6 同构：
+#     D-2 Gate 关闭时 → 断言 activity.py 不存在（防 D-0 偷做）
+#     D-2 Gate 打开后 → 断言 activity.py 存在（确认 D-2 已落地）
+#
+# 判据 = Contract §5E.22 的结构化键值（与 D-2 测试一致）：
+#     D2G-GATE-STATUS: OPEN
+#     D2G-3-MARKER: true
+
+_D2_GATE_STATUS_KEY = "D2G-GATE-STATUS"
+_D2_GATE_MARKER_KEY = "D2G-3-MARKER"
+
+
+def _d2_gate_open() -> bool:
+    """D-2 Implementation Gate 是否已由架构侧打开。"""
+    contract = _read_text(CONTRACT_DOC)
+    if not contract:
+        return False
+
+    status = ""
+    marker = ""
+    for raw_line in contract.splitlines():
+        line = raw_line.strip()
+        # 严格前缀匹配：行首即键名 + 紧跟冒号
+        if line.startswith(_D2_GATE_STATUS_KEY + ":"):
+            status = line.split(":", 1)[1].strip().upper()
+        elif line.startswith(_D2_GATE_MARKER_KEY + ":"):
+            marker = line.split(":", 1)[1].strip().lower()
+
+    return status == "OPEN" and marker == "true"
+
+
+# =========================================================
 # 2. T1 · World 边界
 #    Contract §5C.1 D0G-1：main.data 是唯一 World 存储位置
 # =========================================================
@@ -843,28 +882,57 @@ class T5ActivityBoundary(unittest.TestCase):
         AC-9：Activity 的 data model / lifecycle / SOT 属 D-2。
         **D-0 阶段不得实现。**
 
-        断言：agent/ 中不存在 activity.py / activity_store.py。
+        ⚠️ 阶段门感知（架构侧 D-2 Architecture Tests Review 的同类修正）：
+
+            D-2 Gate 关闭时断言「activity.py 不存在」（防 D-0 偷做）。
+            但 D-2 实现落地并授权后，该断言会**永久失败** ——
+            与 D-1 的 T-A 死锁同构。
+
+            因此改为门感知：
+                D-2 Gate CLOSED → 断言不存在
+                D-2 Gate OPEN   → 断言存在（确认 D-2 已落地）
         """
         forbidden = ("activity.py", "activity_store.py", "activity_sot.py")
+        gate_open = _d2_gate_open()
+
         for name in forbidden:
             path = AGENT_DIR / name
-            self.assertFalse(
-                path.exists(),
-                f"AC-9：D-0 阶段不得实现 Activity，但发现 {path}",
-            )
+            if gate_open and name == "activity.py":
+                self.assertTrue(
+                    path.exists(),
+                    "D-2 Gate 已打开，但未发现 agent/activity.py；"
+                    "实现缺失无法形成正式通过状态",
+                )
+            elif name == "activity.py" and not gate_open:
+                self.assertFalse(
+                    path.exists(),
+                    f"AC-9：D-2 Gate 关闭时不得实现 Activity，但发现 {path}",
+                )
+            else:
+                # activity_store.py / activity_sot.py 在任何阶段都不应出现
+                self.assertFalse(
+                    path.exists(),
+                    f"不应存在的 Activity 存储 / SOT 模块：{path}",
+                )
 
     def test_t5_2_no_activity_lifecycle_status_enum_yet(self) -> None:
         """
         AC-9 的 boundary-form 断言：D-0 阶段尚不存在 Activity 生命周期实现。
 
-        若未来在 D-2 实现了 PLANNED / TRAVELING / ARRIVED / ACTIVE /
-        PAUSED / CANCELLED 状态机，本测试会失败 —— 届时必须同时修改
-        Contract §5C.2（这是设计意图，不是缺陷）。
+        ⚠️ 阶段门感知（同上）：
+
+            D-2 Gate CLOSED → 断言「无任何文件实现完整生命周期状态机」
+            D-2 Gate OPEN   → activity.py **必须**实现完整生命周期
+                              （确认 D-2 交付；同时仍禁止其他文件实现）
         """
         lifecycle = ("PLANNED", "TRAVELING", "ARRIVED", "PAUSED", "CANCELLED")
+        gate_open = _d2_gate_open()
         offenders: List[str] = []
 
         for path in _agent_files() + _py_files(EXT_DIR):
+            if gate_open and path.name == "activity.py":
+                # 门打开时 activity.py 是预期实现，不列入 offenders
+                continue
             src = _read_text(path)
             if not src:
                 continue
@@ -875,9 +943,21 @@ class T5ActivityBoundary(unittest.TestCase):
 
         self.assertEqual(
             offenders, [],
-            "AC-9：D-0 阶段不应存在 Activity 生命周期实现；"
+            "AC-9：不得由 activity.py 之外的文件实现 Activity 生命周期；"
             f"以下文件出现多个生命周期状态：{offenders}",
         )
+
+        if gate_open:
+            # 门打开：activity.py 必须真的实现完整生命周期
+            activity_py = AGENT_DIR / "activity.py"
+            self.assertTrue(activity_py.is_file(), "D-2 Gate 已打开，activity.py 必须存在")
+            src = _read_text(activity_py) or ""
+            missing = [w for w in lifecycle if w not in src]
+            self.assertEqual(
+                missing, [],
+                "D-2 Gate 已打开：activity.py 必须实现完整生命周期状态；"
+                f"缺少：{missing}",
+            )
 
     def test_t5_3_activity_is_distinct_from_goal_and_commitment(self) -> None:
         """

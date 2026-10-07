@@ -117,8 +117,99 @@
   | **D-2 Contract §5E** | ✅ **APPROVED**（CC-20260930-06，含 §5E.22 D-2 阶段门） |
   | **D-2 Architecture Tests** | ✅ **APPROVED**（架构审核 SHA `a622e537…`，Ran 53 tests … OK）<br>✅ **SEALED**（门控修正后 **Ran 64 tests … OK**，见 §20.5.3 Seal Record） |
   | **D-2 Gate** | 🔓 **OPEN**（`D2G-GATE-STATUS: OPEN` / `D2G-3-MARKER: true`；架构侧正式授权） |
-  | **D-2 Implementation** | 🔵 **IN PROGRESS**（新增 `agent/activity.py`，待真实运行 D-2 测试） |
+  | **D-2 Implementation** | 🔵 **IN PROGRESS — Implementation Verification**（`agent/activity.py` 已交付，待行为测试验证） |
+  | **D-2 Behavior Tests** | ✅ **RAN / PASSED**（`docs/test_d2_activity_behavior.py`：**Ran 74 tests … OK**）<br>→ 含 E 组 **15 项 immutable-boundary 行为证明** |
+
+  **Immutable Boundary 修复（架构侧裁决 A / 只修隔离，不扩大 D-2）：**
+
+  ```text
+  缺陷（已由真实运行证实，现已修复）：
+      frozen=True 只冻结属性重绑定，不冻结容器内容 → 三层穿透
+
+  修复（仅隔离，未改生命周期 / ownership / SOT / 未加 persistence / Event /
+        scheduler / Motivation / Capability / Movement / main.data）：
+
+      输入侧 → _deep_freeze()：构造期递归冻结
+               role_map / metadata 的嵌套 dict → MappingProxyType，list → tuple
+               → 调用方事后修改自己传入的 dict **不再**影响 Activity
+
+      输出侧 → _copy_for_read()：内部真相永远冻结，对外返回独立可变快照
+               已接入**全部**返回 Activity 的路径：
+                   create_activity / get / require / list_*（经 list_all）
+                   / primary_activity / bound_activities / transition().activity
+
+  行为证明（E 组 15 项，含架构侧指定的两条反向测试）：
+      e1  frozen 阻止属性重绑定
+      e2  转换不分叉真相
+      e3  get() 不允许嵌套 metadata 穿透        ← 架构侧指定
+      e4  get() 不允许 role_map 穿透            ← 架构侧指定
+      e5  深层嵌套（dict→dict→list）不穿透
+      e6  require() 路径不穿透
+      e7  全部 list_* 路径不穿透
+      e8  primary_activity() / bound_activities() 不穿透
+      e9  transition().activity 不穿透
+      e10 create_activity() 返回值不穿透
+      e11 输入 metadata 不产生外部别名
+      e12 输入 role_map 不产生外部别名
+      e13 两次读取互相独立
+      e14 绕过 Registry 直接构造也被构造期冻结
+      e15 Activity 仍是 frozen dataclass
+
+  测试计数（精确核对，EV-17）：
+      总计 74 项
+          A 11 · B 12 · C 9 · D 8 · E 15 · F 9 · G 6 · H 4 = 74
+
+  ⚠️ 隔离修复同时暴露并修正了 2 处**测试自身**的错误：
+      test_d1 —— 原用 `assertIs` 断言「三次读取返回同一对象」，
+                 这**要求返回内部引用**，与裁决 A 的隔离要求直接冲突。
+                 EC-4 的真义是「Registry 中只有一个**真相**」，
+                 不是「对外必须返回同一对象」。
+                 → 改为验证：identity 一致 + 对外是快照 + 改快照不影响真相
+      test_d6 —— 误用 `self.aid`（该属性只属于 E 组）→ 改为自建夹具
+  ```
+
   | D-3 | 🔴 **BLOCKED**（本轮禁止进入） |
+
+  **D-2 Implementation Verification（架构侧要求）：**
+
+  ```text
+  架构审核结论：agent/activity.py 结构方向通过；
+                但只有实现、缺乏实现级行为测试与真实运行证据 → 不得 Seal。
+
+  本轮新增：docs/test_d2_activity_behavior.py（行为测试）
+  ```
+
+  **⚠️ 待架构侧裁决：immutable-boundary 问题**
+
+  ```text
+  现象（静态分析已确认，待真实运行确认）：
+      Activity 是 @dataclass(frozen=True)，
+      但 metadata / role_map / nested 结构仍是**可变 dict / list**。
+
+      frozen=True 只冻结**属性重绑定**，不冻结**容器内容**。
+
+      因此存在穿透路径：
+          registry.get(id).metadata["k"] = v
+          registry.get(id).role_map["x"] = "y"
+          registry.get(id).metadata["nested"]["deep"].append(v)
+              ↓
+          Registry 内部 Activity 真相可能被静默改变
+
+  证据链（静态）：
+      activity.py:  role_map: Dict[str, str] = field(default_factory=dict)
+                    metadata: Dict[str, Any] = field(default_factory=dict)
+      create_activity(): metadata=copy.deepcopy(dict(metadata or {}))
+      _store(): 直接存对象引用（未做不可变包装）
+
+  本问题由 docs/test_d2_activity_behavior.py 的 E 组（test_e2 / e3 / e4）验证。
+  **若穿透成立，E 组会 FAIL 并把观测结果写入失败信息。**
+
+  架构侧需裁决（DS 不得自行选择）：
+      A. 修改实现，使嵌套结构真正隔离（MappingProxyType / 深拷贝 / tuple）
+      B. 明确 Contract 只要求属性级 frozen，接受该语义
+
+  当前 DS 未修改实现（遵守「不允许 DS 自己选择」）。
+  ```
 
   **D-2 进展：**
 
