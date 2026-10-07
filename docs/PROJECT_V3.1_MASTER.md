@@ -104,9 +104,10 @@
   | D-0 Contract Change | ✅ **ACCEPTED**（CC-20260930-04，`docs/V3.1_ARCHITECTURE_CONTRACT.md` 新增 §5C） |
   | D-0 Architecture Tests | ⚠️ 已创建（`docs/test_d0_world_activity_capability.py`），**状态 NOT RUN** —— 工作区 Shell / Python / Git 均不可执行，**不得伪造测试结果** |
   | **D-0 Seal** | ✅ **SEALED / APPROVED**（D-0 Architecture Review 结果：APPROVED） |
-  | **D-1 Preflight** | ✅ **已完成**（`docs/D1_WORLD_QUERY_PREFLIGHT.md`：D1-DEC-1 ～ D1-DEC-15，WQ-5 ～ WQ-68） |
-  | D-1 Contract Change | ⏳ **待架构审核**（拟新增 Contract §5D） |
-  | D-1 Tests / Implementation | ⛔ 未开始（D-1 Preflight 审核通过前禁止） |
+  | **D-1 Preflight** | ✅ **APPROVED WITH CORRECTIONS**（`docs/D1_WORLD_QUERY_PREFLIGHT.md`：D1-DEC-1 ～ D1-DEC-15，WQ-5 ～ WQ-104；5 项修正已落实） |
+  | D-1 Contract Change | ✅ **已完成**（CC-20260930-05，`docs/V3.1_ARCHITECTURE_CONTRACT.md` 新增 §5D，不重写 A/B/C 与 §5C） |
+  | D-1 Architecture Tests | ⚠️ **已创建 / NOT RUN**（`docs/test_d1_world_query.py`） |
+  | D-1 Implementation | ⛔ **禁止开始**（阶段门 `D1G-3` / `D1G-4`：架构测试实际通过前禁止实现 `world_query.py`） |
   | D-2 ～ D-6 | ⛔ 未开始 |
 
   **D-0 冻结基线（SEALED）：**
@@ -124,6 +125,47 @@
   > 目标：让 Agent Core 能通过统一、只读、无 LLM、无行为决策、无 World mutation 的接口询问当前世界事实。
   > **D-1 不实现 Activity / Capability / Movement / World Command；不改 `ext_ai.py` / `ext_world.py` / `ext_room.py` 旧行为；不修 Memory；不进入 D-2。**
 
+  **D-1 阶段门（Contract §5D.16，`D1G-1` ～ `D1G-6`）：**
+
+  ```text
+  D-1 Preflight                ✅ APPROVED WITH CORRECTIONS
+  D-1 Contract Change（§5D）    ✅ 已完成（待架构审核）
+  D-1 Architecture Tests       ✅ 已创建（docs/test_d1_world_query.py）
+  D-1 Tests 实际运行            ⚠️ 需要可执行环境（当前不可用）
+  D-1 Implementation           ⛔ 禁止开始（直到架构测试实际通过）
+  D-2                          ⛔ 禁止进入
+  ```
+
+  **D-1 的 5 项架构侧修正（已落实）：**
+
+  1. **World Fact 定义扩宽**（`D1-DEC-1`）：不再等同「必须躺在 `main.data` dict 里」；来源含 `main.data` 直接存储 / 明确定义的世界时钟 / 既定确定性规则的只读投影；强制区分 `FACT` / `DERIVED` / `CACHE` / `HISTORY`
+  2. **删除「注入只读引用」措辞**（`D1-DEC-3`）：改为「Query 接收调用方注入的 **World 数据视图**」；追加「不得保存 `data` 引用」「返回值不得暴露内部可变引用」；并明确 **只读不是语言级保证**
+  3. **新增高频限制硬条款**（`D1-DEC-5`）：O(buildings × rooms) 反查**禁止**接入任何 scheduler / tick / polling loop
+  4. **`Q-U3` 改为有限支持**：`get_agents_in_building` 属 **`DERIVED`**，**不是** `UNSUPPORTED`；无法解析者单独返回 `UNKNOWN`，不得假装不存在
+  5. **requester / visibility 最小边界**：D-1 只实现白名单 5 项，**禁止**建立完整 Visibility Matrix
+
+  **另新增反模式条款**：**禁止把 World Query 做成「万能世界 API」**（route / planning / selection / ranking / recommendation 类接口一律拒绝）。
+
+  **D-1 阶段测试结果（必须如实记录）：**
+
+  ```text
+  TEST NOT RUN
+  Reason: environment execution unavailable
+          pwsh / cmd 均以 exit code 3221225794 (0xC0000142, STATUS_DLL_INIT_FAILED) 失败
+          工作区不是 Git 仓库（无 .git），也不是可运行实例（无 data/）
+  测试文件：
+      docs/test_d0_world_activity_capability.py   （D-0，已创建，未运行）
+      docs/test_d1_world_query.py                 （D-1，已创建，未运行）
+  ```
+
+  > **架构侧要求（R-5）：** 测试未运行**不阻塞 Contract**；
+  > 但 **进入 D-1 Implementation 之前，必须找到能运行 Python / Git 的环境，把 D-0 + D-1 架构测试实际跑起来**。
+  > **不能长期依赖「代码看起来正确」。**
+
+  **D-1 涉及文件：** `docs/D1_WORLD_QUERY_PREFLIGHT.md`、`docs/V3.1_ARCHITECTURE_CONTRACT.md`（§5D）、`docs/test_d1_world_query.py`、`docs/PROJECT_V3.1_MASTER.md`（本文件）。
+
+  **D-0 / D-1 Preflight 阶段生产代码修改：0。** 只产出文档与边界测试，不实现任何功能。
+
   **D-0 裁决要点（详见 `docs/D0_ARCHITECTURE_DECISIONS.md` 与 Contract §5C）：**
 
   - `main.data` 仍是唯一 World **存储位置**；但明确「唯一存储位置 ≠ 事实治理」（D0G-2）
@@ -138,14 +180,15 @@
 
   **D-0 涉及文件：** `docs/D0_CONFLICT_AUDIT.md`（新增）、`docs/D0_ARCHITECTURE_DECISIONS.md`（新增）、`docs/V3.1_ARCHITECTURE_CONTRACT.md`（§5C 增补）、`docs/test_d0_world_activity_capability.py`（新增）、`docs/PROJECT_V3.1_MASTER.md`（本文件）。
 
-  **D-1 涉及文件（当前）：** `docs/D1_WORLD_QUERY_PREFLIGHT.md`（新增）。
+  **D-1 涉及文件：** `docs/D1_WORLD_QUERY_PREFLIGHT.md`、`docs/V3.1_ARCHITECTURE_CONTRACT.md`（§5D 增补）、`docs/test_d1_world_query.py`、`docs/PROJECT_V3.1_MASTER.md`（本文件）。
 
   **目录整理说明（DS 已适配）：** `PROJECT_V3.1_MASTER.md` 与 `V3.1_PRODUCT_GUIDE.md` 已迁入 `docs/`。
   `docs/test_d0_world_activity_capability.py` 原以 `parent.parent` 推导仓库根，会因搬移而误判为 `docs/`。
   **已修复为「标记探测」**（向上寻找同时含 `main.py` + `agent/` + `ext/` 的目录），并新增 `T11.3` / `T11.4` 两项断言防止再次发生。
-  该修复**未改动任何生产代码**。
+  D-1 测试（`docs/test_d1_world_query.py`）同样采用标记探测。上述修复**未改动任何生产代码**。
 
-  **下一步：** 等待架构侧审核 **D-1 Preflight**。**D-1 Preflight 审核通过前，不得进入 D-1 Contract / Tests / Implementation。**
+  **下一步：** 等待架构侧审核 **D-1 Contract Change（§5D）** 与 **D-1 Architecture Tests**。
+  **D-1 Implementation 在架构测试实际通过前禁止开始。**
 
 现在不要直接继续堆 autonomous behavior；
 先完成 Context Foundation，再进入 Agent Decision / Motivation 层。

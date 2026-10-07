@@ -1,0 +1,945 @@
+# -*- coding: utf-8 -*-
+"""
+docs/test_d1_world_query.py
+===========================
+
+V3.1 Phase D-1 · World Query Architecture Boundary Tests
+
+依据：
+    docs/D0_WORLD_ACTIVITY_CAPABILITY_PREFLIGHT.md
+    docs/D0_CONFLICT_AUDIT.md                       （ACCEPTED）
+    docs/D0_ARCHITECTURE_DECISIONS.md               （ACCEPTED）
+    docs/D1_WORLD_QUERY_PREFLIGHT.md                （APPROVED WITH CORRECTIONS）
+    docs/V3.1_ARCHITECTURE_CONTRACT.md §5C / §5D    （CC-20260930-04 / -05）
+
+--------------------------------------------------------------------------
+本文件测试什么
+--------------------------------------------------------------------------
+
+    测试的不是功能，而是 **World Query 的架构边界**。
+
+    由于 D-1 阶段门（Contract `D1G-3` / `D1G-4`）规定：
+
+        「D-1 Implementation 在架构测试实际通过之前禁止开始」
+
+    本文件采用 **两段式断言**：
+
+    【T-A 组】D-1 Implementation 尚未开始 —— 防提前偷做
+        - 不存在 world_query.py
+        - agent/ 不存在任何 Query 实现模块
+        - 不存在 Query 缓存 / 索引
+        - 不存在 HTTP 端点改动
+        - 不存在 AgentRuntime 接入
+
+    【T-B 组】一旦 Query 出现（D-1 Implementation 之后），以下边界必须成立
+        - 不 import main / ext_*
+        - 无任何写入模式（只读）
+        - 不保存 data 引用
+        - 不返回 main.data 内部可变引用
+        - 不调用 LLM / Event / save_data / 写入型 helper
+        - 不涉及 Activity / Capability / Movement / Command
+        - 不读 AgentState
+        - 不在 tick / loop 中调用 O(n) 反查
+        - 命名不含 find_best_ / choose_ / decide_ / suggest_ 等决策语义
+
+    【T-C 组】Contract 与 Preflight 文档边界
+        - §5D 存在且含全部 D-1 规则编号
+        - 5 项修正均已落入 Preflight 与 Contract
+        - `UNSUPPORTED` 清单被冻结
+        - 反模式条款存在
+
+    【T-D 组】D-0 / A/B/C 未被 D-1 改动
+        - D-0 SEALED 基线文件仍存在
+        - think / build_context / ContextLayers / holder API 未变
+        - ext_ai / ext_world / ext_room / main 未被改（结构仍在）
+        - 前端未被改
+
+--------------------------------------------------------------------------
+设计原则
+--------------------------------------------------------------------------
+
+    * **只依赖标准库**（unittest / ast / re / pathlib），不 import main / ext_* / agent
+    * 所有检查通过读取源码文件完成
+    * 采用 **boundary-form 断言**：已冻结的边界必须成立；属后续阶段的边界断言「尚未发生」
+    * 不做任何运行时推断；不做网络 / LLM 调用；不写任何文件
+
+--------------------------------------------------------------------------
+如何运行
+--------------------------------------------------------------------------
+
+    从仓库根目录运行：
+
+        python docs/test_d1_world_query.py
+        python -m unittest docs.test_d1_world_query -v
+
+    若执行环境不可用（例如 DSH Shell `0xC0000142` /
+    `STATUS_DLL_INIT_FAILED`），必须如实报告：
+
+        TEST NOT RUN
+        Reason: environment execution unavailable
+
+    **禁止伪造测试结果。**
+"""
+
+from __future__ import annotations
+
+import ast
+import re
+import unittest
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+
+# =========================================================
+# 0. 路径解析（标记探测，兼容目录整理）
+# =========================================================
+
+_HERE = Path(__file__).resolve().parent
+
+
+def _find_repo_root(start: Path) -> Path:
+    """向上探测仓库根：必须同时包含 main.py、agent/、ext/。"""
+    for candidate in (start, *start.parents):
+        if (
+            (candidate / "main.py").is_file()
+            and (candidate / "agent").is_dir()
+            and (candidate / "ext").is_dir()
+        ):
+            return candidate
+    return start.parent
+
+
+ROOT = _find_repo_root(_HERE)
+
+AGENT_DIR = ROOT / "agent"
+EXT_DIR = ROOT / "ext"
+MAIN_PY = ROOT / "main.py"
+DOCS_DIR = ROOT / "docs"
+INDEX_HTML = ROOT / "index.html"
+
+PREFLIGHT_D1 = DOCS_DIR / "D1_WORLD_QUERY_PREFLIGHT.md"
+CONTRACT_DOC = DOCS_DIR / "V3.1_ARCHITECTURE_CONTRACT.md"
+DECISIONS_D0 = DOCS_DIR / "D0_ARCHITECTURE_DECISIONS.md"
+AUDIT_D0 = DOCS_DIR / "D0_CONFLICT_AUDIT.md"
+PREFLIGHT_D0 = DOCS_DIR / "D0_WORLD_ACTIVITY_CAPABILITY_PREFLIGHT.md"
+TEST_D0 = DOCS_DIR / "test_d0_world_activity_capability.py"
+
+PROJECT_MASTER_CANDIDATES: Sequence[Path] = (
+    DOCS_DIR / "PROJECT_V3.1_MASTER.md",
+    ROOT / "PROJECT_V3.1_MASTER.md",
+)
+
+# Contract §5D 必含规则编号
+REQUIRED_D1_RULES: Sequence[str] = (
+    # World Fact（修正版）
+    "WQ-69", "WQ-70", "WQ-71", "WQ-72", "WQ-73", "WQ-74", "WQ-100",
+    # 绝对边界
+    "WQ-5", "WQ-6", "WQ-7", "WQ-8", "WQ-9",
+    # DI（措辞修正）
+    "WQ-75", "WQ-76", "WQ-77", "WQ-78", "WQ-79", "WQ-101", "WQ-102", "WQ-103", "WQ-104",
+    # AgentState 禁读
+    "WQ-105", "WQ-106", "WQ-107", "WQ-108", "WQ-109",
+    # 反查 + 高频限制
+    "WQ-10", "WQ-11", "WQ-12", "WQ-81", "WQ-82", "WQ-83", "WQ-84",
+    # 返回结构 / 五态
+    "WQ-13", "WQ-14", "WQ-15", "WQ-16", "WQ-17",
+    "WQ-18", "WQ-19", "WQ-20", "WQ-21", "WQ-22", "WQ-96",
+    # 时间
+    "WQ-23", "WQ-24", "WQ-25", "WQ-26",
+    # requester / visibility
+    "WQ-27", "WQ-28", "WQ-29", "WQ-30", "WQ-31",
+    "WQ-94", "WQ-95", "WQ-97", "WQ-98", "WQ-99",
+    # DERIVED 有限支持
+    "WQ-85", "WQ-86", "WQ-87", "WQ-88", "WQ-89",
+    # 反模式（万能世界 API）
+    "WQ-90", "WQ-91", "WQ-92", "WQ-93",
+    # Provider / Event / Activity / Command 边界
+    "WQ-32", "WQ-33", "WQ-34", "WQ-35", "WQ-36", "WQ-112",
+    "WQ-37", "WQ-38", "WQ-39", "WQ-40", "WQ-41",
+    "WQ-42", "WQ-43", "WQ-44", "WQ-45", "WQ-46",
+    "WQ-47", "WQ-48", "WQ-49", "WQ-50", "WQ-51",
+    # Runtime 接入
+    "WQ-52", "WQ-53", "WQ-54", "WQ-55",
+    # 前端 / HTTP
+    "WQ-56", "WQ-57", "WQ-58", "WQ-59", "WQ-60",
+    # 禁止事项
+    "WQ-61", "WQ-62", "WQ-63", "WQ-64", "WQ-65", "WQ-66", "WQ-67", "WQ-68",
+    # UNSUPPORTED 清单
+    "WQ-110", "WQ-111",
+    # 阶段门
+    "D1G-1", "D1G-2", "D1G-3", "D1G-4", "D1G-5", "D1G-6",
+    # 未冻结
+    "NF-9", "NF-10",
+)
+
+# D-1 阶段 schema 不支持、必须 UNSUPPORTED 的查询关键字
+UNSUPPORTED_QUERY_HINTS: Sequence[str] = (
+    "get_map_of_building",
+    "get_npc_location",
+    "query_places",
+    "get_relationship",
+    "find_route",
+    "get_available_places",
+    "get_activity",
+)
+
+# 决策语义命名黑名单（WQ-92）
+DECISION_NAMING_BLACKLIST: Sequence[str] = (
+    "find_best", "find_optimal", "choose_", "decide_", "suggest_",
+    "recommend_", "pick_best", "rank_", "plan_",
+)
+
+# 禁止 Query 依赖的未声明挂载点（沿用 D-0 CP-6 精神）
+FORBIDDEN_QUERY_MOUNTS: Sequence[str] = (
+    "drive_ai", "call_llm", "auto_start_work",
+    "handle_invite_date", "_trigger_invite", "_can_invite_light",
+    "_check_reply_on_message", "get_shop_menu", "_ai_think_invite",
+)
+
+# 写入型 helper（WQ-9）
+WRITE_HELPERS: Sequence[str] = (
+    "save_data", "add_trail", "append_timeline", "append_visited",
+    "track_visit", "track_note", "check_pending_moves", "visit_leave",
+    "enqueue_event", "push_event",
+)
+
+# 写入模式正则（WQ-7 / WQ-104）
+WRITE_PATTERNS: Sequence[str] = (
+    r"\[\s*['\"][^'\"]+['\"]\s*\]\s*=",     # data["k"] = ...
+    r"\.setdefault\s*\(",
+    r"\.pop\s*\(",
+    r"\.update\s*\(",
+    r"\.clear\s*\(",
+    r"\.append\s*\(",
+    r"\.extend\s*\(",
+    r"\.insert\s*\(",
+    r"\.remove\s*\(",
+    r"\.sort\s*\(",
+    r"\.reverse\s*\(",
+    r"del\s+\w+\[",
+)
+
+
+# =========================================================
+# 1. 通用工具
+# =========================================================
+
+def _read_text(path: Path) -> Optional[str]:
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        try:
+            return path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+
+def _parse(path: Path) -> Optional[ast.Module]:
+    src = _read_text(path)
+    if src is None:
+        return None
+    try:
+        return ast.parse(src, filename=str(path))
+    except SyntaxError:
+        return None
+
+
+def _py_files(directory: Path) -> List[Path]:
+    if not directory.is_dir():
+        return []
+    return sorted(
+        p for p in directory.glob("*.py")
+        if p.is_file() and "__pycache__" not in p.parts
+    )
+
+
+def _agent_files() -> List[Path]:
+    return _py_files(AGENT_DIR)
+
+
+def _iter_imports(tree: ast.Module) -> Iterable[Tuple[int, Optional[str], str]]:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                yield (node.lineno, alias.name, alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            mod = node.module
+            for alias in node.names:
+                yield (node.lineno, mod, alias.name)
+
+
+def _top_level_modules(tree: ast.Module) -> Set[str]:
+    mods: Set[str] = set()
+    for _, mod, _alias in _iter_imports(tree):
+        if mod:
+            mods.add(mod.split(".")[0])
+    return mods
+
+
+def _code_lines(path: Path) -> List[str]:
+    src = _read_text(path)
+    if src is None:
+        return []
+    return [ln for ln in src.splitlines() if not ln.strip().startswith("#")]
+
+
+def _has_code_match(path: Path, pattern: str) -> bool:
+    rx = re.compile(pattern)
+    return any(rx.search(ln) for ln in _code_lines(path))
+
+
+def _all_func_names(tree: ast.Module) -> Set[str]:
+    return {
+        n.name for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _class_names(tree: ast.Module) -> Set[str]:
+    return {n.name for n in tree.body if isinstance(n, ast.ClassDef)}
+
+
+def _query_modules() -> List[Path]:
+    """
+    定位「World Query 实现模块」。
+
+    D-1 允许的实现位置（任一）：
+        agent/world_query.py
+        agent/world_query/*.py
+        world_query.py（根，不推荐但兼容）
+    """
+    found: List[Path] = []
+
+    direct = AGENT_DIR / "world_query.py"
+    if direct.is_file():
+        found.append(direct)
+
+    pkg = AGENT_DIR / "world_query"
+    if pkg.is_dir():
+        found.extend(sorted(p for p in pkg.rglob("*.py") if p.is_file()))
+
+    root_level = ROOT / "world_query.py"
+    if root_level.is_file():
+        found.append(root_level)
+
+    return found
+
+
+# =========================================================
+# 2. T-A · D-1 Implementation 尚未开始（防提前偷做）
+# =========================================================
+
+class TAD1NotImplementedYet(unittest.TestCase):
+    """
+    D-1 阶段门（D1G-3 / D1G-4）断言。
+
+    本组在 **D-1 Implementation 之前** 必须全部通过。
+    一旦 Query 被实现（经架构测试通过后），本组应被同步更新为 T-B 模式。
+    """
+
+    def test_ta1_no_world_query_module_yet(self) -> None:
+        """
+        D1G-4：禁止实现 `world_query.py`（在架构测试实际通过之前）。
+
+        注意：本断言在 D-1 Implementation 被授权后需要同步更新 —— 这是设计意图。
+        """
+        modules = _query_modules()
+        self.assertEqual(
+            [str(m.relative_to(ROOT)) for m in modules], [],
+            "D1G-4：D-1 Implementation 尚未授权，不应存在 World Query 实现模块；"
+            f"发现：{[str(m.relative_to(ROOT)) for m in modules]}",
+        )
+
+    def test_ta2_no_query_named_modules_in_agent(self) -> None:
+        """agent/ 中不应出现 query 相关模块（除本测试文档外）。"""
+        suspicious = [
+            p.name for p in _agent_files()
+            if "query" in p.name.lower()
+        ]
+        self.assertEqual(
+            suspicious, [],
+            f"agent/ 中出现 query 相关模块：{suspicious}"
+            "（D-1 Implementation 未授权）",
+        )
+
+    def test_ta3_no_query_cache_or_index_created(self) -> None:
+        """
+        WQ-73 / WQ-84：D-1 不允许 Query 产生 CACHE / 索引。
+
+        断言：agent/ 与 ext/ 中不存在世界查询缓存 / 索引实现。
+        """
+        forbidden_class = re.compile(
+            r"\bclass\s+\w*(WorldQueryCache|QueryCache|RoomBuildingIndex|WorldIndex)\b"
+        )
+        offenders: List[str] = []
+        for path in _agent_files() + _py_files(EXT_DIR):
+            if forbidden_class.search(_read_text(path) or ""):
+                offenders.append(path.name)
+        self.assertEqual(
+            offenders, [],
+            f"WQ-73 / WQ-84：不应存在 Query 缓存 / 索引实现；命中：{offenders}",
+        )
+
+    def test_ta4_no_new_world_query_http_endpoint(self) -> None:
+        """
+        WQ-56 / WQ-58：D-1 不修改现有 HTTP 接口，也尚未新增 Query 端点。
+
+        断言：ext/*.py 与 main.py 中不存在 world_query / world-query 端点。
+        """
+        rx = re.compile(r"['\"]/api/[a-z0-9_/-]*world[-_]?quer[a-z]*['\"]", re.I)
+        offenders: List[str] = []
+        for path in [MAIN_PY] + _py_files(EXT_DIR):
+            src = _read_text(path) or ""
+            if rx.search(src):
+                offenders.append(path.name)
+        self.assertEqual(
+            offenders, [],
+            f"WQ-56：D-1 不应新增 World Query HTTP 端点；命中：{offenders}",
+        )
+
+    def test_ta5_agent_runtime_not_wired_to_query(self) -> None:
+        """
+        WQ-52 / WQ-54：D-1 建立 Query，但 AgentRuntime 暂不接入。
+
+        断言：agent/runtime.py 不引用 world_query。
+        """
+        runtime = AGENT_DIR / "runtime.py"
+        src = _read_text(runtime)
+        self.assertIsNotNone(src, "缺少 agent/runtime.py")
+        self.assertNotIn(
+            "world_query", src,
+            "WQ-52 / WQ-54：agent/runtime.py 不应引用 world_query"
+            "（Runtime 接入属后续阶段，需 Contract Change）",
+        )
+
+    def test_ta6_context_chain_not_wired_to_query(self) -> None:
+        """
+        WQ-32 / WQ-35：Provider 与 ContextAssembler 不得调用 Query。
+        """
+        targets = [
+            AGENT_DIR / "context_assembler.py",
+            AGENT_DIR / "stable_core_provider.py",
+            AGENT_DIR / "recent_provider.py",
+            AGENT_DIR / "long_term_provider.py",
+            AGENT_DIR / "dynamic_world_provider.py",
+        ]
+        offenders: List[str] = []
+        for path in targets:
+            src = _read_text(path)
+            if src is None:
+                continue
+            if "world_query" in src:
+                offenders.append(path.name)
+        self.assertEqual(
+            offenders, [],
+            f"WQ-32 / WQ-35：Provider / ContextAssembler 不得引用 world_query；命中：{offenders}",
+        )
+
+
+# =========================================================
+# 3. T-B · Query 出现后必须成立的边界（当前自动跳过）
+# =========================================================
+
+class TBD1QueryBoundaries(unittest.TestCase):
+    """
+    一旦 World Query 被实现，以下边界必须成立。
+
+    当前（D-1 Implementation 之前）本组自动 skip —— 不是失败。
+    """
+
+    def setUp(self) -> None:
+        self.modules = _query_modules()
+        if not self.modules:
+            self.skipTest(
+                "D-1 Implementation 尚未开始（无 World Query 模块）；"
+                "本组边界将在实现后生效"
+            )
+
+    def test_tb1_query_does_not_import_main_or_ext(self) -> None:
+        """WQ-75：Query 不得 import main / ext_*。"""
+        offenders: List[str] = []
+        for path in self.modules:
+            tree = _parse(path)
+            if tree is None:
+                continue
+            mods = _top_level_modules(tree)
+            if "main" in mods:
+                offenders.append(f"{path.name} -> main")
+            for mod in sorted(mods):
+                if mod.startswith("ext_"):
+                    offenders.append(f"{path.name} -> {mod}")
+            src = _read_text(path) or ""
+            for m in re.finditer(r"^\s*(?:from|import)\s+(ext\.[A-Za-z_]\w*)", src, re.M):
+                offenders.append(f"{path.name} -> {m.group(1)}")
+        self.assertEqual(
+            offenders, [],
+            "WQ-75：World Query 不得 import main / ext_*；命中：" + ", ".join(offenders),
+        )
+
+    def test_tb2_query_has_no_write_patterns(self) -> None:
+        """
+        WQ-7 / WQ-104：Query 模块中不得存在任何写入模式。
+
+        ⚠️ 实现约束（必须在 D-1 Implementation 时注意）：
+
+        本断言是**严格模式** —— 它禁止 Query 模块中出现任何
+        `append` / `sort` / `pop` / `setdefault` / `[...] =` 等模式，
+        **包括对本地副本的操作**。
+
+        后果：**Query 不得通过调用会就地修改 dict/list 的现有 helper
+        来完成反查**。
+
+        例：`main.find_building_of_room(room)` 是 O(buildings × rooms) 线性扫描，
+        本身不修改数据；但若 Query 选择**自行实现**同类反查，必须使用
+        不触发本黑名单的写法（例如列表推导 + `next(...)` + 显式循环）。
+
+        这不是缺陷，而是**刻意的强约束**：
+        既然 Python 无法语言级保证只读，我们就用「禁止一切写入模式」
+        换取「静态可验证的只读性」。
+        """
+        offenders: List[str] = []
+        for path in self.modules:
+            for pat in WRITE_PATTERNS:
+                if _has_code_match(path, pat):
+                    offenders.append(f"{path.name}::{pat}")
+        self.assertEqual(
+            offenders, [],
+            "WQ-7：World Query 必须是只读；命中写入模式：" + "; ".join(offenders),
+        )
+
+    def test_tb3_query_does_not_save_data_reference(self) -> None:
+        """WQ-102：Query 不得保存 data 引用。"""
+        offenders: List[str] = []
+        for path in self.modules:
+            for ln in _code_lines(path):
+                s = ln.strip()
+                if re.match(r"self\.\w*data\w*\s*=", s):
+                    offenders.append(f"{path.name}: {s[:80]}")
+        self.assertEqual(
+            offenders, [],
+            "WQ-102：Query 不得保存 data 引用（禁止 self.data = data）；命中：" + "; ".join(offenders),
+        )
+
+    def test_tb4_query_does_not_call_write_helpers(self) -> None:
+        """WQ-8 / WQ-9：Query 不得调用 save_data 与写入型 helper。"""
+        offenders: List[str] = []
+        for path in self.modules:
+            src = _read_text(path) or ""
+            for helper in WRITE_HELPERS:
+                if re.search(r"\b" + re.escape(helper) + r"\s*\(", src):
+                    offenders.append(f"{path.name} -> {helper}()")
+        self.assertEqual(
+            offenders, [],
+            "WQ-8 / WQ-9：Query 不得调用写入型 helper；命中：" + ", ".join(offenders),
+        )
+
+    def test_tb5_query_does_not_depend_on_undeclared_mounts(self) -> None:
+        """WQ-6：Query 不得依赖 Legacy 挂载点（drive_ai / call_llm / ...）。"""
+        offenders: List[str] = []
+        for path in self.modules:
+            src = _read_text(path) or ""
+            for name in FORBIDDEN_QUERY_MOUNTS:
+                if re.search(r"\b" + re.escape(name) + r"\s*\(", src):
+                    offenders.append(f"{path.name} -> {name}()")
+        self.assertEqual(
+            offenders, [],
+            "WQ-6：Query 不得依赖 Legacy 挂载点；命中：" + ", ".join(offenders),
+        )
+
+    def test_tb6_query_does_not_touch_memory(self) -> None:
+        """WQ-63：Query 不得触碰 Memory。"""
+        offenders: List[str] = []
+        for path in self.modules:
+            src = _read_text(path) or ""
+            for token in ("ext_memory", "ext_mem", "enqueue_event", "ai_memories", "recall_events"):
+                if token in src:
+                    offenders.append(f"{path.name} -> {token}")
+        self.assertEqual(
+            offenders, [],
+            "WQ-63：Query 不得触碰 Memory；命中：" + ", ".join(offenders),
+        )
+
+    def test_tb7_query_does_not_read_agent_state(self) -> None:
+        """WQ-105 ～ WQ-108：Query 不得读取 AgentState。"""
+        offenders: List[str] = []
+        for path in self.modules:
+            src = _read_text(path) or ""
+            for token in ("AgentState", "get_agent_state", "agent.state", "agent_state_dict"):
+                if token in src:
+                    offenders.append(f"{path.name} -> {token}")
+        self.assertEqual(
+            offenders, [],
+            "WQ-105：Query 不得读取 AgentState；命中：" + ", ".join(offenders),
+        )
+
+    def test_tb8_query_does_not_implement_activity_or_capability(self) -> None:
+        """WQ-42 / WQ-64：Query 不得实现 Activity / Capability / Movement / Command。"""
+        offenders: List[str] = []
+        for path in self.modules:
+            src = _read_text(path) or ""
+            for token in (
+                "class Activity", "CapabilityRequest", "CapabilityResult",
+                "PLANNED", "TRAVELING", "ARRIVED", "PAUSED", "CANCELLED",
+                "WorldCommand", "world_command", "find_route", "query_places",
+            ):
+                if token in src:
+                    offenders.append(f"{path.name} -> {token}")
+        self.assertEqual(
+            offenders, [],
+            "WQ-42 / WQ-64：Query 不得实现 Activity / Capability / Movement / Command；"
+            "命中：" + ", ".join(offenders),
+        )
+
+    def test_tb9_query_emits_no_events(self) -> None:
+        """WQ-37 / WQ-41：Query 不产生 / 不消费 Event。"""
+        offenders: List[str] = []
+        for path in self.modules:
+            src = _read_text(path) or ""
+            for token in ("agent.event", "observe_message", "Event(", "emit_event", "push_event"):
+                if token in src:
+                    offenders.append(f"{path.name} -> {token}")
+        self.assertEqual(
+            offenders, [],
+            "WQ-37：Query 不产生 / 不消费 Event；命中：" + ", ".join(offenders),
+        )
+
+    def test_tb10_query_names_express_fact_inquiry(self) -> None:
+        """WQ-92：Query 接口命名必须表达事实询问；禁止决策语义命名。"""
+        offenders: List[str] = []
+        for path in self.modules:
+            tree = _parse(path)
+            if tree is None:
+                continue
+            for name in _all_func_names(tree):
+                low = name.lower()
+                for bad in DECISION_NAMING_BLACKLIST:
+                    if low.startswith(bad) or ("_" + bad.rstrip("_")) in low:
+                        offenders.append(f"{path.name}::{name}")
+        self.assertEqual(
+            offenders, [],
+            "WQ-92：Query 命名不得含决策语义；命中：" + ", ".join(offenders),
+        )
+
+    def test_tb11_query_defines_five_state_status(self) -> None:
+        """WQ-18：Query 必须实现五态 + FORBIDDEN。"""
+        required = ("FOUND", "ABSENT", "UNKNOWN", "UNSUPPORTED", "AMBIGUOUS")
+        for path in self.modules:
+            src = _read_text(path) or ""
+            hits = [r for r in required if r in src]
+            self.assertGreaterEqual(
+                len(hits), 5,
+                f"WQ-18：{path.name} 必须包含五态状态定义；当前命中 {hits}",
+            )
+
+    def test_tb12_query_declares_unsupported_for_missing_schema(self) -> None:
+        """
+        WQ-110 / WQ-111：schema 不支持的查询必须返回 UNSUPPORTED。
+
+        断言：Query 实现中出现 UNSUPPORTED 且覆盖已知不支持项。
+        """
+        joined = "\n".join(_read_text(p) or "" for p in self.modules)
+        self.assertIn(
+            "UNSUPPORTED", joined,
+            "WQ-110：Query 必须能返回 UNSUPPORTED",
+        )
+
+
+# =========================================================
+# 4. T-C · Contract / Preflight 文档边界
+# =========================================================
+
+class TCDocumentationBoundary(unittest.TestCase):
+
+    def test_tc1_d1_preflight_exists(self) -> None:
+        self.assertTrue(PREFLIGHT_D1.is_file(), f"缺少 {PREFLIGHT_D1}")
+
+    def test_tc2_d1_preflight_records_verdict(self) -> None:
+        text = _read_text(PREFLIGHT_D1) or ""
+        self.assertIn(
+            "APPROVED WITH CORRECTIONS", text,
+            "D-1 Preflight 必须记录架构侧裁决：APPROVED WITH CORRECTIONS",
+        )
+
+    def test_tc3_d1_preflight_applies_five_corrections(self) -> None:
+        text = _read_text(PREFLIGHT_D1) or ""
+        markers = (
+            "修正后的定义",          # ①
+            "只读数据视图",          # ②
+            "WQ-81",                 # ③
+            "Q-U3",                  # ④
+            "WQ-94",                 # ⑤
+        )
+        missing = [m for m in markers if m not in text]
+        self.assertEqual(
+            missing, [],
+            f"D-1 Preflight 未落实架构侧 5 项修正标记：{missing}",
+        )
+
+    def test_tc4_contract_contains_section_5d(self) -> None:
+        contract = _read_text(CONTRACT_DOC)
+        self.assertIsNotNone(contract, f"缺少 {CONTRACT_DOC}")
+        self.assertIn("## 5D.", contract, "Contract 缺少 §5D（CC-20260930-05）")
+
+    def test_tc5_contract_declares_cc_20260930_05(self) -> None:
+        contract = _read_text(CONTRACT_DOC) or ""
+        self.assertIn(
+            "CC-20260930-05", contract,
+            "Contract 必须声明 CC-20260930-05",
+        )
+
+    def test_tc6_contract_contains_all_d1_rules(self) -> None:
+        contract = _read_text(CONTRACT_DOC) or ""
+        missing = [r for r in REQUIRED_D1_RULES if r not in contract]
+        self.assertEqual(
+            missing, [],
+            f"Contract §5D 缺少以下 D-1 规则编号：{missing}",
+        )
+
+    def test_tc7_contract_freezes_unsupported_list(self) -> None:
+        """WQ-110 / WQ-111：Contract 必须冻结 UNSUPPORTED 清单并禁止发明字段。"""
+        contract = _read_text(CONTRACT_DOC) or ""
+        for hint in UNSUPPORTED_QUERY_HINTS:
+            self.assertIn(
+                hint, contract,
+                f"WQ-110：Contract §5D 的 UNSUPPORTED 清单缺少 {hint}",
+            )
+        self.assertIn(
+            "临时创造", contract,
+            "WQ-111：Contract 必须明确禁止为示例临时创造字段",
+        )
+
+    def test_tc8_contract_contains_anti_pattern_clause(self) -> None:
+        """WQ-90 ～ WQ-93：反模式条款必须存在。"""
+        contract = _read_text(CONTRACT_DOC) or ""
+        self.assertIn(
+            "万能世界 API", contract,
+            "Contract §5D 必须包含「禁止万能世界 API」反模式条款",
+        )
+        for rule in ("WQ-90", "WQ-91", "WQ-92", "WQ-93"):
+            self.assertIn(rule, contract, f"Contract §5D 缺少 {rule}")
+
+    def test_tc9_contract_declares_phase_gate(self) -> None:
+        """D1G-1 ～ D1G-6：阶段门必须冻结。"""
+        contract = _read_text(CONTRACT_DOC) or ""
+        for g in ("D1G-1", "D1G-2", "D1G-3", "D1G-4", "D1G-5", "D1G-6"):
+            self.assertIn(g, contract, f"Contract §5D 缺少阶段门 {g}")
+        self.assertIn(
+            "禁止实现 `world_query.py`", contract,
+            "D1G-4：Contract 必须明确禁止在测试通过前实现 world_query.py",
+        )
+
+    def test_tc10_contract_states_readonly_is_not_language_guarantee(self) -> None:
+        """WQ-101：Contract 必须明确「只读不是语言级保证」。"""
+        contract = _read_text(CONTRACT_DOC) or ""
+        self.assertIn(
+            "不是语言级保证", contract,
+            "WQ-101：Contract 必须明确记录「只读不是语言级保证」这一技术事实",
+        )
+
+    def test_tc11_contract_keeps_section_5c_intact(self) -> None:
+        """CC-20260930-05 不得重写 §5C。"""
+        contract = _read_text(CONTRACT_DOC) or ""
+        for rule in ("D0G-1", "D0G-2", "AC-5", "EV-9", "CP-1", "ME-21", "WT-1"):
+            self.assertIn(rule, contract, f"§5C 规则 {rule} 不应在 CC-20260930-05 中丢失")
+
+
+# =========================================================
+# 5. T-D · D-0 / A/B/C 未被 D-1 改动
+# =========================================================
+
+class TDD0AndABCUnchanged(unittest.TestCase):
+
+    def test_td1_d0_sealed_artifacts_exist(self) -> None:
+        for path in (AUDIT_D0, DECISIONS_D0, PREFLIGHT_D0, TEST_D0):
+            self.assertTrue(path.is_file(), f"D-0 SEALED 产物缺失：{path}")
+
+    def test_td2_think_still_intent_set_stub(self) -> None:
+        """C-2 §5B.11 / IN-29 / IN-30 未被 D-1 改动。"""
+        path = AGENT_DIR / "runtime.py"
+        tree = _parse(path)
+        self.assertIsNotNone(tree, "缺少或无法解析 agent/runtime.py")
+
+        think = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "think":
+                think = node
+                break
+        self.assertIsNotNone(think, "agent/runtime.py 缺少 think()")
+        ret = think.returns
+        name = ret.id if isinstance(ret, ast.Name) else getattr(ret, "attr", None)
+        self.assertEqual(name, "IntentSet", "IN-29：think() 必须仍返回 IntentSet")
+
+    def test_td3_build_context_still_agent_context(self) -> None:
+        """AR-8 未被 D-1 改动。"""
+        tree = _parse(AGENT_DIR / "runtime.py")
+        self.assertIsNotNone(tree)
+        fn = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "build_context":
+                fn = node
+                break
+        self.assertIsNotNone(fn, "agent/runtime.py 缺少 build_context()")
+        ret = fn.returns
+        name = ret.id if isinstance(ret, ast.Name) else getattr(ret, "attr", None)
+        self.assertEqual(name, "AgentContext", "AR-8：build_context() 必须仍返回 AgentContext")
+
+    def test_td4_context_layers_still_present(self) -> None:
+        """CA-7 未被 D-1 改动。"""
+        tree = _parse(AGENT_DIR / "runtime.py")
+        self.assertIsNotNone(tree)
+        self.assertIn(
+            "ContextLayers", _class_names(tree),
+            "CA-7：ContextLayers 必须仍保留为 deprecated stub",
+        )
+
+    def test_td5_runtime_holder_apis_still_present(self) -> None:
+        """RS-8 ～ RS-13 未被 D-1 改动。"""
+        tree = _parse(AGENT_DIR / "runtime.py")
+        self.assertIsNotNone(tree)
+        names = _all_func_names(tree)
+        for api in (
+            "add_goal", "get_goal", "list_goals", "replace_goal",
+            "add_commitment", "get_commitment", "list_commitments", "replace_commitment",
+        ):
+            self.assertIn(api, names, f"RS-8 ～ RS-13：缺少 holder API {api}()")
+
+    def test_td6_state_py_still_does_not_write_data(self) -> None:
+        """AS-3 未被 D-1 改动（WQ-109 明确不在 D-1 修 state.py）。"""
+        state = AGENT_DIR / "state.py"
+        for pat in (r"\bdata\s*\[[^\]]+\]\s*=", r"\bdata\s*\.\s*setdefault\s*\(",
+                    r"\bdata\s*\.\s*pop\s*\(", r"\bdata\s*\.\s*update\s*\("):
+            self.assertFalse(
+                _has_code_match(state, pat),
+                f"AS-3 / WQ-109：D-1 不应让 agent/state.py 写入 main.data（命中 {pat}）",
+            )
+
+    def test_td7_legacy_brain_and_world_untouched(self) -> None:
+        """WQ-62：D-1 不得修改 ext_ai / ext_world / ext_room / main 的现有行为。"""
+        expectations = {
+            EXT_DIR / "ext_ai.py": ("drive_ai", "execute_action", "build_ai_context", "auto_ai_loop"),
+            EXT_DIR / "ext_world.py": ("ai_spot_tick",),
+            EXT_DIR / "ext_room.py": ("summon",),
+        }
+        for path, names in expectations.items():
+            tree = _parse(path)
+            self.assertIsNotNone(tree, f"缺少或无法解析 {path}")
+            funcs = _all_func_names(tree)
+            for fn in names:
+                self.assertIn(fn, funcs, f"WQ-62：{path.name} 的结构不应在 D-1 被改动（缺少 {fn}）")
+
+        main_src = _read_text(MAIN_PY) or ""
+        self.assertIn("def check_pending_moves", main_src, "WQ-62：main.py 结构不应在 D-1 被改动")
+
+    def test_td8_memory_write_path_still_unreachable(self) -> None:
+        """WQ-63：D-1 不得顺手修 Memory。"""
+        mem = EXT_DIR / "ext_memory.py"
+        src = _read_text(mem)
+        self.assertIsNotNone(src, "缺少 ext/ext_memory.py")
+        self.assertIn("_enqueue_event_impl", src, "WQ-63：ext_memory.py 不应在 D-1 被改动")
+        self.assertIsNone(
+            re.search(r"^\s*(async\s+)?def\s+_enqueue_event_impl\b", src, re.M),
+            "WQ-63：D-1 不得修复 Memory（发现 _enqueue_event_impl 已被定义）",
+        )
+
+    def test_td9_frontend_untouched(self) -> None:
+        """WQ-56：D-1 不得修改前端。"""
+        for rel in ("index.html", "ext/app-core.js", "ext/app-chat.js", "ext/app-map.js"):
+            self.assertTrue((ROOT / rel).is_file(), f"WQ-56：不应修改/删除前端文件 {rel}")
+
+    def test_td10_no_new_toplevel_data_key_added(self) -> None:
+        """
+        WQ-65：D-1 不得新增 main.data 顶层 key。
+
+        以 boundary-form 断言 main.py 的 default_data() 中不出现 query 相关 key。
+        """
+        tree = _parse(MAIN_PY)
+        self.assertIsNotNone(tree)
+        default_fn = None
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == "default_data":
+                default_fn = node
+                break
+        self.assertIsNotNone(default_fn, "main.py 缺少 default_data()")
+
+        keys: Set[str] = set()
+        for node in ast.walk(default_fn):
+            if isinstance(node, ast.Dict):
+                for k in node.keys:
+                    if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                        keys.add(k.value)
+        self.assertGreater(len(keys), 0, "未能解析 default_data() 的 key 集合")
+
+        for key in sorted(keys):
+            low = key.lower()
+            self.assertNotIn(
+                "query", low,
+                f"WQ-65：D-1 不应新增 Query 相关的 main.data 顶层 key：{key!r}",
+            )
+            self.assertNotIn(
+                "world_query", low,
+                f"WQ-65：D-1 不应新增 Query 相关的 main.data 顶层 key：{key!r}",
+            )
+
+
+# =========================================================
+# 6. T-E · 环境能力检查（不伪造结果）
+# =========================================================
+
+class TEEnvironmentCapability(unittest.TestCase):
+
+    def test_te1_repo_root_resolves(self) -> None:
+        self.assertTrue((ROOT / "main.py").is_file(), f"ROOT 解析错误：{ROOT}")
+        self.assertTrue(AGENT_DIR.is_dir() and EXT_DIR.is_dir(), f"ROOT 解析错误：{ROOT}")
+        self.assertNotEqual(ROOT.name, "docs", "ROOT 不应被解析为 docs/")
+
+    def test_te2_no_third_party_import_required(self) -> None:
+        tree = _parse(Path(__file__))
+        self.assertIsNotNone(tree, "无法解析本测试文件自身")
+        stdlib_ok = {
+            "__future__", "ast", "os", "re", "unittest", "pathlib", "typing",
+            "sys", "json", "textwrap", "collections",
+        }
+        mods = _top_level_modules(tree)
+        extra = sorted(m for m in mods if m not in stdlib_ok)
+        self.assertEqual(extra, [], f"本测试文件只能依赖标准库；发现：{extra}")
+
+    def test_te3_project_master_locatable(self) -> None:
+        found = [p for p in PROJECT_MASTER_CANDIDATES if p.is_file()]
+        self.assertTrue(
+            found,
+            "未能定位 PROJECT_V3.1_MASTER.md；"
+            f"候选：{[str(p) for p in PROJECT_MASTER_CANDIDATES]}",
+        )
+
+
+# =========================================================
+# 入口
+# =========================================================
+
+def _print_header() -> None:
+    print("=" * 72)
+    print("V3.1 Phase D-1 · World Query Architecture Boundary Tests")
+    print("=" * 72)
+    print(f"ROOT            : {ROOT}")
+    print(f"agent/          : {len(_agent_files())} py files")
+    print(f"ext/            : {len(_py_files(EXT_DIR))} py files")
+    print(f"d1 preflight    : {'OK' if PREFLIGHT_D1.is_file() else 'MISSING'} -> {PREFLIGHT_D1}")
+    print(f"contract        : {'OK' if CONTRACT_DOC.is_file() else 'MISSING'} -> {CONTRACT_DOC}")
+    print(f"d1 impl modules : {len(_query_modules())} (expected 0 until D-1 Implementation)")
+    for cand in PROJECT_MASTER_CANDIDATES:
+        print(f"project         : {'OK' if cand.is_file() else '--'} -> {cand}")
+    print("-" * 72)
+    print("T-A: D-1 Implementation 尚未开始（防提前偷做）")
+    print("T-B: Query 出现后必须成立的边界（当前自动 skip）")
+    print("T-C: Contract / Preflight 文档边界")
+    print("T-D: D-0 与 A/B/C 未被 D-1 改动")
+    print("T-E: 环境能力（不伪造结果）")
+    print("=" * 72)
+
+
+if __name__ == "__main__":
+    _print_header()
+    unittest.main(verbosity=2)

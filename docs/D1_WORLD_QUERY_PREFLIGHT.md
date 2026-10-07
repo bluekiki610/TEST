@@ -2,7 +2,7 @@
 
 # World Query Foundation
 
-**Status:** PRE-FLIGHT
+**Status:** **APPROVED WITH CORRECTIONS**（架构侧条件通过）
 **Phase:** V3.1 Phase D-1
 **Document Type:** Architecture Preflight / Decision Freeze Preparation
 **Implementation Status:** **NO CODE IMPLEMENTATION AUTHORIZED**
@@ -11,7 +11,109 @@
 
 ---
 
-## 0. 文档目的
+## 0. 架构侧裁决记录（APPROVED WITH CORRECTIONS）
+
+**裁决结论：**
+
+> **D-1 Preflight：条件通过（APPROVED WITH CORRECTIONS）**
+> **允许进入 D-1 Contract Change，但必须先把下面 5 个架构点修正/澄清。**
+> **仍然不写实现代码。**
+
+### 0.1 架构侧认可的部分（约 85% 直接接受）
+
+- 没有趁机实现 World Query
+- 没有碰 `ext_ai.py` / `ext_world.py`
+- 没有碰 Activity / Capability / Movement
+- 没有重新激活 Memory
+- 没有偷偷建立 WorldStore
+- 没有为了满足旧示例而凭空增加 schema
+- 对 G-1 ～ G-8 的 schema 缺口基本诚实
+- 明确把 Query 与 Event / Activity / Command 分开
+- 明确把 Query 设计成可删除、零副作用
+- `AgentRuntime` 暂不接入 —— 同意
+- 前端暂不改 —— 同意
+- **`Q-U4` `purpose="medical"` / `open_now=True` 当前不支持 —— 明确批准**
+
+> 架构侧原话原则：
+> **不能为了让架构文档里的未来示例「看起来能跑」，现在偷偷创造 `purpose`、营业时间、地图关系等字段。**
+> **schema 不存在的事实，就应该返回 `UNSUPPORTED`，而不是猜。**
+
+### 0.2 必须修正的 5 个架构点
+
+| # | 项目 | 修正内容 | 落点 |
+|---|------|---------|------|
+| **①** | `D1-DEC-1` World Fact 定义**过窄** | 改为「当前世界中具有**权威来源、可被系统验证**的当前事实」，来源含 `main.data` 直接存储 / 明确定义的世界时钟 / 既定确定性规则的只读投影；并强制区分 `FACT` / `DERIVED` / `CACHE` / `HISTORY` | §D1-DEC-1 + `WQ-69` ～ `WQ-74` |
+| **②** | `D1-DEC-3` 不得称「注入只读引用」 | 改为「Query 接收调用方注入的 **World 数据视图**；只能读取，不得修改」；**追加：Query 不得保存 `data` 引用；返回值绝不暴露 `main.data` 内部可变引用** | §D1-DEC-3 + `WQ-75` ～ `WQ-80`、`WQ-101` ～ `WQ-104` |
+| **③** | `D1-DEC-5` 高频限制必须成条款 | 新增 **`WQ-81` / `WQ-82`**：O(buildings × rooms) 反查**禁止**接入任何高频 scheduler / tick / polling loop；未来高频需独立 Contract Change | §D1-DEC-5 + `WQ-81` ～ `WQ-84` |
+| **④** | `Q-U3` 不能写成 `UNSUPPORTED` | 改为 **`SUPPORTED / DERIVED QUERY`**（有限支持）：`building → rooms[] → ai_location` 反查；标 `derived=True`；无法解析者单独返回 `UNKNOWN`，**不得假装不存在** | §5.2 + `WQ-85` ～ `WQ-89` |
+| **⑤** | `requester` / visibility 需补最小边界 | D-1 只建立 **requester 身份 + 最小可见性规则**（白名单 5 项）；**禁止**建立完整 Visibility Matrix | §D1-DEC-9 + `WQ-94` ～ `WQ-99` |
+
+### 0.3 架构侧最终裁决表（逐项）
+
+| 项目 | 裁决 | 本 Preflight 落点 |
+|------|------|------------------|
+| D1-DEC-1 World Fact | ⚠️ **修改后批准** | §D1-DEC-1（已改） |
+| D1-DEC-2 Query Boundary | ✅ 批准 | §D1-DEC-2 |
+| D1-DEC-3 DI | ⚠️ **批准，但改成「只读数据视图」，禁止保存引用 / 暴露引用** | §D1-DEC-3（已改） |
+| D1-DEC-4 AgentState | ✅ 批准 | §D1-DEC-4 |
+| D1-DEC-5 Map/Building/Room | ⚠️ **批准 + 增加高频调用限制** | §D1-DEC-5（已改） |
+| D1-DEC-6 QueryResult | ✅ 批准 | §D1-DEC-6 |
+| D1-DEC-7 五态 | ✅ 批准 | §D1-DEC-7 |
+| D1-DEC-8 `now_ts` | ✅ 批准 | §D1-DEC-8 |
+| D1-DEC-9 `requester` | ✅ 批准（+ 最小边界） | §D1-DEC-9（已补） |
+| D1-DEC-10 Context | ✅ 批准 | §D1-DEC-10 |
+| D1-DEC-11 Event | ✅ 批准 | §D1-DEC-11 |
+| D1-DEC-12 Activity | ✅ 批准 | §D1-DEC-12 |
+| D1-DEC-13 Command | ✅ 批准 | §D1-DEC-13 |
+| D1-DEC-14 Runtime | ✅ 批准 | §D1-DEC-14 |
+| D1-DEC-15 Frontend | ✅ 批准 | §D1-DEC-15 |
+| Q-U1 Map | ✅ `UNSUPPORTED` | §5.3 |
+| Q-U2 NPC location | ✅ `UNSUPPORTED` | §5.3 |
+| **Q-U3 AI in building** | ❗ **改为有限支持 / `DERIVED`，不是 `UNSUPPORTED`** | **§5.2（已改）** |
+| Q-U4 purpose/open_now | ✅ `UNSUPPORTED` | §5.3 |
+| Q-U5 relationship | ✅ 当前 `UNSUPPORTED` | §5.3 |
+| Q-U6 route | ✅ `UNSUPPORTED` | §5.3 |
+| Q-U7 available places | ✅ `UNSUPPORTED` | §5.3 |
+| Q-U8 Activity | ✅ `UNSUPPORTED`（D-2） | §5.3 |
+| **R-1**（D-0 Tests ROOT 失效） | ✅ 已修 | §8 |
+| **R-2**（重复 Inventory） | 🟡 收尾清理（**不重新扫描重写**） | §8 |
+| **R-3**（`state.py` import main） | 🟡 登记，**不在 D-1 修** | §8 |
+| **R-4**（O(n) 反查） | 🟡 已加高频限制条款 | §8 + `WQ-81` |
+| **R-5**（测试 NOT RUN） | 🟡 继续如实记录，**不阻塞 Contract**；**进入 D-1 Implementation 前必须找到可执行环境** | §8 |
+
+### 0.4 架构侧特别要求守住的一条
+
+> 这次 D-1 最容易犯的错误不是代码 bug，而是**把 Query 做成「万能世界 API」**。
+
+**✅ 正确：** Location / People / Time 三类事实询问。
+**❌ 错误：** `find route` / `decide where to go` / `determine activity` / `choose target` / `search medical place` / `calculate motivation` / `create goal` / `execute action` / `send SMS`。
+
+> **后者就是我们正在拆掉的 `ext_ai` / 万能分发器的另一种变体。**
+
+**落点：** §5.4 + `WQ-90` ～ `WQ-93`。
+
+### 0.5 流程纪律（架构侧再次强调）
+
+```text
+Preflight
+   ↓
+架构裁决        ← 已完成（APPROVED WITH CORRECTIONS）
+   ↓
+Contract        ← 下一步
+   ↓
+Architecture Tests
+   ↓
+架构测试通过后
+   ↓
+Implementation  ← 禁止提前
+```
+
+> **不要实现 `world_query.py`。**
+> 尤其不要「顺便觉得这个接口很简单，于是先写出来」。
+
+---
+
+## 0.6 文档目的
 
 本文件是 V3.1 Phase D-1 的前置架构确认文件。
 
@@ -183,33 +285,60 @@ _meta（字段来源标记）
 
 World Query 返回的「World Fact」到底是什么？
 
-### 候选
+### ❌ 原建议（过窄，已被架构侧否决）
 
-| 方案 | 内容 | 风险 |
-|------|------|------|
-| A | **`main.data` 中当前值的只读投影**（本 Preflight 建议） | 与 D-0 §4 一致；但会把「推导值」（如 `current_activity`）排除在外 |
-| B | 包含推导值（`_derive_activity` 结果也算 Fact） | 推导逻辑变化会导致「事实」变化，违背 Fact 稳定性 |
-| C | 包含派生缓存（如 `presence` 过期裁剪后的结果） | 引入新的时间语义 |
+> ~~World Fact = `main.data` 中「直接存储的当前值」~~
 
-### 建议：**A**
+**否决理由（架构侧裁决）：**
 
-**理由：**
-
-- D-0 Preflight §4 已定义 World Fact 为「当前世界中可以被系统视为真实状态的数据事实」
-- D-0 `D0G-1` 冻结 `main.data` 为唯一 World 存储位置
-- 若把推导值也算 Fact，则 Fact 会随推导算法变化，破坏「事实」的可审计性
-
-**因此建议冻结：**
+这个定义**过窄**，会与本 Preflight 自己定义的查询冲突：
 
 ```text
-World Fact
-  = main.data 中「直接存储的当前值」
-  ≠ 推导结果
-  ≠ 缓存
-  ≠ 事件历史
+get_world_time()  ← now_str()  并不是 main.data["xxx"] 的原始值
+get_room_time()   ← room_time() 也不是
 ```
 
-**并且：** 若 Query 返回推导值（例如「我正在做什么」），必须**显式标注为 derived**，不得与 Fact 混同。
+若把「必须直接躺在 dict 里」冻结成绝对规则，会立刻产生荒谬结论：
+
+> 「现在是几点」**不是** World Fact？
+
+因此该定义会**在后续阶段把 Contract 自己卡死**。
+
+### ✅ 修正后的定义
+
+> **World Fact = 当前世界中具有权威来源、可被系统验证的当前事实。**
+
+**来源可以是三类：**
+
+```text
+1. main.data 中直接存储的事实
+2. 明确定义的世界时钟 / 时间源
+3. 经过既定、确定性规则得到的只读投影
+```
+
+### 但必须严格区分四种性质
+
+| 性质 | 含义 | 例子 |
+|------|------|------|
+| **`FACT`** | 权威来源直接给出的当前事实 | `ai_location` / `wallets` / `affection` / `buildings` / `rooms` / `npcs` / `user_ais` |
+| **`FACT`（runtime source）** | 由明确定义的世界时钟提供 | `get_world_time()`（`now_str()`，UTC+8）、`get_room_time(room)`（`room_time`，含房间虚拟时钟） |
+| **`DERIVED`** | 由既定确定性规则得到的只读投影 | `_derive_activity()` 结果、`presence` 经过期计算后的列表、按 `rooms[]` + `ai_location` 反查出的「某建筑内的 AI」 |
+| **`CACHE`** | 为性能而复制的副本 | **D-1 不允许 Query 产生任何 CACHE** |
+| **`HISTORY`** | 发生过什么的记录 | `ai_timeline` / `trails` / `ai_visited` / `work_history` / `date_log` — **属 Event History / Memory 范畴（Phase E），不是 World Fact** |
+
+### 冻结建议
+
+| 规则 | 内容 |
+|------|------|
+| **WQ-69** | World Fact = **当前世界中具有权威来源、可被系统验证的当前事实**；**不等于**「必须直接存储在 `main.data` dict 中」 |
+| **WQ-70** | World Fact 的来源限于三类：`main.data` 直接存储 / 明确定义的世界时钟 / 既定确定性规则的只读投影 |
+| **WQ-71** | Query 返回必须标注性质：**`FACT`** 或 **`DERIVED`**（对应 `QueryResult.derived`） |
+| **WQ-72** | **`HISTORY` 不是 World Fact**；Query **不得**把 Event / 历史记录当作当前世界事实返回 |
+| **WQ-73** | **D-1 不允许 Query 产生 `CACHE`**（与 `WQ-10` 一致） |
+| **WQ-74** | `get_world_time()` / `get_room_time()` 属于 **`FACT`（runtime source）**，**不得**因为「不在 dict 里」而被排除在 World Fact 之外 |
+
+> **关键：** 「Fact」与「必须躺在 dict 里」**不是同义词**。
+> 但 Fact 与 HISTORY / CACHE / DERIVED **必须是不同类别**，且 Query 必须如实标注。
 
 ---
 
@@ -298,31 +427,87 @@ World Query 是否可以（直接或间接）读 `main.data`？
 
    现有 Provider 全部采用 `fetch(ai_name, owner, data, ...)` 形式，且明确声明「不 import main / ext_*」。
 
-**因此建议冻结：**
+### ⚠️ 措辞修正（架构侧裁决）
 
-```text
-World Query 采用 Dependency Injection：
-    - 由调用方传入 data（不透明只读引用）
-    - Query 模块不 import main
-    - Query 模块不 import ext_*
-    - Query 模块不持有全局状态
+**不得**把注入的 `data` 描述为「**只读引用**」。
+
+**理由：** Python 的 `dict` **不存在真正的只读引用**。语言层面无法阻止：
+
+```python
+def query(data):
+    data["wallets"]["xxx"] = 999999   # 语言不会阻止
 ```
 
-**必须明确的残余风险（如实记录）：**
+因此正确措辞是：
 
-Python 的 `dict` 无法在语言层面强制只读。因此「Query 不修改 data」只能靠：
+> **Query 接收由调用方注入的 World 数据视图；Query 只能读取，不得修改。**
 
-- 代码约定与 code review
-- D-1 Architecture Tests（静态断言 Query 模块中无写入模式）
-- **架构测试是唯一可自动化的防线**
+**并且追加两条硬性要求（架构侧裁决）：**
 
-> 这一点必须在 Contract 中写明：**只读是约定 + 测试约束，不是语言级保证。**
+#### 要求 A：Query 不得保存 `data` 引用
+
+**禁止：**
+
+```python
+class WorldQuery:
+    def __init__(self, data):
+        self.data = data        # ❌ 长期持有 main.data
+```
+
+**要求：**
+
+```text
+调用
+ ↓
+读取
+ ↓
+返回 QueryResult
+ ↓
+结束（不残留任何对 data 的引用）
+```
+
+#### 要求 B：返回值绝不能暴露原始嵌套引用
+
+**禁止：**
+
+```python
+return data["buildings"][bid]        # ❌ 暴露 main.data 的内部可变对象
+```
+
+因为调用方随后可以：
+
+```python
+result.value["rooms"].append(...)    # 直接改到 World
+```
+
+**要求：**
+
+```text
+QueryResult.value
+  = 安全副本 或 不可变表示
+  ≠ main.data 的内部可变对象引用
+```
+
+### 冻结建议
+
+| 规则 | 内容 |
+|------|------|
+| **WQ-75** | Query 采用 **Dependency Injection**：由调用方注入 World 数据视图；Query 模块**不 import main**、**不 import ext_***、**不持有全局状态** |
+| **WQ-76** | 注入的 `data` **不是**「只读引用」（Python `dict` 无此语义）；**只读是靠约定 + Architecture Tests 保证，不是语言级保证**。**该事实必须写入 Contract，不得含糊** |
+| **WQ-77** | Query **不得保存 `data` 引用**（禁止 `self.data = data` 之类的长期持有）；Query 必须是「调用 → 读取 → 返回 → 结束」 |
+| **WQ-78** | `QueryResult.value` **必须是安全副本或不可变表示**，**不得**暴露 `main.data` 的内部可变对象引用 |
+| **WQ-79** | Query **不得返回 `main.data` 的任何子对象引用**（`dict` / `list` / 嵌套结构均包含） |
+| **WQ-80** | D-1 Architecture Tests **必须**静态断言：Query 模块中不存在赋值 / `setdefault` / `pop` / `update` / `clear` / `append` / `extend` / `insert` / `remove` / `__setitem__` 等写入模式 |
+
+> **`WQ-76` 与 `WQ-78` 是 D-1 最重要的技术诚实性条款：**
+> 我们**不能**声称「只读」是语言保证；
+> 我们**能**保证的是：（a）约定明确、（b）返回值不可穿透、（c）有自动化测试守住。
 
 参考实现风格（与现有 `agent/stable_core_provider.py` 一致）：
 
 ```python
-def fetch_agent_location(ai_name: str, data: Dict[str, Any]) -> Optional[str]:
-    """只读返回 AI 当前房间全名；未知返回 None。"""
+def fetch_agent_location(ai_name: str, data: Dict[str, Any]) -> QueryResult:
+    """只读返回 AI 当前房间全名；未知/不可解析返回对应 status。"""
     ...
 ```
 
@@ -405,8 +590,43 @@ map 层级: 当前 schema 中不存在 World → Map 关系
 | **WQ-10** | 反查**允许**，但必须复用现有语义，**不得新增索引 / 缓存 / schema 字段** |
 | **WQ-11** | Query **必须如实返回当前 schema 能回答的内容**；对 schema 无法回答的内容（如 Map 层级、NPC 位置）返回 `UNSUPPORTED`，**不得猜测** |
 | **WQ-12** | 若 D-1 之后确需 Map / 关系索引，必须走**独立 Contract Change** |
+| **WQ-81** | **O(buildings × rooms) 类反查不得被 D-1 自身接入任何高频 scheduler / tick / polling loop** |
 
-**并且：** 由于 `find_building_of_room` 是 O(buildings × rooms)，建议 Query **不在高频路径上自动调用反查**，由调用方显式请求。
+### ⚠️ 新增硬规则（架构侧裁决，必须写入 Contract）
+
+「不建议高频调用」**不能只停留在建议**。架构侧明确要求把它升级为 Contract 条款：
+
+```text
+WQ-81
+
+World Query 的 O(buildings × rooms) 反查
+不得被 D-1 自身接入任何高频 scheduler / tick / polling loop。
+
+若未来需要高频调用：
+必须单独进行性能与索引 Contract Change。
+```
+
+**为什么必须封住这个口子（架构侧原话要点）：**
+
+```text
+一个看起来很干净的 Query
+        ↓
+后来每 30 秒所有 AI 调一次
+        ↓
+5 个 AI
+        ↓
+未来 20 个 AI
+        ↓
+World Tick 被 Query 拖死
+```
+
+**并且明确规定：**
+
+| 规则 | 内容 |
+|------|------|
+| **WQ-82** | D-1 **自身不得**在任何 tick / loop / scheduler 中调用 O(buildings × rooms) 反查（含 `ai_spot_tick` / `auto_ai_loop` / `work_tick` / `ai_shop_tick` / `date_tick` / `follow_watch` 等） |
+| **WQ-83** | 若未来需要高频反查，**必须先做性能与索引 Contract Change**（含：是否允许索引、索引是 CACHE 还是 FACT、如何重建） |
+| **WQ-84** | Query **不得**为了「让高频调用变快」而自行引入任何缓存（与 `WQ-73` 一致） |
 
 ---
 
@@ -578,7 +798,62 @@ AI A 能否通过 World Query 知道 AI B / NPC / User 的事实？
 | **WQ-30** | 完整可见性矩阵（AI↔AI / AI↔User / AI↔NPC / 上帝视角 / 私聊可见性）留待后续 Contract，**不在 D-1 冻结** |
 | **WQ-31** | Query 对 NPC 只能回答 **schema 能支持的内容**（NPC 归属建筑、name/emoji/desc）；「NPC 位置」「NPC 状态」返回 `UNSUPPORTED`（G-3） |
 
-> **若架构侧选择 B（数据层不限制）：** 必须在本 Preflight 中明确记录，并同时记录「可见性由调用方保证」这一**未被测试覆盖的风险**。
+> **方案 B 已被否决。** 架构侧明确批准方向 C（requester + 最小可见性规则），并追加下方限制。
+
+### ⚠️ 最小可见性边界（架构侧裁决，必须补明确）
+
+**架构侧批准「保留 requester」方向，但要求给 DS 一个明确限制：**
+
+> **D-1 不要试图一次性做完整 Visibility Matrix。**
+
+**产品依据（`V3.1_PRODUCT_GUIDE.md` §13）：**
+
+```text
+AI
+ ↓
+知道自己
+ ↓
+知道自己能观察到的世界
+ ↓
+知道合理可见的其他人
+ ↓
+不知道玩家没有告诉它的事情
+```
+
+#### D-1 只建立「requester 身份 + 最小可见性规则」
+
+**D-1 允许的可见范围（白名单，只有这五项）：**
+
+```text
+✅ 自己的位置
+✅ 自己的状态
+✅ 公开建筑
+✅ 公开房间
+✅ 公开可见人员
+```
+
+**D-1 明确不解决的可见范围（黑名单）：**
+
+```text
+❌ 私人 SMS
+❌ 私人房间
+❌ 其他 AI 私密对话
+❌ 用户私密信息
+```
+
+**为什么：** 这些属于未来的 **Visibility / Privacy / Communication** 阶段。
+**否则 D-1 会爆炸。**
+
+#### 冻结建议
+
+| 规则 | 内容 |
+|------|------|
+| **WQ-94** | D-1 的可见性**只实现白名单五项**：自己的位置 / 自己的状态 / 公开建筑 / 公开房间 / 公开可见人员 |
+| **WQ-95** | D-1 **明确不实现**：私人 SMS / 私人房间 / 其他 AI 私密对话 / 用户私密信息 的可见性判定 |
+| **WQ-96** | D-1 **禁止**建立完整 Visibility Matrix；超出白名单的请求返回 `UNSUPPORTED`（未建模）或 `FORBIDDEN`（明确不可见），**不得返回猜测值** |
+| **WQ-97** | `requester` 为必填语义（具体是否允许缺省在 D-1 Contract 冻结）；**缺省不得解释为「上帝视角」** |
+| **WQ-98** | **禁止** D-1 引入「上帝视角绕过可见性」的查询参数（用户上帝视角属 Presentation / Application 层，不是 World Query 的能力） |
+| **WQ-99** | 完整可见性矩阵（AI↔AI / AI↔User / AI↔NPC / 私聊 / 用户私密）**必须走独立 Contract Change**，不得在 D-1 追加 |
 
 ---
 
@@ -872,22 +1147,146 @@ World Query 与未来的写入入口（World Command）是什么关系？
 | Q-16 | `is_agent_following(ai)` | `ai_follow` | **Legacy 状态** |
 | Q-17 | `get_agent_current_activity_legacy(ai)` | `_derive_activity` | **必须标 `derived=True`**（WQ-43） |
 
-### 5.2 当前 schema **不支持**（必须返回 `UNSUPPORTED`）
+### 5.2 有限支持（**DERIVED Query**，非 `UNSUPPORTED`）
+
+| # | 候选查询 | 性质 | 数据来源 | 说明 |
+|---|---------|------|---------|------|
+| **Q-18** | **`get_agents_in_building(bid)`** | **`DERIVED`（有限支持）** | `buildings[bid].rooms[]` + `ai_location` 反查 | 见下方专门说明 |
+
+#### ⚠️ `Q-U3` 裁决修正（架构侧）
+
+**原 Preflight 写作**：「是否属 `UNSUPPORTED` 或有限支持需裁决」。
+**架构侧裁决：它不是 `UNSUPPORTED`，而是 `SUPPORTED / DERIVED QUERY`。**
+
+**为什么当前数据实际能做到：**
+
+```text
+building
+ ↓
+rooms[]
+ ↓
+ai_location
+ ↓
+反查 AI
+```
+
+例如：
+
+```text
+Building A
+ ├─ Room 1
+ ├─ Room 2
+ └─ Room 3
+
+ai_location
+ ├─ AI-A → Room 1
+ ├─ AI-B → Room 3
+ └─ AI-C → Room X
+
+get_agents_in_building(Building A)
+ ⇒ AI-A, AI-B
+```
+
+**它确实有限制：**
+
+```text
+- O(n)（依赖 O(buildings × rooms) 的房间归属判定）
+- 依赖字符串关系（ai_location 存的是 room 全名，不是 building_id）
+- 不能保证所有 location 都能解析
+- 可能存在 UNKNOWN（某 AI 的 location 指向已不存在 / 无法归属的房间）
+```
+
+**但它不是 `UNSUPPORTED`。** 因此：
+
+```text
+返回示例（正常）:
+    status  = FOUND
+    value   = [AI-A, AI-B]
+    derived = true
+    source  = "main.data.ai_location + main.data.buildings[*].rooms"
+
+返回示例（部分不可解析）:
+    status  = FOUND（value 为可解析者）
+    notes   = 说明哪些 AI 的 location 无法归属
+    并且：对无法解析者单独返回 UNKNOWN，而不是假装它不存在
+```
+
+**冻结建议：**
+
+| 规则 | 内容 |
+|------|------|
+| **WQ-85** | `get_agents_in_building(bid)` 属 **`DERIVED`（有限支持）**，**不是** `UNSUPPORTED` |
+| **WQ-86** | 该查询必须标记 `derived = True`，并标明来源为 `ai_location` + `buildings[*].rooms` |
+| **WQ-87** | 该查询**不得假装**无法解析的 location 不存在：无法归属者必须单独表达为 **`UNKNOWN`**（可为部分结果 + notes） |
+| **WQ-88** | 该查询受 **`WQ-81` / `WQ-82`** 约束：**禁止**接入任何高频 scheduler / tick / polling loop |
+| **WQ-89** | 同类「建筑 → 房间 → AI」反查（含 `get_ais_in_room`、`get_agents_in_building`）**全部归类为 `DERIVED`**，不得归为 `FACT` |
+
+### 5.3 当前 schema **不支持**（必须返回 `UNSUPPORTED`）
 
 | # | 候选查询 | 为什么不能回答 |
 |---|---------|--------------|
 | Q-U1 | `get_map_of_building(bid)` | 无 World→Map 关系（G-2）；`region` 只是标签 |
 | Q-U2 | `get_npc_location(npc)` | NPC 无位置字段（G-3） |
-| Q-U3 | `get_agents_in_building(bid)` | 只能经「建筑 → rooms → ai_location 反查」间接得到；是否属 `UNSUPPORTED` 或「有限支持」需裁决 |
 | Q-U4 | `query_places(purpose=..., open_now=...)` | 无 `purpose` / 营业时间 / 用途字段（D-0 Preflight §66 的示例**当前无法实现**） |
 | Q-U5 | `get_relationship(ai, user)` | 只有 `affection` 数值，无 relationship 结构 |
 | Q-U6 | `find_route(origin, destination)` | 无路径 / 距离 / 连通性数据 |
 | Q-U7 | `get_available_places(ai)` | 无「可达性」建模 |
 | Q-U8 | `get_activity(activity_id)` | Activity 属 D-2（`WQ-42`） |
 
+> **以上 `UNSUPPORTED` 裁决已获架构侧批准。**
+>
 > **Q-U4 特别重要：** D-0 Preflight §66 把 `query_places(purpose="medical", urgency="high", open_now=True)` 当作 World Query 的目标示例，
-> 但**当前 schema 完全没有这些字段**。这必须在 D-1 Contract 中**明确记录为「当前不支持」**，
-> 不得为了让示例成立而临时发明字段（那会违反 `WQ-3` / `WQ-4`）。
+> 但**当前 schema 完全没有这些字段**。架构侧明确批准：**记录为「当前不支持」**，
+> **不得为了让架构文档里的未来示例「看起来能跑」而偷偷创造 `purpose` / 营业时间 / 地图关系等字段**（违反 `WQ-3` / `WQ-4`）。
+>
+> 原则：**schema 不存在的事实，就应该返回 `UNSUPPORTED`，而不是猜。**
+
+### 5.4 反模式警示（架构侧特别要求守住）
+
+**D-1 最容易犯的错误不是代码 bug，而是把 Query 做成「万能世界 API」。**
+
+**✅ 正确形态：**
+
+```text
+                 World Query
+                     │
+       ┌─────────────┼─────────────┐
+       ↓             ↓             ↓
+   Location        People        Time
+       │             │             │
+   Building        AI/User        Room
+   Room            NPC            World
+       │
+     Facts
+```
+
+**❌ 错误形态（禁止）：**
+
+```text
+WorldQuery
+   ├─ find route
+   ├─ decide where to go
+   ├─ determine activity
+   ├─ choose target
+   ├─ search medical place
+   ├─ calculate motivation
+   ├─ create goal
+   ├─ execute action
+   ├─ send SMS
+   └─ ...
+```
+
+> **前一种是 World Query。后一种就是我们正在拆掉的 `ext_ai` / 万能分发器的另一种变体。**
+> 这条必须守住。
+
+**冻结建议：**
+
+| 规则 | 内容 |
+|------|------|
+| **WQ-90** | World Query **只回答「现在是什么」**；**不得**包含任何「应该去哪」「选谁」「做什么」语义 |
+| **WQ-91** | Query **不得**提供 route / planning / selection / ranking / recommendation 类接口（这些属 Decision / Planning，是后续阶段） |
+| **WQ-92** | Query 接口命名必须表达**事实询问**（`get_*` / `is_*` / `list_*`）；**禁止** `find_best_*` / `choose_*` / `decide_*` / `suggest_*` 类命名 |
+| **WQ-93** | 若某查询需要「为调用方挑一个最优解」，它**不是 World Query**，必须在 D-1 Contract 中被拒绝 |
 
 ---
 
@@ -931,6 +1330,30 @@ World Query 与未来的写入入口（World Command）是什么关系？
 | **WQ-66** | D-1 **不新增** 持久化文件 / 数据库 / 缓存文件 |
 | **WQ-67** | D-1 的产物必须**可独立测试**，且测试**只依赖标准库**（与 D-0 Tests 一致） |
 | **WQ-68** | D-1 必须能被**删除而不影响任何现有功能**（对应 `INVARIANT-19`：Feature Removability） |
+| **WQ-81** | **O(buildings × rooms) 类反查不得被 D-1 自身接入任何高频 scheduler / tick / polling loop** |
+| **WQ-82** | D-1 自身不得在任何 tick / loop / scheduler 中调用 O(buildings × rooms) 反查 |
+| **WQ-83** | 若未来需要高频反查，必须先做性能与索引 Contract Change |
+| **WQ-84** | Query 不得为了「让高频调用变快」而自行引入任何缓存（与 `WQ-73` 一致） |
+| **WQ-85** | `get_agents_in_building(bid)` 属 **`DERIVED`（有限支持）**，**不是** `UNSUPPORTED` |
+| **WQ-86** | 该查询必须标记 `derived = True`，并标明来源 `ai_location` + `buildings[*].rooms` |
+| **WQ-87** | 该查询不得假装无法解析的 location 不存在：无法归属者必须单独表达为 `UNKNOWN` |
+| **WQ-88** | 该查询受 `WQ-81` / `WQ-82` 约束：禁止接入高频 scheduler / tick / polling loop |
+| **WQ-89** | 同类「建筑 → 房间 → AI」反查全部归类为 `DERIVED`，不得归为 `FACT` |
+| **WQ-90** | World Query 只回答「现在是什么」；不得包含任何「应该去哪 / 选谁 / 做什么」语义 |
+| **WQ-91** | Query 不得提供 route / planning / selection / ranking / recommendation 类接口 |
+| **WQ-92** | Query 接口命名必须表达**事实询问**（`get_*` / `is_*` / `list_*`）；禁止 `find_best_*` / `choose_*` / `decide_*` / `suggest_*` |
+| **WQ-93** | 若某查询需要「为调用方挑一个最优解」，它**不是** World Query，必须在 D-1 Contract 中被拒绝 |
+| **WQ-94** | D-1 可见性只实现白名单五项（自己的位置 / 自己的状态 / 公开建筑 / 公开房间 / 公开可见人员） |
+| **WQ-95** | D-1 明确不实现：私人 SMS / 私人房间 / 其他 AI 私密对话 / 用户私密信息 的可见性判定 |
+| **WQ-96** | D-1 禁止建立完整 Visibility Matrix；超出白名单返回 `UNSUPPORTED` 或 `FORBIDDEN`，不得返回猜测值 |
+| **WQ-97** | `requester` 为必填语义；**缺省不得解释为「上帝视角」** |
+| **WQ-98** | 禁止 D-1 引入「上帝视角绕过可见性」的查询参数 |
+| **WQ-99** | 完整可见性矩阵必须走独立 Contract Change，不得在 D-1 追加 |
+| **WQ-100** | World Fact 定义见 `D1-DEC-1` 修正版：**不等于「必须直接存储在 `main.data` dict 中」**；须区分 `FACT` / `DERIVED` / `CACHE` / `HISTORY` |
+| **WQ-101** | 注入的 `data` **不是「只读引用」**；只读靠约定 + Architecture Tests，**不是语言级保证**（必须写入 Contract，不得含糊） |
+| **WQ-102** | Query **不得保存 `data` 引用**（禁止 `self.data = data` 之类长期持有） |
+| **WQ-103** | `QueryResult.value` 必须是安全副本或不可变表示，**不得暴露 `main.data` 的任何内部可变对象引用** |
+| **WQ-104** | D-1 Architecture Tests 必须静态断言 Query 模块中不存在任何写入模式 |
 
 > `WQ-68` 是 D-1 最重要的验收性质：
 > **因为 D-1 不接入 Runtime、不改旧接口，所以「删掉 Query」必须不改变任何现有行为。**
@@ -938,35 +1361,54 @@ World Query 与未来的写入入口（World Command）是什么关系？
 
 ---
 
-## 8. 本 Preflight 发现的新风险（必须上报）
+## 8. 本 Preflight 发现的新风险（已由架构侧裁决处置）
 
-| # | 风险 | 说明 |
-|---|------|------|
-| **R-1** | **D-0 Tests 的 `ROOT` 解析因目录整理而失效** | `PROJECT_V3.1_MASTER.md` 与 `V3.1_PRODUCT_GUIDE.md` 已迁入 `docs/`。`docs/test_d0_world_activity_capability.py` 原用 `parent.parent` 推导 ROOT，会**误判 ROOT 为 `docs/`**，导致全部用例失效。**本轮已修复为「标记探测」**（向上寻找同时含 `main.py` + `agent/` + `ext/` 的目录），并新增 3 项断言（`T11.3` / `T11.4`）防止再次发生 |
-| **R-2** | **`docs/` 内出现重复的 Inventory** | 同时存在 `V3.1_GLOBAL_ARCHITECTURE_INVENTORY.md`（根）与 `docs/V3.1_GLOBAL_ARCHITECTURE_INVENTORY.md`。按 `BL-2`，两者都**不再是当前事实依据**；但重复副本本身构成潜在的文档 SOT 问题，建议在 D-0 Closure 收尾时统一 |
-| **R-3** | **`agent/state.py:15` 仍直接 import main** | `D0-014` 记录的待处理项。D-1 建立 Query 后，该模块的读取入口归属必须裁定 |
-| **R-4** | **Contract `WQ-4`（不引入新索引）与 G-1（O(n) 反查）冲突** | 若 World Query 进入高频路径，线性反查成本会成为问题。本 Preflight 建议「不新增索引」，但需架构侧确认是否接受该性能边界 |
-| **R-5** | **D-0 Tests 仍为 NOT RUN** | 工作区 Shell / Python / Git 均不可执行（`0xC0000142`）。**D-1 的测试同样会面临同一限制**，需提前规划在可执行环境中运行 |
+| # | 风险 | 说明 | **架构侧处置** |
+|---|------|------|--------------|
+| **R-1** | **D-0 Tests 的 `ROOT` 解析因目录整理而失效** | `PROJECT_V3.1_MASTER.md` 与 `V3.1_PRODUCT_GUIDE.md` 已迁入 `docs/`。`docs/test_d0_world_activity_capability.py` 原用 `parent.parent` 推导 ROOT，会**误判 ROOT 为 `docs/`**，导致全部用例失效 | ✅ **已修**：改为「标记探测」（向上寻找同时含 `main.py` + `agent/` + `ext/` 的目录），并新增 `T11.3` / `T11.4` 断言防止再次发生 |
+| **R-2** | **`docs/` 内出现重复的 Inventory** | 同时存在根目录与 `docs/` 两份 `V3.1_GLOBAL_ARCHITECTURE_INVENTORY.md`。按 `BL-2` 两者都**不再是当前事实依据** | 🟡 **收尾清理**：标记为 deprecated / historical，或删除重复副本，明确唯一文档位置。**禁止重新扫描整个项目重写 Inventory**（那会重新打开架构） |
+| **R-3** | **`agent/state.py:15` 仍直接 import main** | `D0-014` 记录的待处理项 | 🟡 **登记，不在 D-1 修**。方向：D-1 建立 Query → 明确 **AgentState 不作为 Query 数据源** → **后续再裁定** AgentState 的 World 读取入口。**不现在改 `state.py`** |
+| **R-4** | **Contract `WQ-4`（不引入新索引）与 G-1（O(buildings × rooms) 反查）的张力** | 若 Query 进入高频路径，线性反查会拖慢 World Tick | 🟡 **已加高频限制条款**：`WQ-81` / `WQ-82` / `WQ-83` / `WQ-84` |
+| **R-5** | **D-0 Tests 仍为 `NOT RUN`** | 工作区 Shell / Python / Git 均不可执行（`0xC0000142`） | 🟡 **继续如实记录，不阻塞 Contract**；但 **进入 D-1 Implementation 之前必须找到能运行 Python / Git 的环境，把 D-0 + D-1 架构测试实际跑起来**。不能长期依赖「代码看起来正确」 |
 
-> **R-1 已在本轮修复**（属既有 D-0 产物的适配性修复，未改动任何生产代码）。
-> **R-2 ～ R-5 仅记录，等待架构侧裁决。**
+> **R-1 已在本轮修复**（属既有 D-0 产物的适配性修复，**未改动任何生产代码**）。
+> **R-2 ～ R-5 的处置已由上表冻结。**
+
+### 8.1 架构侧对 R-5 的明确要求（必须遵守）
+
+```text
+D-0 测试仍然 NOT RUN 这件事不阻塞我们做 Contract。
+
+但在真正进入 D-1 Implementation 前，必须找到能运行 Python/Git 的环境，
+把 D-0 + D-1 架构测试实际跑起来。
+
+不能长期依赖「代码看起来正确」。
+```
+
+**因此 D-1 的阶段门为：**
+
+```text
+D-1 Contract        ✅ 允许
+D-1 Architecture Tests（创建）  ✅ 允许
+D-1 Tests 实际运行   ⚠️ 需要可执行环境（当前不可用）
+D-1 Implementation   ⛔ 直到测试实际通过为止
+```
 
 ---
-
 ## 9. D-1 完成后的正确顺序（不得跳步）
 
 ```text
 D-1 Preflight（本文件）
     ↓
-架构审核
+架构审核（APPROVED WITH CORRECTIONS）   ✅ 已完成
     ↓
 D-1 Contract Change（新增 Contract §5D，冻结 Query 边界与接口形状）
     ↓
 D-1 Architecture Tests（docs/test_d1_world_query.py）
     ↓
-D-1 Implementation（新增只读 Query 模块）
+D-1 Tests 运行（⚠️ 需要可执行环境）
     ↓
-D-1 Tests 运行（需可执行环境）
+D-1 Implementation（新增只读 Query 模块）   ⛔ 测试实际通过前禁止
     ↓
 D-1 验收
     ↓
@@ -1052,22 +1494,46 @@ Preflight → 直接大量写代码
 
 ```text
 Status:
-    PRE-FLIGHT
+    APPROVED WITH CORRECTIONS
+    （架构侧条件通过；5 项修正已落入本文件）
+
+Corrections Applied:
+    ① D1-DEC-1  World Fact 定义扩宽（FACT / DERIVED / CACHE / HISTORY 四分类）
+    ② D1-DEC-3  「只读数据视图」措辞修正 + 禁止保存引用 / 禁止暴露内部可变引用
+    ③ D1-DEC-5  新增高频调用禁止条款（WQ-81 ～ WQ-84）
+    ④ §5.2      Q-U3 改为 DERIVED 有限支持（WQ-85 ～ WQ-89）
+    ⑤ D1-DEC-9  requester / visibility 最小边界（WQ-94 ～ WQ-99）
+    额外  §5.4     反模式警示：禁止把 Query 做成「万能世界 API」（WQ-90 ～ WQ-93）
+
+Rule Count:
+    WQ-5 ～ WQ-104（含 D-0 既有 WQ-1 ～ WQ-4）
 
 Implementation:
-    NOT AUTHORIZED
+    NOT AUTHORIZED（禁止实现 world_query.py）
 
 Next:
-    Review / Resolve 14 Decisions + WQ-5 ～ WQ-68
-
-After Approval:
-    D-1 Contract Change（Contract §5D）
+    D-1 Contract Change（新增 Contract §5D，只冻结 Query 正式接口语义）
 
 After Contract:
-    D-1 Architecture Tests
+    D-1 Architecture Tests（docs/test_d1_world_query.py）
 
-After Tests:
+After Tests 实际通过:
     D-1 Implementation
 ```
+
+### 12.1 D-0 测试仍然 NOT RUN 的处置
+
+```text
+TEST NOT RUN
+Reason: environment execution unavailable
+        pwsh / cmd 均以 exit code 3221225794 (0xC0000142, STATUS_DLL_INIT_FAILED) 失败
+        工作区不是 Git 仓库（无 .git），也不是可运行实例（无 data/）
+```
+
+**架构侧处置（R-5）：**
+
+> **不阻塞 D-1 Contract。**
+> 但 **进入 D-1 Implementation 之前，必须找到能运行 Python / Git 的环境，把 D-0 + D-1 架构测试实际跑起来。**
+> **不能长期依赖「代码看起来正确」。**
 
 **End of D-1 World Query Preflight**
