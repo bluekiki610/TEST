@@ -70,6 +70,129 @@ def setup(app, data, helpers):
                     stories.append({"building_id": bid, "building": bname, "index": i, "author": n.get("author"), "text": n.get("text"), "time": n.get("time")})
         return {"memories": mems, "notes": notes[-50:][::-1], "diaries": diaries[-50:][::-1], "stories": stories[-50:][::-1]}
 
+    # ---------- 记忆库 · 副本回顾（只读；展开章节看当时的详细对话） ----------
+    def _slice_chapter_msgs(history, chapter_start_round, chapter_end_round):
+        """按「用户消息作为一轮开始」切片出一章的对话。
+
+        ⚠️ 这里与 ext_instance.py 的 _slice_instance_chapter_msgs 是同一套语义
+        （ext_mem 比 ext_instance 先加载，无法直接 import，故各自保留一份）。
+        两处必须保持一致，否则「展开的对话」会和「这一章的总结」对不上。
+        本项目「一轮 = 从一条 user 消息到下一条 user 消息之前」。
+        """
+        history = history or []
+        user_idxs = [i for i, mm in enumerate(history) if mm.get("role") == "user"]
+        if not user_idxs:
+            return []
+        start_pos = chapter_start_round - 1
+        end_pos = chapter_end_round  # exclusive
+        if start_pos < 0 or start_pos >= len(user_idxs):
+            return []
+        start_idx = user_idxs[start_pos]
+        end_idx = user_idxs[end_pos] if end_pos < len(user_idxs) else len(history)
+        return history[start_idx:end_idx]
+
+    def _agg_instance_chapters(inst):
+        out = []
+        for c in (inst.get("chapters") or []):
+            msgs = _slice_chapter_msgs(
+                inst.get("chat_history", []),
+                c.get("round_start", 1),
+                c.get("round_end", 0)
+            )
+            out.append({
+                "chapter": c.get("chapter"),
+                "title": c.get("title") or ("第%s章" % c.get("chapter")),
+                "summary": c.get("summary") or "",
+                "round_start": c.get("round_start"),
+                "round_end": c.get("round_end"),
+                "time": c.get("time") or "",
+                "messages": [
+                    {
+                        "sender": mm.get("sender", "?"),
+                        "content": mm.get("content", ""),
+                        "time": mm.get("time", ""),
+                        "role": mm.get("role", "")
+                    }
+                    for mm in msgs if mm.get("content")
+                ]
+            })
+        return out
+
+    @app.get("/api/memory/instances")
+    async def memory_instances(user: str = ""):
+        """记忆库「副本」页：列出该用户已结束的副本（只读回顾用）。"""
+        u = canonical_contact_name((user or '').strip())
+        if not u:
+            return {"ok": False, "instances": []}
+        out = []
+        for iid, inst in (data.get("instances", {}).get(u, {}) or {}).items():
+            if not (inst.get("finished") or inst.get("status") == "ended"):
+                continue
+            ai_name = ""
+            for p in (inst.get("participants") or []):
+                if p.get("type") == "ai":
+                    ai_name = p.get("name", "")
+                    break
+            out.append({
+                "iid": iid,
+                "name": inst.get("name", "未命名"),
+                "cover": inst.get("cover", ""),
+                "ai": ai_name,
+                "tags": inst.get("tags", []) or [],
+                "summary": inst.get("summary", "") or "",
+                "chapter_count": len(inst.get("chapters") or []),
+                "round_count": inst.get("round_count", 0),
+                "ended_at": inst.get("ended_at", "") or inst.get("created_at", ""),
+                "created_at": inst.get("created_at", "") or ""
+            })
+        out.sort(key=lambda x: x.get("ended_at") or x.get("created_at") or "", reverse=True)
+        return {"ok": True, "instances": out}
+
+    @app.get("/api/memory/instance")
+    async def memory_instance_detail(user: str = "", iid: str = ""):
+        """单个副本的回顾详情：最终总结 + 每章总结 + 该章详细对话。"""
+        u = canonical_contact_name((user or '').strip())
+        if not u or not iid:
+            return {"ok": False, "msg": "缺少参数"}
+        inst = (data.get("instances", {}).get(u, {}) or {}).get(iid)
+        if not inst:
+            return {"ok": False, "msg": "副本不存在"}
+        ai_name = ""
+        for p in (inst.get("participants") or []):
+            if p.get("type") == "ai":
+                ai_name = p.get("name", "")
+                break
+        return {
+            "ok": True,
+            "iid": iid,
+            "name": inst.get("name", "未命名"),
+            "cover": inst.get("cover", ""),
+            "ai": ai_name,
+            "status": inst.get("status", ""),
+            "background": inst.get("background", "") or "",
+            "premise": inst.get("premise", "") or "",
+            "summary": inst.get("summary", "") or "",
+            "participants": inst.get("participants", []) or [],
+            "round_count": inst.get("round_count", 0),
+            "ended_at": inst.get("ended_at", "") or "",
+            "chapters": _agg_instance_chapters(inst)
+        }
+
+    @app.post("/api/memory/instance/delete")
+    async def memory_instance_delete(body: dict):
+        """删除整份副本记录（用户在记忆库里回顾后不想要了）。"""
+        u = canonical_contact_name((body.get("user") or "").strip())
+        iid = (body.get("iid") or "").strip()
+        if not u or not iid:
+            return {"ok": False, "msg": "缺少参数"}
+        insts = data.get("instances", {}).get(u, {})
+        if iid not in insts:
+            return {"ok": False, "msg": "副本不存在"}
+        insts.pop(iid, None)
+        save_data()
+        print(f"[ext_mem] 记忆库删除副本 {iid} (user={u})", flush=True)
+        return {"ok": True}
+
     @app.get("/api/user/profile")
     async def user_profile_get(user: str):
         u = canonical_contact_name((user or '').strip())

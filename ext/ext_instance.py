@@ -80,6 +80,25 @@ def setup(app, data, helpers):
                     return hall
         return "main"
 
+    # ---------- 副本章节切片（章节生成 与 记忆库回顾 共用同一套语义） ----------
+    def _slice_instance_chapter_msgs(history, chapter_start_round, chapter_end_round):
+        """按「用户消息作为一轮开始」切片出一章的对话。
+
+        ⚠️ 必须与 _generate_instance_chapter 里的切片保持一致，
+        否则「展开的详细对话」会和「这一章的总结」对不上。
+        """
+        history = history or []
+        user_idxs = [i for i, mm in enumerate(history) if mm.get("role") == "user"]
+        if not user_idxs:
+            return []
+        start_pos = chapter_start_round - 1
+        end_pos = chapter_end_round  # exclusive
+        if start_pos < 0 or start_pos >= len(user_idxs):
+            return []
+        start_idx = user_idxs[start_pos]
+        end_idx = user_idxs[end_pos] if end_pos < len(user_idxs) else len(history)
+        return history[start_idx:end_idx]
+
     # ---------- 副本章节生成（只读副本内容，绝不碰现实世界） ----------
     def _generate_instance_chapter(owner, iid, chapter_start_round, chapter_end_round):
         """在后台线程里为副本生成一章总结。只读取本副本的 background/premise/chapters/chat_history。"""
@@ -89,17 +108,8 @@ def setup(app, data, helpers):
             if not inst:
                 return
             history = inst.get("chat_history", [])
-            # ---- 切片：按"用户消息作为一轮开始"的语义，不假设 1轮=2条 ----
-            user_idxs = [i for i, mm in enumerate(history) if mm.get("role") == "user"]
-            if not user_idxs:
-                return
-            start_pos = chapter_start_round - 1
-            end_pos = chapter_end_round  # exclusive
-            if start_pos >= len(user_idxs):
-                return
-            start_idx = user_idxs[start_pos]
-            end_idx = user_idxs[end_pos] if end_pos < len(user_idxs) else len(history)
-            chapter_msgs = history[start_idx:end_idx]
+            # ---- 切片：与记忆库回顾共用同一个函数，保证两边一致 ----
+            chapter_msgs = _slice_instance_chapter_msgs(history, chapter_start_round, chapter_end_round)
             if not chapter_msgs:
                 return
             chat_text = "\n".join(
