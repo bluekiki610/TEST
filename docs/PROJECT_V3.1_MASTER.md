@@ -113,18 +113,24 @@
   | **D-1 Behavior Tests（D1-H4）** | ✅ **RAN / PASSED**（`docs/test_d1_world_query_behavior.py`：**Ran 70 tests … OK**，真实运行） |
   | **D-1 Implementation Review** | ✅ **APPROVED** |
   | **D-1 SEAL** | ✅ **SEALED**（见 §20.5.2 SEAL Record） |
-  | D-2 | 🔓 **READY / NEXT**（Preflight 尚未创建） |
+  | **D-2 Preflight** | ✅ **APPROVED WITH ARCHITECTURAL CORRECTIONS** |
+  | **D-2 Contract §5E** | ✅ **APPROVED**（CC-20260930-06，含 §5E.22 D-2 阶段门） |
+  | **D-2 Architecture Tests** | ✅ **APPROVED**（架构审核 SHA `a622e537…`，Ran 53 tests … OK）<br>✅ **SEALED**（门控修正后 **Ran 64 tests … OK**，见 §20.5.3 Seal Record） |
+  | **D-2 Gate** | 🔒 **CLOSED**（`D2G-GATE-STATUS: CLOSED` / marker `null`；实测确认） |
+  | **D-2 Implementation** | 🔴 **NOT AUTHORIZED**（`agent/activity.py` 未创建） |
+  | D-3 | 🔴 **BLOCKED** |
 
   **D-2 进展：**
 
   ```text
   D-2 Preflight                ✅ APPROVED WITH ARCHITECTURAL CORRECTIONS
   D-2 Contract §5E             ✅ APPROVED（CC-20260930-06）
-  D-2 Architecture Tests       ✅ 53/53 PASSED（首次真实运行修正后）
+  D-2 Architecture Tests       ✅ APPROVED（SHA a622e537，Ran 53 tests … OK）
+  D-2 Architecture Tests SEAL  ✅ SEALED（门控修正后 Ran 64 tests … OK）
   D-2 门控设计修正              ✅ APPLIED（presence ≠ authorization；EG-12 ～ EG-17）
-  D-2 Gate CLOSED 已恢复        ✅ 实测 GATE STATE = CLOSED（第三轮）
   D-2 门状态结构化              ✅ APPLIED（D2G-GATE-STATUS / D2G-3-MARKER 单一来源）
-  D-2 Architecture Tests 重跑   ⏳ 待回填（64 项；上次 63/64，余 1 项为本轮修正项）
+  D-2 Gate CLOSED               ✅ 实测 GATE STATE = CLOSED
+  D-2 四套回归                  ✅ D-0 / D-1 / D-1 behavior / D-2 全部 OK
   D-2 Gate                     🔒 CLOSED（D2G-GATE-STATUS: CLOSED / marker null）
   D-2 Implementation           🔴 NOT AUTHORIZED
   D-3                          🔴 BLOCKED
@@ -1688,7 +1694,12 @@ THINK（仍为 Stub）
 | **D-1** | **Behavior Tests（D1-H4）** | ✅ **RAN / PASSED**（`docs/test_d1_world_query_behavior.py`：**Ran 70 tests … OK**，真实运行） |
 | **D-1** | **Implementation Review** | ✅ **APPROVED** |
 | **D-1** | **SEAL** | ✅ **SEALED**（见 §20.5.2 SEAL Record） |
-| D-2 | Activity Contract | 🔓 **READY / NEXT**（Preflight 尚未创建，本轮未提前设计） |
+| **D-2** | **Preflight** | ✅ **APPROVED WITH ARCHITECTURAL CORRECTIONS** |
+| **D-2** | **Contract §5E** | ✅ **APPROVED**（CC-20260930-06，含 §5E.22 D-2 阶段门） |
+| **D-2** | **Architecture Tests** | ✅ **APPROVED**（SHA `a622e537…`，**Ran 53 tests … OK**）<br>门控修正后 **Ran 64 tests … OK** |
+| **D-2** | **Architecture Tests SEAL** | ✅ **SEALED**（见 §20.5.3 SEAL Record） |
+| **D-2** | **Gate** | 🔒 **CLOSED**（`D2G-GATE-STATUS: CLOSED` / marker `null`） |
+| **D-2** | **Implementation** | 🔴 **NOT AUTHORIZED**（`agent/activity.py` 未创建） |
 | D-3 | Location / Movement Continuity | ⛔ 未开始（前置 Blocker：World Tick 可靠性，见 Contract §5C.6） |
 | D-4 | Capability / Action Port | ⛔ 未开始 |
 | D-5 | Agent Decision → Capability | ⛔ 未开始 |
@@ -1793,6 +1804,136 @@ Remaining risks（非阻塞）  : ① DS 侧 Shell 无法执行子进程（0xC00
 
 Final decision            : D-1 SEALED
 Next                      : D-2 Activity Contract（需先创建 Preflight）
+================================================================
+```
+
+---
+
+#### 20.5.3 D-2 ARCHITECTURE TESTS SEAL RECORD
+
+```text
+D-2 ARCHITECTURE TESTS SEAL
+================================================================
+Date                      : 2026-09-30
+
+D-2 Preflight             : APPROVED WITH ARCHITECTURAL CORRECTIONS
+                            （docs/D2_ACTIVITY_CONTRACT_PREFLIGHT.md；
+                              D2-DEC-1 ～ D2-DEC-19 + 4 个 OPEN QUESTION 已关闭）
+
+Contract §5E              : APPROVED
+                            （docs/V3.1_ARCHITECTURE_CONTRACT.md §5E，
+                              CC-20260930-06；含 §5E.22 D-2 阶段门）
+
+Architecture Tests        : APPROVED
+                            文件：docs/test_d2_activity_contract.py
+
+                            ┌─ 首次真实运行（门控修正前）
+                            │     Ran 53 tests … FAILED (failures=3)
+                            │     test_g4 / test_g7 / test_h3
+                            │     → 其中 test_g4 抓到 Contract 真实缺口
+                            │       （§5E.6 未逐条列举禁止跳跃）
+                            │     → 修正后 Ran 53 tests … OK
+                            │
+                            ├─ 架构审核通过（APPROVED）
+                            │     SHA a622e5371aa25605a165b708b171a1e4445ecb25
+                            │     测试结果：Ran 53 tests … OK
+                            │
+                            └─ 门控修正后（最终版本）
+                                  Ran 64 tests … OK   ← 真实运行 ✅
+                                  门控修正后测试数变化已解释（EV-17）：
+                                      原 A 组 5 项 → 移除/重构
+                                      新增 T-A（ta0 ～ ta7）   +8
+                                      新增 T-B（tb0 ～ tb7）   +8
+                                      原有 B ～ K              48
+                                      合计                     64
+
+                            四套回归（最终版本，均真实运行）：
+                                docs/test_d0_world_activity_capability.py   OK
+                                docs/test_d1_world_query.py                 OK
+                                docs/test_d1_world_query_behavior.py        OK
+                                docs/test_d2_activity_contract.py           OK
+
+Gate                      : CLOSED
+                            Contract §5E.22 结构化门状态（唯一来源）：
+                                D2G-GATE-STATUS: CLOSED
+                                D2G-3-MARKER: null
+                            → D-2 Pre-Implementation Gate = CLOSED
+                            → 已由测试真实输出确认：
+                              GATE STATE      : CLOSED (implementation not authorized)
+                              impl presence   : ABSENT -> ...\agent\activity.py
+                              boundary scan   : 16 agent file(s) —— 实现不存在，扫整个 agent/
+
+Activity implementation   : NOT AUTHORIZED
+                            agent/activity.py = 不存在（未创建）
+
+本次最终 SHA（架构审核通过）: a622e5371aa25605a165b708b171a1e4445ecb25
+
+----------------------------------------------------------------
+本轮门控修正（架构侧 D-2 Architecture Tests Review 要求）
+----------------------------------------------------------------
+
+① implementation presence ≠ implementation authorization
+   - 文件存在只说明 presence（客观事实）
+   - 唯一授权依据 = Contract §5E.22 的门状态 marker
+   - 规则：EG-12 / EG-13（禁止把「文件存在」当作授权条件）
+
+② Gate 由 Contract 显式 marker 决定
+   - 门状态改为结构化、可机读、单一来源：
+         D2G-GATE-STATUS: CLOSED
+         D2G-3-MARKER: null
+   - 判定采用严格前缀匹配，说明性文本不得影响判定
+   - 规则：EG-14
+
+③ 实现存在时不得因文件存在而跳过 boundary checks
+   - 移除全部「实现存在即 return」的跳过路径
+   - 新增 _boundary_scan_targets()：实现存在时扫**实现文件本身**
+   - 规则：EG-15 / EG-16 / EG-17
+   - 新增 T-B 组 test_tb0 ～ test_tb7，
+     其中 tb0 直接断言「扫描目标必须覆盖实现文件」
+
+④ Activity Event 检查只针对 Activity implementation 本身
+   - 原 test_h3 在门关闭时扫描整个 agent/，
+     误命中 B5 / C-2 已存在的合法模块
+     （event_adapter.py / runtime.py 对 agent.event 的依赖）
+   - 修正为：仅检查 Activity 实现文件；实现不存在时本项不适用
+   - 依据：EB-13 约束的是「Activity 不产生 Event」，
+     而非「任何 agent 模块都不得 import agent.event」
+
+----------------------------------------------------------------
+本轮修正过程中暴露并修复的**真实缺陷**（必须记录）
+----------------------------------------------------------------
+
+缺陷 1（Contract 真实缺口，由 test_g4 发现）
+    §5E.6 仅写「禁止随意跳跃」，未逐条列举被禁止的具体跳跃。
+    修正：新增「禁止的跳跃」逐条列举 13 条 + 规则 EF-11 ～ EF-13。
+
+缺陷 2（门控判定 bug，三轮才收敛）
+    现象：Gate 误报 OPEN。
+    真实根因：Contract §5E.22 的「定义」段写了
+        implementation authorized = …肯定式标记 <标记>: true
+    这句**说明标记是什么**的文字被判定读成**门已开**。
+    定性：D1G-16（区分「状态构造」与「说明文本」）的教科书级复现，
+          且发生在 Contract 文档自身。
+    修正：门状态结构化 + 严格前缀匹配 + 说明文本去键值化；
+          并新增回归断言 test_ta2_gate_status_is_structured_and_parseable。
+    过程教训：
+        · 第 1 轮基于**推断**修正 → 未命中根因，浪费一轮验证
+        · 第 2 轮改为**读原文** → 一次定位真因
+        · 第 3 轮发现「单一来源」≠「只出现一次」，
+          正确语义是「所有出现必须一致」（分歧则 fail-closed）
+
+----------------------------------------------------------------
+生产代码变更
+----------------------------------------------------------------
+新增  agent/activity.py                    ：无（未创建）
+修改  agent/state.py / motivation.py /     ：无
+      context.py / world_query.py
+修改  main.py / 任何 ext_*                  ：无
+修改  前端 / HTTP API / Memory              ：无
+进入  D-3                                   ：未进入
+
+Final decision            : D-2 Architecture Tests = APPROVED / SEALED
+Next                      : 等待架构侧审核；D-2 Implementation 仍 NOT AUTHORIZED
 ================================================================
 ```
 
