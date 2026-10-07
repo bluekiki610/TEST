@@ -1,4 +1,4 @@
-// app-instance.js - 副本系统 v15（恢复浏览器语音异步加载重试 + 气泡操作键 + 全屏聊天 UI + 状态事务）
+// app-instance.js - 副本系统 v17（半屏阅读态：对话占下半屏露背景，回看自动全屏 + 字号小一号 + 语音降级）
 (function() {
     'use strict';
     console.log('[ext] app-instance.js v9 加载...');
@@ -67,6 +67,12 @@
             /* 背景层不滚动（固定铺满），消息层在上方滚动 */
             .inst-chatarea { flex:1; min-height:0; position:relative; display:flex; flex-direction:column; background-color:#0f1a2e; background-size:cover; background-position:center; background-repeat:no-repeat; }
             #instanceMsgArea { flex:1; min-height:0; overflow-y:auto; padding:12px; background:transparent; }
+            /* 半屏阅读态：占位块高度由 JS 逐帧过渡，保证与 scrollTop 补偿同步 */
+            #instanceChatSpacer { transition:none; }
+            /* 副本对话字号比住宅小一号（住宅 .bubble 是 15px） */
+            #instanceMsgArea .bubble { font-size:14px; line-height:1.5; }
+            #instanceMsgArea .msg .meta { font-size:10.5px; }
+            #instanceMsgArea .msg { margin-bottom:11px; }
             .inst-story { display:flex; justify-content:center; margin-bottom:16px; }
             .inst-story .body { max-width:82%; background:rgba(19,35,61,.92); border:1px solid rgba(80,180,255,.22); border-left:3px solid #7fd0ff; border-radius:12px; padding:10px 14px; }
             .inst-story .cap { font-size:12px; color:#7fd0ff; font-weight:600; margin-bottom:5px; letter-spacing:.6px; }
@@ -231,25 +237,39 @@
     }
 
     // 服务器 TTS：复用 ext_mem.py 的 /api/tts（需要一个填了 Key 的账号）
+    // ⚠️ 该接口出错时返回的是 HTTP 200 + JSON（不是 4xx/5xx），必须显式识别，
+    //    否则会被当成音频 blob 处理，表现为"没声音也没报错"。
     function speakViaServer(text) {
         const who = window.userName || currentUser || localStorage.getItem('gc_name') || '';
-        if (!who) return;
+        if (!who) {
+            if (!ttsWarned) { ttsWarned = true; toast('❌ 语音不可用：无法确定当前用户'); }
+            return;
+        }
         fetch('/api/tts?user=' + encodeURIComponent(who) + '&text=' + encodeURIComponent(String(text).slice(0, 500)))
             .then(r => {
                 if (!r.ok) {
-                    return r.json().then(d => { throw new Error(d.msg || d.detail || ('HTTP ' + r.status)); });
+                    return r.json()
+                        .then(d => { throw new Error(d.msg || d.detail || ('HTTP ' + r.status)); })
+                        .catch(() => { throw new Error('HTTP ' + r.status); });
                 }
                 return r.blob();
             })
             .then(blob => {
-                if (!blob || !blob.size) throw new Error('空音频');
+                if (!blob || !blob.size) throw new Error('返回了空音频');
+                // 后端 TTS 失败时会以 200 + JSON 返回错误信息
+                if (blob.type && blob.type.indexOf('application/json') >= 0) {
+                    return blob.text().then(t => {
+                        let msg = '';
+                        try { msg = (JSON.parse(t) || {}).msg || ''; } catch (e) {}
+                        throw new Error(msg || '服务器返回错误');
+                    });
+                }
                 try { if (instanceAudio) instanceAudio.pause(); } catch (e) {}
                 const url = URL.createObjectURL(blob);
                 instanceAudio = new Audio(url);
                 instanceAudio.onended = function() { URL.revokeObjectURL(url); };
-                instanceAudio.play().catch(e => {
-                    console.warn('[instance] 服务器 TTS 播放被拦截:', e);
-                    toast('⚠️ 语音被浏览器拦截，请再点一次朗读');
+                return instanceAudio.play().catch(e => {
+                    throw new Error('播放被拦截（' + (e.message || e) + '）');
                 });
             })
             .catch(e => {
@@ -1405,7 +1425,19 @@
 
     function instScrollToBottom() {
         const area = document.getElementById('instanceMsgArea');
-        if (area) area.scrollTop = area.scrollHeight;
+        if (!area) return;
+        // 半屏阅读态下：先临时归零占位块，让「滚动到底」的目标是真实底部，
+        // 滚完再恢复半屏，否则新消息会被占位块顶出可视区。
+        if (chatCollapsed) {
+            chatUserScrolling = true;
+            applyChatOffset(0);
+            area.scrollTop = area.scrollHeight;
+            applyChatOffset(chatPeekHeight());
+            area.scrollTop = area.scrollHeight;
+            chatUserScrolling = false;
+            return;
+        }
+        area.scrollTop = area.scrollHeight;
     }
 
     function renderChatMessages() {
@@ -1600,6 +1632,136 @@
         });
     }
 
+    // ---------- 半屏阅读态（手势/滚动驱动） ----------
+    // 产品语义（按实际使用描述）：
+    //   自然对话时（气泡自动往上滚、停留在最新）：对话只占**下半屏**，上半屏露出背景图
+    //   想回看之前的内容（在屏幕上往下拉 → 滚到更早的消息）：**自动全屏**
+    //   看够了滑回底部 → 自动收回下半屏
+    //
+    // 实现用「消息区顶部的占位块」而不是 translateY：
+    // 容器是 overflow:hidden，translateY 会把内容移出可视框（内容直接消失），
+    // 而占位块始终在滚动容器内部，内容真的往下走，上半屏自然露出背景图。
+    const CHAT_PEEK = 0.5;           // 半屏阅读：对话占下半屏
+    const CHAT_EXPAND_SLACK = 24;    // 离底部多远就算"在回看"（带迟滞，避免来回抖）
+    const CHAT_MIN_CONTENT = 160;    // 内容太少就别收，不然只剩背景
+    let chatCollapsed = false;
+    let chatOffset = 0;              // 当前占位高度(px)
+    let chatUserScrolling = false;   // 正在手动滚动时不强制收放
+
+    function chatAreaEl() { return document.getElementById('instanceChatArea'); }
+    function chatSpacerEl() { return document.getElementById('instanceChatSpacer'); }
+    function chatMsgEl() { return document.getElementById('instanceMsgArea'); }
+    function chatPeekHeight() {
+        const a = chatAreaEl();
+        return a ? a.clientHeight * CHAT_PEEK : 0;
+    }
+    // 能往回看才有必要收起来（内容比可视区高）
+    function chatScrollable() {
+        const m = chatMsgEl();
+        if (!m) return false;
+        return (m.scrollHeight - m.clientHeight) > CHAT_MIN_CONTENT;
+    }
+
+    function applyChatOffset(px) {
+        const sp = chatSpacerEl();
+        const msg = chatMsgEl();
+        if (!sp) return;
+        const v = Math.max(0, Math.min(chatPeekHeight(), px));
+        const prev = chatOffset;
+        chatOffset = v;
+        sp.style.height = v ? (v + 'px') : '0px';
+        // 占位块变高会把内容往下推，必须补偿滚动位置，
+        // 否则收起后最新消息会被推到可视区外面看不见。
+        if (msg && v !== prev) msg.scrollTop = msg.scrollTop + (v - prev);
+    }
+
+    // 把占位高度从当前值平滑过渡到目标值。
+    // 必须逐帧同时改「占位高度」和「scrollTop 补偿」，否则占位块会把内容
+    // 顶出可视区（表现为"收起后看不到最新消息"）。纯 CSS 过渡做不到这一点。
+    let chatAnimTimer = null;
+    function animateChatOffset(target) {
+        if (chatAnimTimer) { clearInterval(chatAnimTimer); chatAnimTimer = null; }
+        const from = chatOffset;
+        const to = Math.max(0, Math.min(chatPeekHeight(), target));
+        if (Math.abs(to - from) < 1) { applyChatOffset(to); return; }
+        const DUR = 220;
+        const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        chatUserScrolling = true;   // 过渡期间挂起自动收放判定
+        chatAnimTimer = setInterval(function() {
+            const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+            const p = Math.min(1, (now - t0) / DUR);
+            const e = 1 - Math.pow(1 - p, 3);   // easeOutCubic
+            applyChatOffset(from + (to - from) * e);
+            if (p >= 1) {
+                clearInterval(chatAnimTimer);
+                chatAnimTimer = null;
+                chatUserScrolling = false;
+            }
+        }, 16);
+    }
+
+    function setChatCollapsed(on, opts) {
+        if (!chatAreaEl()) return;
+        const want = !!on;
+        if (want && !chatScrollable()) return;      // 内容不足，保持全屏
+        if (want === chatCollapsed && !(opts && opts.force)) return;
+        chatCollapsed = want;
+        animateChatOffset(chatCollapsed ? chatPeekHeight() : 0);
+        if (chatCollapsed) {
+            // 收起后对齐到最新消息（下半屏看最新）
+            setTimeout(() => {
+                if (!chatCollapsed) return;
+                const m = chatMsgEl();
+                if (!m) return;
+                chatUserScrolling = true;
+                m.scrollTop = m.scrollHeight;
+                chatUserScrolling = false;
+            }, 260);
+        }
+    }
+    window.isInstanceChatPeeking = function() { return chatCollapsed; };
+
+    // 是否停在最新消息处
+    function chatAtBottom() {
+        const m = chatMsgEl();
+        if (!m) return true;
+        return m.scrollTop >= m.scrollHeight - m.clientHeight - 4;
+    }
+
+    function bindChatScroll() {
+        const msgArea = chatMsgEl();
+        const area = chatAreaEl();
+        if (!msgArea || !area || msgArea.dataset.peekBound === '1') return;
+        msgArea.dataset.peekBound = '1';
+
+        msgArea.addEventListener('scroll', function() {
+            // 动画补偿 scrollTop 时不要误判
+            if (chatUserScrolling) return;
+            const gap = msgArea.scrollHeight - msgArea.clientHeight - msgArea.scrollTop;
+            if (chatCollapsed) {
+                // 离开底部（在回看之前的内容）→ 自动全屏
+                if (gap > CHAT_EXPAND_SLACK) setChatCollapsed(false);
+            } else {
+                // 滑回底部 → 收回下半屏
+                if (gap <= 2) setChatCollapsed(true);
+            }
+        }, { passive: true });
+
+        // 手动触摸滚动期间挂起自动收放，松手后再判定一次
+        let touching = false;
+        msgArea.addEventListener('touchstart', function() { touching = true; chatUserScrolling = true; }, { passive: true });
+        const settle = function() {
+            if (!touching) return;
+            touching = false;
+            chatUserScrolling = false;
+            const gap = msgArea.scrollHeight - msgArea.clientHeight - msgArea.scrollTop;
+            if (chatCollapsed && gap > CHAT_EXPAND_SLACK) setChatCollapsed(false);
+            else if (!chatCollapsed && gap <= 2) setChatCollapsed(true);
+        };
+        msgArea.addEventListener('touchend', settle);
+        msgArea.addEventListener('touchcancel', settle);
+    }
+
     // ---------- 聊天界面（InstanceChatShell：Header / StoryHeader / MessageList / Composer） ----------
     function renderChatRoom(history, settings) {
         injectInstanceChatStyles();
@@ -1658,7 +1820,9 @@
                     <button class="inst-hbtn" id="instanceVoiceBtn" onclick="toggleAutoVoice()" title="自动朗读">🔇 语音</button>
                 </div>
                 <div id="instanceChatArea" class="inst-chatarea">
-                    <div id="instanceMsgArea"></div>
+                    <div id="instanceMsgArea">
+                        <div id="instanceChatSpacer" style="height:0;flex-shrink:0"></div>
+                    </div>
                 </div>
                 <div class="inst-composer">
                     <div class="row">
@@ -1676,6 +1840,16 @@
         // 恢复本副本已保存的聊天背景（无则保持默认色）
         applyChatBg(inst.chat_bg || '');
         loadChatBg(currentInstanceId);
+        // 半屏阅读态：进入时默认收起（内容够长才收），回看时自动全屏
+        chatCollapsed = false;
+        applyChatOffset(0);
+        bindChatScroll();
+        // 进入后先对齐最新消息；内容够长才收回下半屏（自然对话态）
+        requestAnimationFrame(() => {
+            const m = chatMsgEl();
+            if (m) m.scrollTop = m.scrollHeight;
+            setTimeout(() => setChatCollapsed(true, { force: true }), 260);
+        });
     }
 
     // ---------- 聊天相关辅助函数 ----------
@@ -2037,7 +2211,7 @@
         injectInstanceChatStyles();   // 让 .inst-* 样式一开始就可用
         modifyMapBar();
         createOverlay();
-        console.log('[ext] 副本插件 v15 加载完成（语音异步加载重试 + 气泡 🔄/🗑️ + 全屏聊天 UI）');
+        console.log('[ext] 副本插件 v17 加载完成（半屏阅读态 + 回看自动全屏 + 字号小一号 + 语音降级）');
     }
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
