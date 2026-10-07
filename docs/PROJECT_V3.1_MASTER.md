@@ -106,21 +106,24 @@
   | **D-0 Seal** | ✅ **SEALED / APPROVED**（D-0 Architecture Review 结果：APPROVED） |
   | **D-1 Preflight** | ✅ **APPROVED**（`docs/D1_WORLD_QUERY_PREFLIGHT.md`：D1-DEC-1 ～ D1-DEC-15） |
   | **D-1 Contract §5D** | ✅ **APPROVED**（CC-20260930-05，`docs/V3.1_ARCHITECTURE_CONTRACT.md` §5D） |
-  | **D-1 Architecture Tests** | ✅ **RAN / PASSED**（`docs/test_d1_world_query.py`：**Ran 49 tests … OK**，`GATE STATE: CLOSED`，真实运行） |
+  | **D-1 Architecture Tests** | ✅ **RAN / PASSED**（`docs/test_d1_world_query.py`：**Ran 51 tests … OK**，`GATE STATE: OPEN`，真实运行）<br>※ 门关闭阶段的历史运行记录为 **49 tests**（门开后 T-A 项数变化，故为 51） |
   | **D-1 Gate Correction** | ✅ **APPROVED**（T-A / T-B 生命周期分离 + 静态验证策略定位 + FORBIDDEN / 五态分离） |
-  | **D-1 Implementation** | 🔧 **HARDENING APPLIED（D1-H1 ～ H4，待重跑验证）** —— `agent/world_query.py` |
-  | **D-1 Post-Implementation Gate（T-B）** | ✅ RAN / PASSED（静态边界，**Ran 51 tests … OK**） |
-  | **D-1 Behavior Tests（D1-H4）** | ⏳ **待运行**（`python docs/test_d1_world_query_behavior.py`） |
-  | **D-1 Implementation Review** | 🔴 **NOT SEALED**（H1 ～ H4 修正后待复审） |
-  | **D-1 Seal** | ⏸ 待架构侧复审 |
-  | D-2 | 🔴 **BLOCKED** |
+  | **D-1 Implementation** | ✅ **ACCEPTED**（D1-H1 ～ H4 Hardening 已应用并验证）—— `agent/world_query.py` |
+  | **D-1 Post-Implementation Gate（T-B）** | ✅ **RAN / PASSED**（静态边界，**Ran 51 tests … OK**） |
+  | **D-1 Behavior Tests（D1-H4）** | ✅ **RAN / PASSED**（`docs/test_d1_world_query_behavior.py`：**Ran 70 tests … OK**，真实运行） |
+  | **D-1 Implementation Review** | ✅ **APPROVED** |
+  | **D-1 SEAL** | ✅ **SEALED**（见 §20.5.2 SEAL Record） |
+  | D-2 | 🔓 **READY / NEXT**（Preflight 尚未创建） |
 
-  **D-1 门状态（当前）：**
+  **D-1 SEAL 结论：**
 
   ```text
-  D1G-3-SATISFIED: true        （架构侧正式授权，已写入 Contract §5D.16）
-  → Pre-Implementation Gate = OPEN
-  → D-1 Implementation 已授权（仅限 World Query Foundation）
+  D-1 SEAL = SEALED
+  三门全部真实通过：
+      D-0 regression    Ran 54 tests … OK
+      D-1 architecture  Ran 51 tests … OK（GATE STATE: OPEN）
+      D-1 behavior      Ran 70 tests … OK
+  D-2 = READY / NEXT（Preflight 尚未创建；本轮未提前设计）
   ```
 
   **D-1 Implementation 交付：**
@@ -187,7 +190,7 @@
   | **D1-H1** | `_owner_invites()` 未接收**目标 owner**，导致私人房间授权可被「任意认识的用户/AI」绕过 | 改为以**目标 owner** 为中心的授权族：`_requester_is_owner` / `_requester_owns_agent` / `_requester_is_agent` / `_requester_has_same_owner` / `_can_view_room` / `_can_view_building`；**fail-closed**（无法归属 → 按不公开） |
   | **D1-H2** | 暴露范围超出 `WQ-94` 白名单（钱包 / 好感 / 归属 / legacy 活动 / dating / working / following / owner 清单均未做权限限制） | 全部接入可见性检查：私人状态仅**本人 / 其 owner / 同一 owner 范围**；其余 → `FORBIDDEN`。缺省 `requester` **不得**视为上帝视角 |
   | **D1-H3** | `get_building()` / `get_room()` 为**浅复制**，nested dict / list 仍引用 `main.data` | 引入 `copy.deepcopy` 生成**真正安全副本**（唯一允许的例外，Contract `D1G-23` ～ `D1G-25`） |
-  | **D1-H4** | 51 tests OK ≠ 实现满足 D-1（静态边界测试不验证行为） | 新增 [`docs/test_d1_world_query_behavior.py`](docs/test_d1_world_query_behavior.py)：**68 项行为级断言**（B1 私人房间授权 / B2-B3 公开性 / B4 私人状态不泄露 / B5 返回值不穿透 / B6 五态语义 / B7 反模式守卫 / B8 回归） |
+  | **D1-H4** | 51 tests OK ≠ 实现满足 D-1（静态边界测试不验证行为） | 新增 [`docs/test_d1_world_query_behavior.py`](docs/test_d1_world_query_behavior.py)：**70 项行为级断言**（B1 私人房间授权 / B2-B3 公开性 / B4 私人状态不泄露 / B5 返回值不穿透 / B6 五态语义 / B7 反模式守卫 / B8 回归） |
 
   **新增 Contract 规则：** `D1G-23` ～ `D1G-32`（§5D.16.3 深拷贝例外 + §5D.16.4 白名单实现级要求）。
 
@@ -204,37 +207,22 @@
   **Phase D 当前门状态（必须最先读）：**
 
   ```text
-  D1G-3-SATISFIED
-  当前不存在
-  → Pre-Implementation Gate = CLOSED
-  → world_query.py 禁止存在
+  Pre-Implementation Gate          = OPEN（架构侧已授权 D-1 Implementation）
+  Post-Implementation Gate（T-B）   = RAN / PASSED（51 tests OK）
+  D-1 Implementation               = 已完成 Hardening（D1-H1 ～ H4）
   ```
 
-  **阻塞原因：**
-
-  ```text
-  当前工作区无法执行 Python / Shell / Git
-  exit code = 0xC0000142 (STATUS_DLL_INIT_FAILED)
-
-  因此 D-0 / D-1 Architecture Tests 尚未获得真实运行结果。
-  ```
-
-  **在 D-0 + D-1 Pre-Implementation Gate 实际运行并通过之前：**
-
-  ```text
-  禁止创建 world_query.py
-  禁止进入 D-2
-  ```
+  > 详细门控记录见 §20.5.1（含历史沿革）。
+  > **本文件不得同时出现「门已开」与「门未开」两种状态描述。**
 
   **D-0 冻结基线（SEALED）：**
 
   ```text
-  docs/D0_CONFLICT_AUDIT.md              ACCEPTED
-  docs/D0_ARCHITECTURE_DECISIONS.md      ACCEPTED
-  docs/V3.1_ARCHITECTURE_CONTRACT.md §5C ACCEPTED
+  docs/D0_CONFLICT_AUDIT.md                  ACCEPTED
+  docs/D0_ARCHITECTURE_DECISIONS.md          ACCEPTED
+  docs/V3.1_ARCHITECTURE_CONTRACT.md §5C     ACCEPTED
   docs/test_d0_world_activity_capability.py  RAN / PASSED（54 tests OK）
-  docs/test_d1_world_query.py                RAN / PASSED（49 tests OK, GATE=CLOSED）
-  生产代码                                    0 修改
+  生产代码（D-0 阶段）                        0 修改
   ```
 
   **D-1 当前唯一任务：World Query Foundation。**
@@ -242,19 +230,19 @@
   > 目标：让 Agent Core 能通过统一、只读、无 LLM、无行为决策、无 World mutation 的接口询问当前世界事实。
   > **D-1 不实现 Activity / Capability / Movement / World Command；不改 `ext_ai.py` / `ext_world.py` / `ext_room.py` 旧行为；不修 Memory；不进入 D-2。**
 
-  **D-1 阶段门（Contract §5D.16，`D1G-1` ～ `D1G-15`）：**
+  **D-1 阶段门（Contract §5D.16，`D1G-1` ～ `D1G-32`）：**
 
   ```text
   D-1 Preflight                ✅ APPROVED（含两轮修正）
   D-1 Contract Change（§5D）    ✅ APPROVED（含 TEST GATE CORRECTION）
-  D-1 Architecture Tests       ✅ APPROVED WITH GATE CORRECTION
-  【运行顺序（架构侧要求）】
-      ① D-0 Architecture Tests
-      ② D-1 Pre-Implementation Architecture Gate（T-A）
-  D-1 Tests 实际运行            ✅ 已运行并通过（见下方测试结果）
-  D-1 Implementation           ⛔ BLOCKED（直到 ①② 实际通过）
-  D-1 Post-Implementation Gate（T-B）  ⏸ 实现后生效
-  D-2                          ⛔ BLOCKED
+  D-1 Architecture Tests       ✅ RAN / PASSED（51 tests OK，GATE STATE: OPEN）
+  D-1 Pre-Implementation Gate  ✅ PASSED（架构侧已授权）
+  D-1 Implementation           ✅ ACCEPTED（D1-H1 ～ H4 Hardening 完成）
+  D-1 Behavior Tests           ✅ RAN / PASSED（70 tests OK）
+  D-1 Post-Implementation Gate ✅ RAN / PASSED（51 tests OK）
+  D-1 Implementation Review    ✅ APPROVED
+  D-1 SEAL                     ✅ SEALED
+  D-2                          🔓 READY / NEXT
   ```
 
   **阶段门生命周期（第二轮裁决，已落实）：**
@@ -295,14 +283,22 @@
 
   ```text
   === D-0 ===
-  D:\GameVideos\LK data\p0test>python docs/test_d0_world_activity_capability.py
+  python docs/test_d0_world_activity_capability.py
   Ran 54 tests … OK
 
-  === D-1 ===
-  D:\GameVideos\LK data\p0test>python docs/test_d1_world_query.py
+  === D-1（门 OPEN 后的当前结果）===
+  python docs/test_d1_world_query.py
+  GATE STATE      : OPEN (implementation authorized)
+  d1 impl modules : 1
+  Ran 51 tests … OK   (skipped=1 —— test_ta2 仅门关闭时适用)
+
+  === D-1（门 CLOSED 阶段的历史结果）===
   GATE STATE      : CLOSED (implementation not authorized)
-  T-A: Pre-Implementation Gate —— 门关闭，断言「实现不存在」（防提前偷做）
   Ran 49 tests … OK
+
+  ※ 49 → 51 的原因：门打开后 T-A 由「断言实现不存在」切换为
+     「断言实现确实存在」，入口组由 6 项变为 7 项（新增 test_ta0），
+     且 test_ta2 转为 skipped。属**预期变化**，非测试被弱化。
   ```
 
   **执行环境：** 用户本机（Windows，`python` 直接可运行；测试**只依赖标准库**，无需 pip 安装任何依赖）。
@@ -1352,7 +1348,7 @@ PROJECT 是“架构地图”，不是代码实现说明书。
 - Phase A（Global Architecture Inventory）：✅ 已完成
 - Phase B（V3.1 Context Foundation）：✅ 已完成（含 B5-4 归档）
 - Phase C（Motivation / Goal / Commitment / Intent）：✅ 已完成（含 C-4 归档）
-- Phase D（World Query / Activity / Capability）：🟡 **D-0 SEALED；D-1 实现已完成 Hardening（D1-H1 ～ H4），待重跑行为测试与架构复审；D-2 BLOCKED**
+- Phase D（World Query / Activity / Capability）：🟢 **D-0 SEALED；D-1 SEALED（54 + 51 + 70 三项真实通过）；D-2 READY / NEXT**
 - Phase E（Memory Recall）：⏳ 未开始
 - Phase F（Brain / Decision）：⏳ 未开始
 
@@ -1516,14 +1512,14 @@ THINK（仍为 Stub）
 
 ---
 
-### 20.5 Phase D — World Query / Activity / Capability（D-0 SEALED · D-1 实现完成，待 Seal）
+### 20.5 Phase D — World Query / Activity / Capability（D-0 SEALED · **D-1 SEALED** · D-2 READY / NEXT）
 
 让 AI 能查询真实世界、保持活动连续性，并建立 Capability 边界。
 
 - 依赖 Phase C 完成的 Goal / Motivation / Commitment。
 - 不引入新数据源；基于现有 `main.data` 结构。
 - 必须先完成 Preflight。
-- 当前状态：🔵 **D-0 已 SEALED；D-1 设计与测试已全部 APPROVED，但 Implementation 处于 BLOCKED。**
+- 当前状态：🟢 **D-0 SEALED；D-1 SEALED（54 + 51 + 70 三项真实通过）；D-2 READY / NEXT。**
 
 **Phase D 子阶段状态：**
 
@@ -1537,20 +1533,121 @@ THINK（仍为 Stub）
 | D-0 | **Seal** | ✅ **SEALED** |
 | **D-1** | **World Query Preflight** | ✅ **APPROVED**（`docs/D1_WORLD_QUERY_PREFLIGHT.md`） |
 | **D-1** | **Contract §5D（CC-20260930-05）** | ✅ **APPROVED** |
-| **D-1** | **Architecture Tests** | ✅ **RAN / PASSED**（`docs/test_d1_world_query.py`：**Ran 49 tests … OK**，`GATE STATE: CLOSED`，真实运行） |
+  | **D-1** | **Architecture Tests** | ✅ **RAN / PASSED**（`docs/test_d1_world_query.py`：**Ran 51 tests … OK**，`GATE STATE: OPEN`，真实运行）<br>※ 门关闭阶段历史记录为 49 tests |
 | **D-1** | **Gate Correction（T-A / T-B 生命周期 + 静态策略定位 + FORBIDDEN/五态分离）** | ✅ **APPROVED** |
 | **D-1** | **Implementation** | 🔧 **HARDENING APPLIED**（D1-H1 ～ H4）—— `agent/world_query.py` |
 | **D-1** | **Post-Implementation Gate（T-B）** | ✅ **RAN / PASSED**（静态边界，**Ran 51 tests … OK**） |
-| **D-1** | **Behavior Tests（D1-H4）** | ⏳ **待运行**（`docs/test_d1_world_query_behavior.py`） |
-| **D-1** | **Implementation Review** | 🔴 **NOT SEALED**（待 H1 ～ H4 复审） |
-| **D-1** | **Seal** | ⏸ **待架构侧复审** |
-| D-2 | Activity Contract | 🔴 **BLOCKED** |
+| **D-1** | **Behavior Tests（D1-H4）** | ✅ **RAN / PASSED**（`docs/test_d1_world_query_behavior.py`：**Ran 70 tests … OK**，真实运行） |
+| **D-1** | **Implementation Review** | ✅ **APPROVED** |
+| **D-1** | **SEAL** | ✅ **SEALED**（见 §20.5.2 SEAL Record） |
+| D-2 | Activity Contract | 🔓 **READY / NEXT**（Preflight 尚未创建，本轮未提前设计） |
 | D-3 | Location / Movement Continuity | ⛔ 未开始（前置 Blocker：World Tick 可靠性，见 Contract §5C.6） |
 | D-4 | Capability / Action Port | ⛔ 未开始 |
 | D-5 | Agent Decision → Capability | ⛔ 未开始 |
 | D-6 | Legacy Behavior Migration | ⛔ 未开始 |
 
 **Phase D 正式 Contract 依据：** `docs/V3.1_ARCHITECTURE_CONTRACT.md` **§5C**（CC-20260930-04）与 **§5D**（CC-20260930-05）。
+
+---
+
+#### 20.5.2 D-1 SEAL RECORD
+
+```text
+D-1 SEAL
+================================================================
+Date                      : 2026-09-30
+
+World Query implementation: agent/world_query.py
+                            （World Query Foundation，只读；
+                              Dependency Injection，不 import main / ext_*）
+
+Architecture test result  : docs/test_d1_world_query.py
+                            Ran 51 tests — OK（GATE STATE: OPEN, skipped=1）
+
+Behavior test result      : docs/test_d1_world_query_behavior.py
+                            Ran 70 tests — OK
+
+D-0 regression            : docs/test_d0_world_activity_capability.py
+                            Ran 54 tests — OK
+
+D1-H1 Private Room Auth   : PASS
+                            owner / owner 的 AI → ALLOWED
+                            其他 user / 其他 AI / 陌生 / 空 requester → FORBIDDEN
+                            FORBIDDEN 时 value == None
+                            无法归属到建筑的房间 → fail-closed（按不公开处理）
+
+D1-H2 Visibility          : PASS
+                            公开建筑 / 公开房间 → 可见
+                            私人建筑 / 私人房间 → 仅授权范围可见
+                            私人 AI 状态（wallet / affection / owner / dating /
+                            working / following / legacy activity）→ 越权读取被拒绝
+
+D1-H3 Deep Copy           : PASS
+                            修改 QueryResult.value 后 main.data 完全不变
+                            （dict / list / nested dict / nested list 全覆盖）
+                            value 一律为深拷贝，不暴露 main.data 内部引用
+
+D1-H4 Behavior Regression : PASS
+                            UNKNOWN ≠ ABSENT
+                            UNSUPPORTED 不猜测（7 项全部 value=None）
+                            FORBIDDEN 无 value
+                            反模式接口（route / choose / plan / suggest /
+                            recommend / rank）继续被拒绝
+                            五态核心恰好 5 项，与 outcome 正交
+
+Product Guide review      : PASS（无产品漂移）
+                            World Query 只回答「世界现在是什么」
+                            AI 不是全知（requester / visibility 生效）
+                            因果链未被跳过（motivation.py 将 world_query
+                            列为 forbidden_inputs —— 动机层不依赖 Query）
+                            无随机决策 / 随机目的地 / 随机推荐
+                            Query ≠ Movement ≠ Route ≠ Destination Selection
+
+Architecture Contract     : docs/V3.1_ARCHITECTURE_CONTRACT.md
+                            §5D（CC-20260930-05）与实现一致
+                            §5D.16.2 静态断言策略 / §5D.16.3 深拷贝例外 /
+                            §5D.16.4 白名单实现级要求 —— 均已落实
+                            规则 WQ-1 ～ WQ-118、D1G-1 ～ D1G-32 全部存在
+                            未新增未冻结架构
+
+PROJECT consistency       : PASS
+                            已清除「门已开」与「门未开」并存的矛盾描述；
+                            过时状态（BLOCKED / NOT RUN / 49 tests 快照）
+                            已统一到当前真实状态；
+                            49 → 51 的测试数量变化已解释（门开后 T-A 项数变化）
+
+Product Guide 修改         : 无（Product Guide 未因 D-1 Seal 而修改）
+
+生产代码变更（D-1 累计）    : 新增 agent/world_query.py（1 个新文件）
+                            既有文件 0 修改
+                            （main.py / ext_* / agent 其他模块 /
+                              前端 / HTTP API 全部未改）
+
+可拆卸性（Removability）    : PASS
+                            world_query 在整个仓库中**零生产消费者**
+                            （仅出现在模块自身、测试文件、
+                              以及 motivation.py 的 forbidden_inputs 列表）
+                            → 删除 world_query.py 不影响 Agent Core /
+                              Context / Goal / Motivation / Intent / Activity
+
+唯一 World SOT            : PASS
+                            main.data 仍是唯一 World / Application SOT
+                            world_query 不持有任何状态、缓存、索引或数据库
+
+Remaining risks（非阻塞）  : ① DS 侧 Shell 无法执行子进程（0xC0000142）
+                                → 测试执行由用户完成（流程事实，非架构风险）
+                             ② 工作区不是 Git 仓库 → 无法提交 / 无法提供 SHA
+                             ③ get_agent_location() 暂不受可见性限制
+                                （位置属白名单 A；如需收紧须 Contract Change）
+                             ④ ext_date / ext_world / ext_shop 仍直接
+                                import ext_memory（D-0 已登记的 World→Memory
+                                耦合，属 Phase E / D-6，非 D-1 引入）
+
+Final decision            : D-1 SEALED
+Next                      : D-2 Activity Contract（需先创建 Preflight）
+================================================================
+```
+
 
 ---
 
