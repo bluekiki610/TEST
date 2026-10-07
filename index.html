@@ -272,7 +272,7 @@ textarea.input { color:#e6f1ff; }
   <div class="modal-mask" id="memoryMask" onclick="if(event.target===this)hideMemory()">
     <div class="modal">
       <h3>📚 记忆库</h3>
-      <div class="priv-tab"><button id="mtabMem" class="on" onclick="setMemoryTab('mem')">🧠 AI记忆</button><button id="mtabNote" onclick="setMemoryTab('note')">💌 纸条</button><button id="mtabDiary" onclick="setMemoryTab('diary')">📖 随笔</button><button id="mtabStory" onclick="setMemoryTab('story')">🎬 剧情</button></div>
+      <div class="priv-tab"><button id="mtabMem" class="on" onclick="setMemoryTab('mem')">🧠 AI记忆</button><button id="mtabNote" onclick="setMemoryTab('note')">💌 纸条</button><button id="mtabDiary" onclick="setMemoryTab('diary')">📖 随笔</button><button id="mtabStory" onclick="setMemoryTab('story')">🎬 剧情</button><button id="mtabReview" onclick="setMemoryTab('review')">🎬 副本</button></div>
       <div id="memoryList"></div>
       <div id="memoryWrite"></div>
       <button class="btn gray" onclick="hideMemory()" style="width:100%;margin-top:8px">关闭</button>
@@ -341,6 +341,7 @@ function setMemoryTab(t){
   document.getElementById('mtabNote').className=t==='note'?'on':'';
   document.getElementById('mtabDiary').className=t==='diary'?'on':'';
   document.getElementById('mtabStory').className=t==='story'?'on':'';
+  document.getElementById('mtabReview').className=t==='review'?'on':'';
   loadMemory();
 }
 function loadMemory(){
@@ -359,6 +360,10 @@ function renderMemory(){
       var tag=m.type==='ai'?'🤖 自动':'👤 手动';
       el.innerHTML+='<div class="note-card"><div class="n-author">'+tag+' · '+esc(m.ai)+'</div><div class="n-text">'+esc(m.text)+'</div><div class="n-time">'+esc((m.time||'').slice(5,16))+'<span style="float:right"><span class="mem-edit" onclick="editMemory(\''+esc(m.id)+'\')">✏️ 编辑</span><span style="color:#ff6b6b;cursor:pointer" onclick="delMemory(\''+esc(m.id)+'\')">🗑️</span></span></div></div>';
     });
+  } else if(memoryTab==='review'){
+    w.innerHTML='';
+    el.innerHTML='<div class="tip">加载副本中…</div>';
+    loadInstanceReviews(el);
   } else {
     var key=memoryTab==='note'?'notes':(memoryTab==='diary'?'diaries':'stories');
     var list=memoryData[key]||[];
@@ -378,6 +383,91 @@ function addMemory(){
 }
 function editMemory(id){ var t=prompt('编辑这条记忆：',''); if(t===null||!t.trim()) return; api('/api/ai/memory/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({owner:userName,id:id,text:t.trim()})}).then(function(){ toast('✅ 已更新'); loadMemory(); }).catch(function(e){ toast('❌ '+e.message); }); }
 function delMemory(id){ if(!confirm('删除这条记忆？')) return; api('/api/ai/memory/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({owner:userName,id:id})}).then(function(){ toast('🗑️ 已删除'); loadMemory(); }).catch(function(e){ toast('❌ '+e.message); }); }
+
+// ===== 记忆库 · 副本回顾（只读：最终总结 + 展开章节看当时的详细对话） =====
+function loadInstanceReviews(el){
+  el=el||document.getElementById('memoryList');
+  api('/api/memory/instances?user='+encodeURIComponent(userName)).then(function(d){
+    if(!d||!d.ok){ el.innerHTML='<div class="tip">'+(esc((d&&d.msg)||'加载失败'))+'</div>'; return; }
+    var list=d.instances||[];
+    if(!list.length){ el.innerHTML='<div class="tip">还没有已结束的副本。结束一个副本后，它的最终总结会出现在这里。</div>'; return; }
+    el.innerHTML=list.map(function(it){
+      var tags=(it.tags&&it.tags.length)?('　'+it.tags.slice(0,3).map(esc).join(' · ')):'';
+      return '<div class="note-card">'
+        + '<div class="n-author">🎬 '+esc(it.name)+(it.ai?('　🤖 '+esc(it.ai)):'')+'</div>'
+        + '<div class="n-text" style="font-size:12px;color:#9fd8ff">共 '+it.chapter_count+' 章 · '+it.round_count+' 轮对话'+tags+'</div>'
+        + '<div class="n-time">'+esc((it.ended_at||it.created_at||'').slice(0,16))
+        +   '<span style="float:right">'
+        +     '<span class="mem-edit" onclick="openInstanceReview(\''+esc(it.iid)+'\')">📖 回顾</span>'
+        +     '<span style="color:#ff6b6b;cursor:pointer" onclick="delInstanceReview(\''+esc(it.iid)+'\',\''+esc(it.name)+'\')">🗑️</span>'
+        +   '</span></div>'
+        + '</div>';
+    }).join('');
+  }).catch(function(e){ el.innerHTML='<div class="tip">'+esc(e.message)+'</div>'; });
+}
+
+function openInstanceReview(iid){
+  var mask=document.createElement('div');
+  mask.className='modal-mask show';
+  mask.style.zIndex=560;
+  mask.onclick=function(e){ if(e.target===mask) mask.remove(); };
+  mask.innerHTML='<div class="modal" style="max-height:86vh;overflow-y:auto"><h3 id="instRevTitle">🎬 回顾</h3><div id="instRevBody"><div class="tip">加载中…</div></div><button class="btn gray" style="width:100%;margin-top:8px">关闭</button></div>';
+  mask.querySelector('button.btn.gray').onclick=function(){ mask.remove(); };
+  document.body.appendChild(mask);
+
+  api('/api/memory/instance?user='+encodeURIComponent(userName)+'&iid='+encodeURIComponent(iid)).then(function(d){
+    var body=mask.querySelector('#instRevBody');
+    if(!d||!d.ok){ body.innerHTML='<div class="tip">'+esc((d&&d.msg)||'加载失败')+'</div>'; return; }
+    mask.querySelector('#instRevTitle').textContent='🎬 '+d.name;
+    body.innerHTML=renderInstanceReview(d);
+    var cards=body.querySelectorAll('[data-ch]');
+    for(var i=0;i<cards.length;i++){
+      cards[i].addEventListener('click', function(){
+        var box=this.parentNode.querySelector('.inst-rev-msgs');
+        if(!box) return;
+        if(box.style.display==='none'){ box.style.display='block'; this.querySelector('.inst-rev-arrow').textContent='▾'; }
+        else { box.style.display='none'; this.querySelector('.inst-rev-arrow').textContent='▸'; }
+      });
+    }
+  }).catch(function(e){
+    var body=mask.querySelector('#instRevBody');
+    if(body) body.innerHTML='<div class="tip">'+esc(e.message)+'</div>';
+  });
+}
+
+function renderInstanceReview(d){
+  var h='';
+  if(d.premise) h+='<div class="note-card"><div class="n-author">📖 前情提要</div><div class="n-text">'+esc(d.premise)+'</div></div>';
+  if(d.summary) h+='<div class="note-card"><div class="n-author">🎬 全篇总结</div><div class="n-text">'+esc(d.summary)+'</div></div>';
+  var chs=d.chapters||[];
+  if(!chs.length){ h+='<div class="tip">这个副本还没有分章总结（每 30 轮生成一章）</div>'; return h; }
+  h+='<div class="tip" style="margin:8px 0 4px">点章节标题展开当时的详细对话 ▸</div>';
+  chs.forEach(function(c){
+    var msgs=c.messages||[];
+    var inner=msgs.length? msgs.map(function(m){
+      var isMe=(m.sender===userName);
+      return '<div style="margin:5px 0;text-align: '+(isMe?'right':'left')+';"><span style="font-size:11px;color:#6d8bb0">'+esc(m.sender)+'</span><div style="display:inline-block;max-width:82%;text-align:left;background:'+(isMe?'#1d4a7a':'#14283f')+';border:1px solid rgba(80,180,255,.2);border-radius:8px;padding:5px 9px;font-size:13px;line-height:1.6;color:#e6f1ff;white-space:pre-wrap;margin-top:2px">'+esc(m.content)+'</div></div>';
+    }).join('') : '<div class="tip">这一章的原始对话已不在记录里</div>';
+    h+='<div class="note-card">'
+      + '<div data-ch="1" style="cursor:pointer"><div class="n-author"><span class="inst-rev-arrow">▸</span> 📚 '+esc(c.title||('第'+c.chapter+'章'))+'　<span style="font-weight:normal;color:#6d8bb0">第'+esc(String(c.round_start))+'–'+esc(String(c.round_end))+'轮</span></div>'
+      + '<div class="n-text">'+esc(c.summary||'（本章无总结）')+'</div></div>'
+      + '<div class="inst-rev-msgs" style="display:none;border-top:1px solid rgba(80,180,255,.15);margin-top:6px;padding-top:6px">'+inner+'</div>'
+      + '</div>';
+  });
+  return h;
+}
+
+function delInstanceReview(iid,name){
+  if(!confirm('删除副本《'+(name||'')+'》的全部记录？\n（含总结、章节和对话，无法恢复）')) return;
+  api('/api/memory/instance/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:userName,iid:iid})})
+    .then(function(d){
+      if(d&&d.ok===false){ toast('❌ '+((d&&d.msg)||'删除失败')); return; }
+      toast('🗑️ 已删除副本记录');
+      loadInstanceReviews();
+    })
+    .catch(function(e){ toast('❌ '+e.message); });
+}
+
 function editNoteItem(room,bid,idx){ var t=prompt('编辑纸条：',''); if(t===null||!t.trim()) return; api('/api/notes/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:room,index:idx,user:userName,text:t.trim()})}).then(function(){ toast('✅ 已更新'); loadMemory(); }).catch(function(e){ toast('❌ '+e.message); }); }
 function delNoteItem(room,bid,idx){ if(!confirm('删除这张纸条？')) return; api('/api/notes/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:room,index:idx,user:userName})}).then(function(){ toast('🗑️ 已删除'); loadMemory(); }).catch(function(e){ toast('❌ '+e.message); }); }
 function editDiaryItem(room,bid,idx){ var t=prompt('编辑随笔：',''); if(t===null||!t.trim()) return; api('/api/diaries/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:room,index:idx,user:userName,text:t.trim()})}).then(function(){ toast('✅ 已更新'); loadMemory(); }).catch(function(e){ toast('❌ '+e.message); }); }
