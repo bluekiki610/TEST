@@ -296,6 +296,14 @@ def setup(app, data, helpers):
         if iid not in insts:
             raise HTTPException(404, "副本不存在")
         inst = insts[iid]
+        # 诊断日志：确认 message 进入时的真实状态（谁把 active 改回 paused 要靠它定位）
+        print(
+            f"[Instance][MESSAGE] iid={iid} "
+            f"user={user} "
+            f"status={inst.get('status')} "
+            f"ai_locations={data.get('ai_location', {})}",
+            flush=True
+        )
         if inst.get("status") != "active":
             raise HTTPException(400, "副本未激活")
 
@@ -320,6 +328,13 @@ def setup(app, data, helpers):
                         break
                 if not ai:
                     return
+                print(
+                    f"[Instance][AI_REPLY] iid={iid} "
+                    f"status={inst.get('status')} "
+                    f"ai={ai} "
+                    f"location={data.get('ai_location', {}).get(ai, '')}",
+                    flush=True
+                )
                 # drive_ai 是同步的：返回时 AI 的 instance_chat 回复已写入 chat_history
                 if hasattr(m, 'drive_ai'):
                     m.drive_ai(ai, "instance_chat", iid, content, user)
@@ -538,27 +553,30 @@ def setup(app, data, helpers):
         return {"ok": True, "public_instances": result}
 
     # ---------- 暂离副本 ----------
-    @app.post("/api/instance/{iid}/pause")
-    async def pause_instance(iid: str, body: dict):
-        user = canonical_contact_name(body.get("user", ""))
-        if not user:
-            raise HTTPException(400, "用户名为空")
-        insts = _get_user_instances(user)
-        if iid not in insts:
-            raise HTTPException(404, "副本不存在")
-        inst = insts[iid]
-        if inst.get("status") != "active":
-            raise HTTPException(400, "副本不是进行中状态")
+    def _primary_ai(inst):
+        """取副本的主 AI 名（第一个 type=ai 的参与者）。"""
+        for p in inst.get("participants", []) or []:
+            if p.get("type") == "ai" and p.get("name"):
+                return p.get("name")
+        return None
 
-        # 1. 解冻 AI
-        ai_name = None
-        for p in inst.get("participants", []):
-            if p.get("type") == "ai":
-                ai_name = p.get("name")
-                break
+    def _pause_instance_txn(user, iid):
+        """把「暂停副本」做成一个完整状态事务，幂等。
+
+        返回 (ok, payload)。保证走到这里时：
+          inst["status"] == "paused"
+          data["ai_location"][ai] != "_instance_"+iid（并尽量 == 住宅会客厅）
+        """
+        inst = _get_user_instances(user).get(iid)
+        if not inst:
+            return False, None
+
+        ai_name = _primary_ai(inst)
+        hall = ""
         if ai_name:
-            data.get("ai_stay_put", {}).pop(ai_name, None)
-            # 清除副本位置标记，传回住宅会客厅
+            # 1. 解冻 AI
+            data.setdefault("ai_stay_put", {}).pop(ai_name, None)
+            # 2. 位置写回现实世界住宅会客厅（绝不留在 _instance_ 上）
             hall = _find_home_hall(user)
             data.setdefault("ai_location", {})[ai_name] = hall
             append_timeline(ai_name, f"暂离副本《{inst.get('name')}》，回到了 {hall}")
@@ -569,9 +587,32 @@ def setup(app, data, helpers):
                 "time": now_str()
             })
 
+        # 3. 最终状态写回
         inst["status"] = "paused"
         save_data()
-        return {"ok": True, "status": "paused"}
+        return True, {
+            "ok": True,
+            "status": inst.get("status"),
+            "ai": ai_name or "",
+            "ai_location": (data.get("ai_location", {}).get(ai_name, "") if ai_name else ""),
+            "hall": hall or ""
+        }
+
+    @app.post("/api/instance/{iid}/pause")
+    async def pause_instance(iid: str, body: dict):
+        user = canonical_contact_name(body.get("user", ""))
+        if not user:
+            raise HTTPException(400, "用户名为空")
+        insts = _get_user_instances(user)
+        if iid not in insts:
+            raise HTTPException(404, "副本不存在")
+
+        # 幂等：已 paused/ended 不再报 400，但仍然把「AI 位置必须在现实世界」
+        # 这个不变式补上（之前可能没写成功），并把真实状态返回给前端。
+        ok, payload = _pause_instance_txn(user, iid)
+        if not ok:
+            raise HTTPException(404, "副本不存在")
+        return payload
 
     # ---------- 恢复保险丝：把所有卡在副本里的 AI 送回住宅 ----------
     @app.post("/api/instance/recover")
@@ -619,11 +660,15 @@ def setup(app, data, helpers):
         if inst.get("status") not in ("draft", "active", "paused", "ended"):
             raise HTTPException(400, "副本状态不允许进入")
 
-        # paused 或 ended 重新进入 → 恢复 active（finished 保持不变）
-        if inst.get("status") in ("paused", "ended"):
-            inst["status"] = "active"
+        # ⭐ 不变式：enter 成功返回前必须同时成立
+        #     inst.status == "active"
+        #     ai_location[ai] == "_instance_<iid>"
+        #     ai_stay_put[ai] == True
+        # 注意：draft 也要置为 active —— 之前 draft 不改状态，会出现
+        # 「enter 返回 200 但仍是 draft」，前端以为已激活，发消息却报「副本未激活」。
+        inst["status"] = "active"
 
-        # 锁定参与的 AI
+        # 锁定参与的 AI（所有 AI 参与者，不只是第一个）
         for p in inst.get("participants", []):
             if p.get("type") == "ai":
                 ai_name = p.get("name")
@@ -632,8 +677,21 @@ def setup(app, data, helpers):
                     data.setdefault("ai_location", {})[ai_name] = "_instance_" + iid
 
         save_data()
+
+        enter_ai_locations = {
+            p.get("name"): data.get("ai_location", {}).get(p.get("name"), "")
+            for p in inst.get("participants", [])
+            if p.get("type") == "ai" and p.get("name")
+        }
+        print(
+            f"[Instance][ENTER] iid={iid} user={user} "
+            f"status={inst.get('status')} ai_location={enter_ai_locations}",
+            flush=True
+        )
         return {
             "ok": True,
+            "status": inst.get("status"),
+            "ai_location": enter_ai_locations,
             "chat_history": inst.get("chat_history", []),
             "settings": {
                 "name": inst["name"],

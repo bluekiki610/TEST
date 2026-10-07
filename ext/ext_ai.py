@@ -434,6 +434,19 @@ def setup(app, data, helpers):
                             return _build_instance_context(ai, trigger, room, trigger_text, fallback_to, inst, owner)
                         else:
                             # AI 不在副本位置，说明已离开但状态未更新，自动修复
+                            # ⚠️ 诊断日志：这里会静默把副本改成 paused。
+                            # 先定位是谁把 ai_location 从 _instance_<iid> 改掉的，
+                            # 不要直接删除自动修复逻辑。
+                            print(
+                                f"[INSTANCE][CTX_MISMATCH] "
+                                f"ai={ai} iid={iid} "
+                                f"status={inst.get('status')} "
+                                f"location={ai_loc} "
+                                f"expected=_instance_{iid} "
+                                f"trigger={trigger} "
+                                f"all_locations={data.get('ai_location', {})}",
+                                flush=True
+                            )
                             print(f"⚠️ [CTX] AI {ai} 状态为 active 但位置不在副本中，自动修复为 paused")
                             inst["status"] = "paused"
                             save_data()

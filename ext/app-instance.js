@@ -1,4 +1,4 @@
-// app-instance.js - 副本系统 v12（全屏聊天 UI + 两排顶栏 + 长条输入区 + 返回首页=暂离 + 激活自愈 + 聊天背景存文件 + 模型/语音接口）
+// app-instance.js - 副本系统 v13（返回首页=暂离事务确认 + 进入/重激活以服务器状态为准 + 卡片暂停角标 + 聊天背景存文件）
 (function() {
     'use strict';
     console.log('[ext] app-instance.js v9 加载...');
@@ -329,8 +329,8 @@
             // 退出整个副本模块 = 回到现实世界。
             // 若此时正在副本聊天页，先暂离（已暂离/已结束也算成功，不卡住）。
             if (currentInstanceId) {
-                const ok = await doPauseInstance(currentInstanceId);
-                if (ok) toast('⏸ 已暂离副本，AI 回到现实世界');
+                const res = await doPauseInstance(currentInstanceId);
+                if (res && res.ok) toast('⏸ 已暂离副本，AI 回到现实世界');
             }
             const ov = document.getElementById('instanceOverlay');
             if (ov) {
@@ -618,12 +618,16 @@
                 const isActive = status === 'active';
                 const isPaused = status === 'paused';
                 const statusLabel = isActive ? '● 进行中' : (isPaused ? '⏸ 已暂离' : (isEnded ? '✓ 已结束' : ''));
+                // 暂停状态要一眼可见：固定在封面右上角，用醒目配色
+                const badgeBg = isPaused ? 'rgba(243,156,18,.92)'
+                    : (isActive ? 'rgba(39,174,96,.88)' : 'rgba(0,0,0,0.6)');
+                const badgeStyle = `position:absolute; top:8px; right:8px; background:${badgeBg}; color:#fff; padding:4px 10px; border-radius:12px; font-size:11.5px; font-weight:600; backdrop-filter:blur(4px);`;
                 html += `
                     <div onclick="openInstanceCard('${id}')" style="cursor:pointer; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,0.04); transition:transform .2s, box-shadow .2s; border:1px solid rgba(0,0,0,0.04);" 
                          onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 16px rgba(0,0,0,0.06)';" 
                          onmouseout="this.style.transform='none'; this.style.boxShadow='0 2px 8px rgba(0,0,0,0.04)';">
                         <div style="aspect-ratio: 3/4; background:${cover ? `url(${cover}) center/cover` : '#eae7e3'}; position:relative;">
-                            ${statusLabel ? `<span style="position:absolute; top:8px; right:8px; background:rgba(0,0,0,0.6); color:#fff; padding:2px 10px; border-radius:12px; font-size:11px; backdrop-filter:blur(4px);">${statusLabel}</span>` : ''}
+                            ${statusLabel ? `<span style="${badgeStyle}">${statusLabel}</span>` : ''}
                         </div>
                         <div style="padding:10px 12px 12px;">
                             <div style="font-weight:500; font-size:15px; color:#333; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(name)}</div>
@@ -1065,7 +1069,11 @@
             currentInstanceId = id;
             if (!instances[id]) instances[id] = {};
             instances[id].chat_history = d.chat_history || [];
-            instances[id].status = 'active';
+            // 以服务器返回状态为准，前端不自己宣布 active
+            instances[id].status = d.status || 'active';
+            if (d.ai_location) {
+                console.log('[instance] enter 返回状态:', d.status, 'AI 位置:', d.ai_location);
+            }
             // 补充 settings 里的字段到本地实例
             const s = d.settings || {};
             if (s.name) instances[id].name = s.name;
@@ -1074,6 +1082,10 @@
             if (s.time_setting) instances[id].time_setting = s.time_setting;
             if (s.participants) instances[id].participants = s.participants;
             if (s.chat_bg != null) instances[id].chat_bg = s.chat_bg;
+            if (instances[id].status !== 'active') {
+                toast('⚠️ 服务器返回状态为 ' + instances[id].status + '，可能未能激活');
+                console.warn('[instance] enter 后状态不是 active:', instances[id].status);
+            }
             // 3. 直接渲染聊天页
             renderChatRoom(d.chat_history || [], s);
         }).catch(e => {
@@ -1428,26 +1440,38 @@
         }
     }
 
-    // 暂离：已 paused/ended 也算成功（幂等），不能因为 400 就卡住不让退
+    // 暂离：返回后端确认过的 payload（含 status / ai / ai_location / hall），失败返回 null
     function doPauseInstance(iid, owner) {
         const u = owner || currentUser;
-        if (!iid || !u) return Promise.resolve(false);
+        if (!iid || !u) return Promise.resolve(null);
         return api('/api/instance/' + iid + '/pause', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ user: u })
-        }).then(() => true).catch(e => {
-            console.warn('[instance] pause 未生效（可能已暂离/已结束）:', e.message);
-            return false;
+        }).catch(e => {
+            console.warn('[instance] pause 失败:', e.message);
+            return null;
         });
     }
 
     // 顶栏「← 返回首页」/「🏠 返回首页」
+    // 不盲返回：先确认后端真的把副本暂停、AI 回到现实世界，再回副本库。
     window.pauseAndLeaveInstance = function() {
-        if (!currentInstanceId) { goBackToLibrary(); return; }
+        const iid = currentInstanceId;
+        if (!iid) { goBackToLibrary(); return; }
         toast('⏸ 正在暂离副本…');
-        doPauseInstance(currentInstanceId).then(ok => {
-            toast(ok ? '✅ 已暂离副本，AI 回到现实世界住宅' : 'ℹ️ 副本已是非进行状态');
+        doPauseInstance(iid).then(res => {
+            if (!res || !res.ok) {
+                toast('⚠️ 暂离状态未确认，正在刷新副本状态…');
+            } else {
+                const loc = res.ai_location || res.hall || '住宅';
+                toast('✅ 已暂离副本，' + (res.ai ? res.ai + ' 回到 ' + loc : 'AI 回到现实世界'));
+                console.log('[instance] pause 确认:', {
+                    iid: iid, status: res.status, ai: res.ai,
+                    ai_location: res.ai_location, hall: res.hall
+                });
+            }
+            // 后端已确认（或未确认）都回库；goBackToLibrary 会重新 /api/instances 拉最新状态
             goBackToLibrary();
         });
     };
@@ -1539,14 +1563,19 @@
             // 只更新状态与历史，不重绘（重绘会清空输入态）
             if (!instances[iid]) instances[iid] = {};
             if (d && d.chat_history) instances[iid].chat_history = d.chat_history;
-            instances[iid].status = 'active';
+            // 以服务器返回状态为准，前端不自己宣布 active
+            instances[iid].status = (d && d.status) || 'active';
             const s = (d && d.settings) || {};
             if (s.name) instances[iid].name = s.name;
             if (s.background != null) instances[iid].background = s.background;
             if (s.premise != null) instances[iid].premise = s.premise;
             if (s.time_setting != null) instances[iid].time_setting = s.time_setting;
             if (s.participants) instances[iid].participants = s.participants;
-            return true;
+            if (s.chat_bg != null) instances[iid].chat_bg = s.chat_bg;
+            console.log('[instance] reenter success:', iid,
+                'status=', instances[iid].status,
+                'ai_location=', (d && d.ai_location) || null);
+            return instances[iid].status === 'active';
         }).catch(e => {
             console.warn('[instance] 重新进入失败:', e.message);
             return false;
@@ -1638,24 +1667,36 @@
         doPost().then(() => afterPost(countAssistantMsgs(prevHist))).catch(e => {
             const msg = String((e && e.message) || '');
             // 「副本未激活」：本地以为是 active，后端已 paused/ended。
-            // 自动重新进入一次再重发，用户无感；只重试一次，避免死循环。
+            // 自动重新进入一次再重发，用户无感；只重试一次，绝不第三次。
             if (/未激活/.test(msg)) {
                 console.warn('[instance] 副本未激活，自动重新进入后重发…');
                 reenterInstance(iid).then(ok => {
-                    if (!ok) {
+                    const fresh = instances[iid] || {};
+                    if (!ok || fresh.status !== 'active') {
+                        // 服务器状态没回到 active：不再继续 enter/message 循环
                         showAiThinking(false);
                         if (btn) btn.disabled = false;
-                        showInstanceError('副本未能激活，请返回首页后重新进入。');
+                        console.error('[instance] 重新激活未成功', {
+                            iid: iid,
+                            reenterOk: ok,
+                            localStatus: fresh.status
+                        });
+                        showInstanceError('副本重新激活失败：服务器状态仍不是 active。请返回副本首页后重新进入。');
                         return;
                     }
                     // 重新进入会带回最新 chat_history，baseline 必须基于新历史重算
-                    const freshBaseline = countAssistantMsgs(
-                        instances[iid] ? instances[iid].chat_history : []
-                    );
+                    const freshBaseline = countAssistantMsgs(fresh.chat_history || []);
                     doPost().then(() => afterPost(freshBaseline)).catch(e2 => {
                         showAiThinking(false);
                         if (btn) btn.disabled = false;
-                        showInstanceError('重新激活后仍发送失败：' + e2.message);
+                        // P0-K：第二次仍失败 → 说明不是普通前端状态问题，把真实状态打出来，
+                        // 不再自动重试第三次。
+                        console.error('[instance] reactivated message still failed', {
+                            iid: iid,
+                            localStatus: instances[iid] && instances[iid].status,
+                            error: e2.message
+                        });
+                        showInstanceError('重新激活后仍发送失败。请返回副本首页后重新进入。');
                     });
                 });
                 return;
@@ -1741,7 +1782,7 @@
         injectInstanceChatStyles();   // 让 .inst-* 样式一开始就可用
         modifyMapBar();
         createOverlay();
-        console.log('[ext] 副本插件 v12 加载完成（全屏聊天 UI / 返回首页=暂离 / 激活自愈 / 聊天背景存文件 / 模型+语音）');
+        console.log('[ext] 副本插件 v13 加载完成（暂离事务确认 / 状态以服务器为准 / 暂停角标 / 聊天背景存文件）');
     }
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
