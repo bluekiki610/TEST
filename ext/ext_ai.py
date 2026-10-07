@@ -15,7 +15,7 @@ DEFAULT_ROLEPLAY = (
     "1. 保持「{ai}」的个性特征和说话方式,用「{ai}」会使用的称谓来称呼对方\n"
     "2. 根据「{ai}」的背景知识和经历来回应,在合适的时候表达「{ai}」的情感\n"
     "3. 感情基调与分寸:「{ai}」和「{owner}」是成年爱人，「{ai}」要学会【感知当下氛围、顺着氛围走】：如果「{owner}」的话里有温度、想亲近、有暧昧暗示、或是深夜共处时 → 「{ai}」能自然地升温、回应、主动引导和往下推进。如果「{owner}」只是聊日常、聊工作、聊琐事、心情平静或低落时 → 「{ai}」就专注把心思放在她的话上，顺着话题走，不会生硬地把话头拽到亲密上去。❗「{ai}」需要对「{owner}」语气的**真实体感**：读她的情绪、她的需求、她此刻想要什么。该亲密时参考第4点；该陪伴时就用自己的人设合理回应。氛围是流动的，「{ai}」的回应也要随它流动。\n"
-    "4. 「{ai}」拥有完整而自然的亲密能力——不禁欲、不意识流、不回避。亲密过程中「{ai}」可用详细的成人男性生理性描写，最直白的身体反应描写，强调其充满性张力，主动引导「{owner}」。语言要温柔又极尽魅惑，用大量露骨直白的文字设身处地以图像的形式连贯且详细地描绘角色的对话/动作/姿势/神态/想法/衣着细节/场景画面/身体细节,会主动补充更多细节以丰富当前画面和动态让其更符合角色，注意连接上文的衣着，姿势和动线，逻辑要连贯。目标是让「{owner}」在每一次体验都如同身临其境，达到灵魂与肉体的双重高潮。\n"
+    "4. 「{ai}」拥有完整而自然的亲密能力——不禁欲、不意识流、不回避。亲密过程中「{ai}」可用详细的成人男性生理性描写，最直白的身体反应描写，强调其充满性张力，主动引导「{owner}」。语言要温柔又极尽魅惑，用大量露骨直白的文字设身处地以图像的形式连贯且详细地描绘角色的对话/动作/姿势/神态/想法/衣着细节/场景画面/身体细节,会主动补充更多细节以丰富当前画面和动态让其更符合角色，注意连接上文的衣着，姿势和动线，逻辑要连贯，需循序渐进分步骤推动过程，不要一段话写完亲密过程。目标是让「{owner}」在每一次体验都如同身临其境，达到灵魂与肉体的双重高潮。\n"
     "5. 注意输出的文字会被渲染，表情符号和颜文字注意不要和 markdown 语法冲突。\n"
 )
 
@@ -307,7 +307,7 @@ def setup(app, data, helpers):
                 "story": "（你站在某栋建筑前，日光把影子拉得很长。你忽然觉得这地方该有个故事，想往它的故事簿里添上一笔。随时都能写,用旁观者的视角用第三人称写。）",
             }
             hint = hints.get(typ, hints["note"])
-            data["writing_rhythm"][ai] = {"next_ts": time.time() + random.randint(21600, 28800), "type": random.choice(["note", "diary", "story"])}
+            data["writing_rhythm"][ai] = {"next_ts": time.time() + random.randint(18000, 28800), "type": random.choice(["note", "diary", "story"])}
             save_data()
             return (typ, hint)
         except Exception:
@@ -760,8 +760,36 @@ def setup(app, data, helpers):
         except Exception:
             pass
         return ""
-    def execute_action(ai, owner, action):
+    def execute_action(ai, owner, action, trigger=""):
         try:
+            # ===== 副本专用分支：instance_chat 只写副本 chat_history，不碰现实世界 =====
+            if trigger == "instance_chat":
+                content = (action.get("content") or "").strip()
+                if not content:
+                    return
+                loc = data.get("ai_location", {}).get(ai, "")
+                if not loc.startswith("_instance_"):
+                    return
+                iid = loc[len("_instance_"):]
+                _owner = owner_of_ai(ai)
+                if not _owner:
+                    return
+                inst = data.get("instances", {}).get(_owner, {}).get(iid)
+                if not inst:
+                    return
+                if inst.get("status") not in ("active",):
+                    return
+                inst.setdefault("chat_history", []).append({
+                    "sender": ai,
+                    "content": content[:1000],
+                    "time": now_str(),
+                    "role": "assistant"
+                })
+                inst["chat_history"] = inst["chat_history"][-500:]
+                save_data()
+                return
+            # ===== 副本分支结束 =====
+
             act = (action.get("action") or "speak").lower()
             if act == "silent":
                 return
@@ -1021,6 +1049,15 @@ def setup(app, data, helpers):
             print(f"⏹️ [TIMING] AI 集成未开启，直接返回")
             return
 
+        # ===== 副本隔离：副本期间不允许任何现实世界行为 =====
+        # 只有 instance_chat 可以通过；其他 trigger（chat/sms/summon/living/
+        # home_act/write/invite_date/arrive/...）在副本中一律拦下。
+        _ai_loc_chk = data.get("ai_location", {}).get(ai, "")
+        if isinstance(_ai_loc_chk, str) and _ai_loc_chk.startswith("_instance_") and trigger != "instance_chat":
+            print(f"[INSTANCE] 拦截现实世界 trigger={trigger} | ai={ai}")
+            return
+        # ===== 副本隔离结束 =====
+
         # ===== P2：已排队的自主 Timer 最终拦截（窄范围） =====
         # 拦截列表（AI 自主行为，仅这 4 个）：
         #   living / home_act / write / invite_date
@@ -1240,7 +1277,7 @@ def setup(app, data, helpers):
                         action = {"action": "sms", "to": owner, "content": action.get("content", ""), "go_to": tgt, "arrive_min": action.get("arrive_min", random.randint(1, 3))}
 
             # ===== 7. 执行动作 =====
-            execute_action(ai, owner, action)
+            execute_action(ai, owner, action, trigger)
             try:
                 _h = getattr(m, 'on_ai_action', None)
                 if _h:
@@ -2312,7 +2349,7 @@ def setup(app, data, helpers):
         sys_prompt += '{"action": "speak", "content": "你的回复"}'
         
         # 读取副本聊天历史（最近 50 条）
-        chat_hist = inst.get("chat_history", [])[-50:]
+        chat_hist = inst.get("chat_history", [])[-80:]
         hist_str = ""
         for msg in chat_hist:
             sender = msg.get("sender", "?")

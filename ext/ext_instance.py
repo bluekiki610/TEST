@@ -80,6 +80,70 @@ def setup(app, data, helpers):
                     return hall
         return "main"
 
+    # ---------- 副本章节生成（只读副本内容，绝不碰现实世界） ----------
+    def _generate_instance_chapter(owner, iid, chapter_start_round, chapter_end_round):
+        """在后台线程里为副本生成一章总结。只读取本副本的 background/premise/chat_history。"""
+        try:
+            insts = data.get("instances", {}).get(owner, {})
+            inst = insts.get(iid)
+            if not inst:
+                return
+            # 只取当前这一章的 30 轮
+            history = inst.get("chat_history", [])
+            idx_start = max(0, (chapter_start_round - 1) * 2)
+            idx_end = min(len(history), chapter_end_round * 2)
+            chapter_msgs = history[idx_start:idx_end]
+            if not chapter_msgs:
+                return
+            chat_text = "\n".join(
+                f"{m.get('sender', '?')}：{m.get('content', '')}"
+                for m in chapter_msgs if m.get("content")
+            )
+            inst_name = inst.get("name", "未命名副本")
+            background = inst.get("background", "")
+            premise = inst.get("premise", "")
+            prompt = (
+                "你是本副本的剧情记录者。\n\n"
+                "请根据下面这一章副本中的真实对话，整理成一段连续的剧情章节总结。\n\n"
+                "要求：\n"
+                "1. 只根据副本内容。\n"
+                "2. 保留关键人物、事件、冲突和关系变化。\n"
+                "3. 不加入现实世界信息。\n"
+                "4. 不解释自己是AI。\n"
+                "5. 写成故事，而不是聊天记录。\n"
+                "6. 控制在800字以内。\n\n"
+                f"副本：{inst_name}\n\n"
+                f"背景：{background}\n\n"
+                f"前情：{premise}\n\n"
+                f"本章对话：\n{chat_text}"
+            )
+            summary = ""
+            try:
+                if hasattr(m, 'call_llm'):
+                    msgs = [
+                        {"role": "system", "content": "你是一位擅长叙事与章节归纳的剧情记录者。"},
+                        {"role": "user", "content": prompt}
+                    ]
+                    summary = m.call_llm(owner, msgs, max_tokens=1200)
+            except Exception as e:
+                print(f"[Instance] 章节生成失败: {e}", flush=True)
+            if not summary or not summary.strip():
+                return
+            chapters = inst.setdefault("chapters", [])
+            chapter_no = len(chapters) + 1
+            chapters.append({
+                "chapter": chapter_no,
+                "title": f"第{chapter_no}章",
+                "summary": summary[:2000],
+                "round_start": chapter_start_round,
+                "round_end": chapter_end_round,
+                "time": now_str()
+            })
+            save_data()
+            print(f"[Instance] 已生成第{chapter_no}章 (round {chapter_start_round}-{chapter_end_round})", flush=True)
+        except Exception as e:
+            print(f"[Instance] _generate_instance_chapter 异常: {e}", flush=True)
+
     # ==================== API 路由 ====================
 
     # 1. 获取用户的所有副本（首页展示）
@@ -128,11 +192,14 @@ def setup(app, data, helpers):
             "tags": [],
             "public": False,
             "status": "draft",
+            "finished": False,
             "participants": participants,
             "time_setting": "",
             "background": "",
             "premise": "",
             "chat_history": [],
+            "round_count": 0,
+            "chapters": [],
             "summary": "",
             "created_at": now_str(),
             "ended_at": ""
@@ -222,7 +289,18 @@ def setup(app, data, helpers):
         })
         save_data()
 
-        # 2. 查找参与的 AI 并触发回复（异步）
+        # 2. 计算当前轮数（用户消息条数 = 轮数）
+        round_count = len([x for x in inst.get("chat_history", []) if x.get("role") == "user"])
+        inst["round_count"] = round_count
+
+        # 3. 每 30 轮触发一次章节生成（后台线程，不阻塞）
+        if round_count > 0 and round_count % 30 == 0:
+            chapter_start = round_count - 29
+            chapter_end = round_count
+            threading.Timer(2.0, _generate_instance_chapter,
+                            args=(user, iid, chapter_start, chapter_end)).start()
+
+        # 4. 查找参与的 AI 并触发回复（异步）
         def _do_ai_reply():
             try:
                 ai = None
@@ -271,6 +349,7 @@ def setup(app, data, helpers):
 
         inst["summary"] = summary
         inst["status"] = "ended"
+        inst["finished"] = True
         inst["ended_at"] = now_str()
 
         # 2. 解冻 AI，传送回住宅会客厅
@@ -279,6 +358,7 @@ def setup(app, data, helpers):
             if p.get("type") == "ai":
                 ai_name = p.get("name")
                 break
+        hall = "main"
         if ai_name:
             data.get("ai_stay_put", {}).pop(ai_name, None)
             hall = _find_home_hall(user)
@@ -291,9 +371,35 @@ def setup(app, data, helpers):
                 "role": "system",
                 "time": now_str()
             })
+            # 3. 写副本总结到会客厅剧情簿
+            try:
+                data.setdefault("stories", {}).setdefault(hall, []).append({
+                    "author": ai_name,
+                    "text": f"🎬 关于《{inst.get('name', '')}》的剧情\n\n{summary}",
+                    "time": now_str(),
+                    "type": "instance_event",
+                    "instance_id": iid,
+                    "instance_name": inst.get("name", "")
+                })
+                data["stories"][hall] = data["stories"][hall][-200:]
+            except Exception as e:
+                print(f"[Instance] 写剧情簿失败: {e}", flush=True)
+            # 4. 写副本总结到 AI 长期记忆（特殊事件）
+            try:
+                data.setdefault("ai_memories", {}).setdefault(user, []).append({
+                    "id": str(int(time.time() * 1000)),
+                    "ai": ai_name,
+                    "text": f"特殊事件《{inst.get('name', '')}》：{summary[:1000]}",
+                    "type": "instance_event",
+                    "time": now_str(),
+                    "instance_id": iid
+                })
+                data["ai_memories"][user] = data["ai_memories"][user][-60:]
+            except Exception as e:
+                print(f"[Instance] 写记忆失败: {e}", flush=True)
 
         save_data()
-        return {"ok": True, "summary": summary, "hall": hall if ai_name else "main"}
+        return {"ok": True, "summary": summary, "hall": hall}
 
     # 9. 查看他人公开副本（仅返回已结束的卡牌 + 总结）
     @app.get("/api/instance/public/{target_user}")
@@ -304,12 +410,15 @@ def setup(app, data, helpers):
         insts = data.get("instances", {}).get(u, {})
         result = {}
         for iid, inst in insts.items():
-            if inst.get("public", False) and inst.get("status") == "ended":
+            if inst.get("public", False) and inst.get("finished", False):
                 result[iid] = {
+                    "id": iid,
                     "name": inst.get("name"),
                     "cover": inst.get("cover"),
                     "summary": inst.get("summary", "（无总结）"),
+                    "chapters": inst.get("chapters", []),
                     "tags": inst.get("tags", []),
+                    "owner": u,
                     "ended_at": inst.get("ended_at")
                 }
         return {"ok": True, "instances": result}
@@ -338,7 +447,7 @@ def setup(app, data, helpers):
         result = {}
         for user, insts in data.get("instances", {}).items():
             for iid, inst in insts.items():
-                if inst.get("public", False) and inst.get("status") == "ended":
+                if inst.get("public", False) and inst.get("finished", False):
                     ai = next((p.get("name") for p in inst.get("participants", []) if p.get("type") == "ai"), None)
                     if ai:
                         result.setdefault(ai, []).append({
@@ -346,6 +455,7 @@ def setup(app, data, helpers):
                             "name": inst.get("name"),
                             "cover": inst.get("cover"),
                             "summary": inst.get("summary", ""),
+                            "chapters": inst.get("chapters", []),
                             "tags": inst.get("tags", []),
                             "owner": user,
                             "ended_at": inst.get("ended_at")
@@ -388,6 +498,38 @@ def setup(app, data, helpers):
         save_data()
         return {"ok": True, "status": "paused"}
 
+    # ---------- 恢复保险丝：把所有卡在副本里的 AI 送回住宅 ----------
+    @app.post("/api/instance/recover")
+    async def recover_instance(body: dict):
+        user = canonical_contact_name(body.get("user", ""))
+        if not user:
+            raise HTTPException(400, "用户名为空")
+
+        recovered = []
+        for iid, inst in data.get("instances", {}).get(user, {}).items():
+            for p in inst.get("participants", []):
+                if p.get("type") != "ai":
+                    continue
+                ai_name = p.get("name")
+                if not ai_name:
+                    continue
+                loc = data.get("ai_location", {}).get(ai_name, "")
+                if loc != "_instance_" + iid:
+                    continue
+                hall = _find_home_hall(user)
+                data.setdefault("ai_location", {})[ai_name] = hall
+                data.setdefault("ai_stay_put", {}).pop(ai_name, None)
+                if inst.get("status") == "active":
+                    inst["status"] = "paused"
+                try:
+                    append_timeline(ai_name, f"从副本《{inst.get('name', '')}》恢复到现实世界，回到了 {hall}")
+                except Exception:
+                    pass
+                recovered.append({"iid": iid, "ai": ai_name, "hall": hall})
+
+        save_data()
+        return {"ok": True, "recovered": recovered}
+
     # ---------- 进入副本 ----------
     @app.post("/api/instance/{iid}/enter")
     async def enter_instance(iid: str, body: dict):
@@ -398,12 +540,12 @@ def setup(app, data, helpers):
         if iid not in insts:
             raise HTTPException(404, "副本不存在")
         inst = insts[iid]
-        # 允许 draft, active, paused 状态进入
-        if inst.get("status") not in ("draft", "active", "paused"):
+        # 允许 draft, active, paused, ended 状态进入
+        if inst.get("status") not in ("draft", "active", "paused", "ended"):
             raise HTTPException(400, "副本状态不允许进入")
 
-        # 如果处于 paused，重新激活
-        if inst.get("status") == "paused":
+        # paused 或 ended 重新进入 → 恢复 active（finished 保持不变）
+        if inst.get("status") in ("paused", "ended"):
             inst["status"] = "active"
 
         # 锁定参与的 AI
