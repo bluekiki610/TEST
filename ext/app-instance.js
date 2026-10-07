@@ -1,4 +1,4 @@
-// app-instance.js - 副本系统 v9（修复进入/暂离逻辑 + 加载优化）
+// app-instance.js - 副本系统 v10（复用住宅聊天 UI + 前情进消息区 + 暂离/回复链路修复 + 模型/语音接口预留）
 (function() {
     'use strict';
     console.log('[ext] app-instance.js v9 加载...');
@@ -16,12 +16,220 @@
     let isReadOnly = false;
     let publicInstancesMap = {};
     let currentEditingInstance = null;
+    let thinkingActive = false;   // 「AI 正在思考」状态（独立于 DOM，重绘后保持）
 
     // ---------- 工具函数 ----------
     function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     function toast(msg) { if (window.toast) window.toast(msg); else alert('[Toast] ' + msg); }
     function api(url, options) { return fetch(url, options).then(r => { if(!r.ok) return r.json().then(d => { throw new Error(d.detail || d.msg || 'HTTP '+r.status); }); return r.json(); }); }
     function isAdmin() { return window.isAdminUser ? window.isAdminUser() : false; }
+    function escAttr(s) { return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+    function isAssistantMsg(m) {
+        if (!m) return false;
+        if (m.role === 'assistant') return true;
+        if (m.role) return false;
+        // 兼容没有 role 的历史数据
+        return !!(m.sender && m.sender !== currentUser && m.sender !== 'system');
+    }
+    function countAssistantMsgs(hist) {
+        return (hist || []).filter(isAssistantMsg).length;
+    }
+
+    // ==================================================================
+    // 副本聊天页外壳样式
+    // 复用住宅聊天（index.html）的 .msg / .msg.me / .bubble / .avatar / .meta
+    // 全局样式，这里只补副本聊天页自己需要的壳层（顶栏 / 状态条 / 底部输入区）。
+    // 结构：InstanceChatShell > Header / StoryHeader / MessageList / Composer
+    // ==================================================================
+    function injectInstanceChatStyles() {
+        if (document.getElementById('instanceChatStyles')) return;
+        const st = document.createElement('style');
+        st.id = 'instanceChatStyles';
+        st.textContent = `
+            .inst-shell { display:flex; flex-direction:column; flex:1; min-height:0; height:100%; background:#0f1a2e; }
+            .inst-header { display:flex; align-items:center; gap:8px; padding:8px 10px; background:#0d1a2e; border-bottom:1px solid rgba(80,180,255,.15); flex-shrink:0; }
+            .inst-header .inst-back { color:#7fd0ff; font-size:13px; cursor:pointer; flex-shrink:0; padding:4px 6px; border-radius:8px; }
+            .inst-header .inst-back:hover { background:rgba(80,180,255,.12); }
+            .inst-header .inst-title { font-size:15px; font-weight:600; color:#e6f1ff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+            .inst-header .inst-sub { font-size:11px; color:#6d8bb0; white-space:nowrap; flex-shrink:0; }
+            .inst-header .inst-actions { margin-left:auto; display:flex; gap:5px; flex-shrink:0; }
+            .inst-hbtn { background:rgba(80,180,255,.15); border:1px solid rgba(80,180,255,.3); color:#9fd8ff; padding:4px 9px; border-radius:8px; font-size:12px; cursor:pointer; white-space:nowrap; }
+            .inst-hbtn:hover { background:rgba(80,180,255,.28); }
+            .inst-hbtn.warn { color:#ffd166; border-color:rgba(255,209,102,.35); background:rgba(255,209,102,.12); }
+            .inst-hbtn.danger { color:#ff9d9d; border-color:rgba(255,107,107,.35); background:rgba(255,107,107,.12); }
+            #instanceMsgArea { flex:1; min-height:0; overflow-y:auto; padding:12px; background-color:#0f1a2e; background-size:cover; background-position:center; background-repeat:no-repeat; }
+            .inst-story { display:flex; justify-content:center; margin-bottom:16px; }
+            .inst-story .body { max-width:82%; background:rgba(19,35,61,.92); border:1px solid rgba(80,180,255,.22); border-left:3px solid #7fd0ff; border-radius:12px; padding:10px 14px; }
+            .inst-story .cap { font-size:12px; color:#7fd0ff; font-weight:600; margin-bottom:5px; letter-spacing:.6px; }
+            .inst-story .txt { font-size:13.5px; line-height:1.75; color:#bcd6f0; white-space:pre-wrap; word-break:break-word; }
+            .inst-thinking { display:flex; align-items:center; gap:7px; color:#6d8bb0; font-size:12px; padding:6px 4px 10px; }
+            .inst-thinking .dot { width:6px; height:6px; border-radius:50%; background:#7fd0ff; animation:instPulse 1.1s ease-in-out infinite; flex-shrink:0; }
+            @keyframes instPulse { 0%,100%{ opacity:.25; transform:scale(.8);} 50%{ opacity:1; transform:scale(1.15);} }
+            .inst-err { margin:0 0 10px; padding:8px 11px; border-radius:10px; background:rgba(255,107,107,.12); border:1px solid rgba(255,107,107,.3); color:#ffb3b3; font-size:12px; line-height:1.6; }
+            .inst-composer { background:#0d1a2e; border-top:1px solid rgba(80,180,255,.15); padding:7px 8px; flex-shrink:0; }
+            .inst-composer .row { display:flex; align-items:center; gap:6px; }
+            .inst-composer .tools { display:flex; align-items:center; gap:5px; flex-shrink:0; }
+            #instanceMsgInput { flex:1; border:1px solid #1d3a5f; border-radius:8px; padding:8px 10px; font-size:15px; outline:none; background:#13233d; color:#e6f1ff; min-width:0; }
+            #instanceMsgInput::placeholder { color:#5b7aa0; }
+            #instanceSendBtn { background:#0e7fd4; color:#fff; border:none; border-radius:8px; padding:8px 14px; font-size:14px; cursor:pointer; flex-shrink:0; }
+            #instanceSendBtn:disabled { background:#2a4a75; color:#7f9dc0; cursor:not-allowed; }
+            .inst-tts { background:rgba(80,180,255,.15); border:1px solid rgba(80,180,255,.3); color:#9fd8ff; padding:6px 9px; border-radius:8px; font-size:14px; cursor:pointer; line-height:1; flex-shrink:0; }
+            .inst-tts.on { background:rgba(14,127,212,.35); color:#fff; border-color:#0e7fd4; }
+            .inst-tts:disabled { opacity:.4; cursor:not-allowed; }
+            .inst-model { max-width:150px; background:#13233d; border:1px solid rgba(80,180,255,.3); color:#cfe8ff; border-radius:8px; padding:6px; font-size:12px; cursor:pointer; flex-shrink:0; }
+            .inst-modal-mask { position:fixed; inset:0; background:rgba(3,8,18,.78); z-index:400; display:flex; align-items:center; justify-content:center; padding:20px; }
+            .inst-modal { background:#0d1a2e; border:1px solid rgba(80,180,255,.25); border-radius:14px; width:100%; max-width:600px; max-height:85vh; overflow-y:auto; padding:20px; box-shadow:0 12px 44px rgba(0,0,0,.6); }
+            .inst-modal h2 { margin:0 0 4px; font-size:17px; color:#9fd8ff; }
+            .inst-modal h3 { margin:16px 0 6px; font-size:14px; color:#7fa8cf; }
+            .inst-modal .muted { color:#6d8bb0; font-size:12px; }
+            .inst-modal .txt { color:#cfe8ff; line-height:1.8; white-space:pre-wrap; word-break:break-word; font-size:14px; }
+            .inst-modal .mfoot { text-align:center; margin-top:18px; }
+            .inst-modal .mclose { background:#0e7fd4; color:#fff; border:none; padding:8px 24px; border-radius:8px; cursor:pointer; font-size:14px; }
+        `;
+        document.head.appendChild(st);
+    }
+
+    // ==================================================================
+    // 语音接口（P1 预留 + 与住宅朗读一致的实现）
+    // 路线：浏览器 speechSynthesis（与 index.html 的 speakNewMessages 同源）
+    // 不引入第二套 TTS provider，不把任何 Key 写进 instance / localStorage。
+    // ==================================================================
+    let autoVoiceEnabled = false;
+    let lastSpokenKey = '';
+
+    function voiceSupported() {
+        return typeof window !== 'undefined' && 'speechSynthesis' in window;
+    }
+    window.getAutoVoiceEnabled = function() { return autoVoiceEnabled; };
+    window.setAutoVoiceEnabled = function(enabled) {
+        autoVoiceEnabled = !!enabled;
+        updateVoiceToggleUI();
+        return autoVoiceEnabled;
+    };
+    window.toggleAutoVoice = function() {
+        if (!voiceSupported()) { toast('当前浏览器不支持语音朗读'); return false; }
+        const next = !autoVoiceEnabled;
+        window.setAutoVoiceEnabled(next);
+        if (next) toast('🔊 已开启 AI 回复自动朗读');
+        else { try { window.speechSynthesis.cancel(); } catch (e) {} toast('🔇 已关闭自动朗读'); }
+        return next;
+    };
+
+    function updateVoiceToggleUI() {
+        const btn = document.getElementById('instanceVoiceBtn');
+        if (!btn) return;
+        const ok = voiceSupported();
+        btn.disabled = !ok;
+        btn.classList.toggle('on', ok && autoVoiceEnabled);
+        btn.textContent = (ok && autoVoiceEnabled) ? '🔊' : '🔇';
+        btn.title = ok
+            ? (autoVoiceEnabled ? '自动朗读：开（点击关闭）' : '自动朗读：关（点击开启）')
+            : '当前浏览器不支持语音朗读';
+    }
+
+    // 朗读单条消息（住宅手动播放 / 副本自动+手动都走这里）
+    function speakText(text) {
+        if (!voiceSupported() || !text) return;
+        try {
+            const voices = window.speechSynthesis.getVoices();
+            if (voices.length === 0) {
+                window.speechSynthesis.onvoiceschanged = function() {
+                    window.speechSynthesis.onvoiceschanged = null;
+                    setTimeout(function() { speakText(text); }, 120);
+                };
+                window.speechSynthesis.getVoices();
+                return;
+            }
+            window.speechSynthesis.cancel();
+            const u = new SpeechSynthesisUtterance(text);
+            u.lang = 'zh-CN';
+            u.rate = 0.9;
+            window.speechSynthesis.speak(u);
+        } catch (e) {
+            console.warn('[instance] 朗读失败:', e);
+        }
+    }
+
+    window.playMessageVoice = function(msgOrText) {
+        if (!voiceSupported()) { toast('当前浏览器不支持语音朗读'); return; }
+        if (!msgOrText) return;
+        const text = (typeof msgOrText === 'string')
+            ? msgOrText
+            : ((msgOrText.sender ? msgOrText.sender + '说：' : '') + (msgOrText.content || ''));
+        if (!text.trim()) return;
+        speakText(text);
+    };
+
+    // AI 回复写入后，若开启了自动朗读则朗读最新一条
+    function maybeAutoSpeak(history) {
+        if (!autoVoiceEnabled || !voiceSupported()) return;
+        const hist = history || [];
+        for (let i = hist.length - 1; i >= 0; i--) {
+            if (isAssistantMsg(hist[i])) {
+                const key = hist[i].sender + '|' + hist[i].content;
+                if (key === lastSpokenKey) return;
+                lastSpokenKey = key;
+                window.playMessageVoice(hist[i]);
+                return;
+            }
+        }
+    }
+
+    // ==================================================================
+    // 模型切换接口（P1 预留）
+    // 只读取用户「设置 → 模型与服务」里已保存的 provider / model，
+    // 不新建 instance_ai_keys，不把 Key 存进 instance / chat_history /
+    // localStorage，也不修改 data["ai_keys"] 结构。
+    // 选择结果通过每次 /message 请求的 model_override 字段传给后端；
+    // 后端 call_llm 目前只读 ai_keys[owner].model，因此该字段需要
+    // ext_ai.py 侧配合（本次未改后端，属于预留接口）。
+    // ==================================================================
+    let currentInstanceModel = '';
+
+    function loadUserModelConfig() {
+        if (!currentUser) return Promise.resolve(null);
+        return api('/api/ai/key?user=' + encodeURIComponent(currentUser))
+            .then(d => (d && d.has_key) ? d : null)
+            .catch(() => null);
+    }
+
+    function providerLabel(p) {
+        return ({ deepseek: 'DeepSeek', siliconflow: '硅基流动', glm: 'GLM' })[p] || (p || '默认');
+    }
+
+    function renderModelTools() {
+        const sel = document.getElementById('instanceModelSel');
+        if (!sel) return;
+        const hint = sel.querySelector('option[value="__ph"]');
+        if (hint) hint.textContent = '模型加载中…';
+        loadUserModelConfig().then(cfg => {
+            const sel2 = document.getElementById('instanceModelSel');
+            if (!sel2) return;
+            if (!cfg) {
+                sel2.innerHTML = '<option value="">未配置模型</option>';
+                sel2.disabled = true;
+                sel2.title = '请先到「设置 → 模型与服务」填写 API Key';
+                return;
+            }
+            sel2.disabled = false;
+            const provider = cfg.provider || 'deepseek';
+            const model = cfg.model || '';
+            currentInstanceModel = model;
+            let opts = '';
+            if (model) opts += `<option value="${escAttr(model)}">${esc(model)}</option>`;
+            opts += `<option value="">${esc(providerLabel(provider))} 默认模型</option>`;
+            sel2.innerHTML = opts;
+            sel2.value = model || '';
+            sel2.title = '当前使用你设置里的 ' + providerLabel(provider) + ' 配置';
+        });
+    }
+
+    window.onInstanceModelChange = function() {
+        const sel = document.getElementById('instanceModelSel');
+        if (!sel) return;
+        currentInstanceModel = sel.value || '';
+        toast(currentInstanceModel ? ('已切换模型：' + currentInstanceModel) : '已切回默认模型');
+    };
 
     // ---------- 修改地图栏 ----------
     function modifyMapBar() {
@@ -71,7 +279,8 @@
         app.appendChild(overlay);
 
         window.closeInstanceOverlay = async function() {
-            // 只要有 currentInstanceId 就尝试 pause（不依赖本地 status 同步）
+            // 只有在「确实处于副本聊天页」时才需要自动暂离；
+            // 在副本库 / 选择页关闭时不该对旧 iid 发 pause。
             if (currentInstanceId) {
                 try {
                     await api('/api/instance/' + currentInstanceId + '/pause', {
@@ -236,6 +445,8 @@
     // ---------- AI选择页 ----------
     function renderAiSelection() {
         setContentScrollable();
+        // 回到选择页说明已离开副本聊天，清掉残留的聊天态
+        currentInstanceId = null;
         const content = document.getElementById('instanceContent');
         const bg = instanceBg || getMainBg();
         const bgStyle = bg ? `background-image: url(${bg}); background-size: cover; background-position: center;` : 'background: #f5f2ef;';
@@ -299,6 +510,8 @@
 
     // ---------- 加载自己的副本库 ----------
     function loadInstanceLibrary(ai) {
+        // 回到副本库说明已离开副本聊天，清掉残留的聊天态
+        currentInstanceId = null;
         const content = document.getElementById('instanceContent');
         content.innerHTML = '<div style="text-align:center; color:#999; padding:40px;">⏳ 加载副本...</div>';
         api('/api/instances?user=' + encodeURIComponent(currentUser))
@@ -832,6 +1045,8 @@
             toast('✅ 已暂离，AI 回到现实世界');
             if (modal) modal.remove();
             currentEditingInstance = null;
+            // 若正在这个副本的聊天页里，一并退出
+            if (currentInstanceId === id) currentInstanceId = null;
             // 刷新图鉴
             if (isReadOnly) {
                 const publicList = publicInstancesMap[selectedAi] || [];
@@ -864,44 +1079,190 @@
         });
     };
 
-    // ---------- 聊天消息渲染（可独立复用） ----------
+    // ---------- 聊天消息渲染（复用住宅聊天 .msg/.bubble/.avatar 结构） ----------
+    // 单独抽出，方便未来插入「章节 / NPC / 骰子 / 小游戏」等卡片而不动主渲染。
+    function buildInstanceMsgEl(m) {
+        const isMe = (m.sender === currentUser);
+        const av = (window.avatars && window.avatars[m.sender]) || '';
+        const avHtml = av ? '<img src="' + escAttr(av) + '">' : esc((m.sender || '?').charAt(0));
+        const p = (typeof window.pairOf === 'function') ? window.pairOf(m.sender) : null;
+        const isOwner = p && m.sender === p.owner;
+        const bg = p ? (isOwner ? p.dark : p.light) : (isMe ? '#0e7fd4' : '#1c2f4d');
+        const nameColor = p ? (isOwner ? p.dark : p.light) : '#7fd0ff';
+        const textColor = p ? (isOwner ? '#ffffff' : '#16263c') : (isMe ? '#ffffff' : '#e6f1ff');
+        const border = (!p && !isMe) ? 'border:1px solid rgba(255,255,255,.1);' : '';
+        const d = document.createElement('div');
+        d.className = 'msg ' + (isMe ? 'me' : 'other');
+        d.innerHTML =
+            '<div class="avatar">' + avHtml + '</div>' +
+            '<div class="body">' +
+                '<div class="meta">' +
+                    (isMe ? '' : '<span style="color:' + nameColor + ';font-weight:bold">' + esc(m.sender) + '</span> ') +
+                    '<span>' + esc(m.time || '') + '</span>' +
+                '</div>' +
+                '<div class="bubble" style="background:' + bg + ';color:' + textColor + ';' + border + '">' + esc(m.content) + '</div>' +
+                '<div class="inst-msg-ops" style="margin-top:4px;text-align:right;"></div>' +
+            '</div>';
+        // 单条 AI 消息手动播放（P1 预留）
+        const ops = d.querySelector('.inst-msg-ops');
+        if (ops && isAssistantMsg(m)) {
+            const b = document.createElement('span');
+            b.textContent = '🔊 朗读';
+            b.style.cssText = 'font-size:11px;color:#7fa8cf;cursor:pointer;';
+            b.onclick = function() { window.playMessageVoice(m); };
+            ops.appendChild(b);
+        }
+        return d;
+    }
+
+    // 前情提要 → 聊天框第一条「剧情系统消息」（仅 UI 层，绝不写入 chat_history）
+    function buildPremiseEl(premise) {
+        const d = document.createElement('div');
+        d.className = 'inst-story';
+        d.innerHTML =
+            '<div class="body">' +
+                '<div class="cap">📖 副本开始</div>' +
+                '<div class="txt">' + esc(premise) + '</div>' +
+            '</div>';
+        return d;
+    }
+
+    function buildThinkingEl() {
+        const d = document.createElement('div');
+        d.id = 'instanceAiThinking';
+        d.className = 'inst-thinking';
+        d.innerHTML = '<span class="dot"></span><span>💭 AI 正在思考…</span>';
+        return d;
+    }
+
+    function instScrollToBottom() {
+        const area = document.getElementById('instanceMsgArea');
+        if (area) area.scrollTop = area.scrollHeight;
+    }
+
     function renderChatMessages() {
         const area = document.getElementById('instanceMsgArea');
         if (!area) return;
         const inst = instances[currentInstanceId];
         if (!inst) return;
         const hist = inst.chat_history || [];
-        area.innerHTML = hist.length ? hist.map(m => `
-            <div style="display:flex; margin-bottom:10px; ${m.sender === currentUser ? 'justify-content:flex-end;' : ''}">
-                <div style="max-width:75%; padding:8px 14px; border-radius:10px; background:${m.sender === currentUser ? '#d4cdc4' : '#ffffff'}; color:#333; word-break:break-word; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
-                    <div style="font-size:11px; color:#888; margin-bottom:2px;">${esc(m.sender)}</div>
-                    ${esc(m.content)}
-                </div>
-            </div>
-        `).join('') : '<div style="color:#aaa; text-align:center; padding:40px;">✨ 空荡荡的，开始你的冒险吧...</div>';
-        area.scrollTop = area.scrollHeight;
+        const stick = area.scrollTop + area.clientHeight >= area.scrollHeight - 60;
+        area.innerHTML = '';
+
+        // 1) 前情提要做第一条剧情内容（不固定占顶部）
+        if (inst.premise) area.appendChild(buildPremiseEl(inst.premise));
+
+        // 2) 真实聊天记录
+        if (!hist.length) {
+            if (!inst.premise) {
+                const tip = document.createElement('div');
+                tip.className = 'sys-tip';
+                tip.textContent = '✨ 空荡荡的，开始你的冒险吧…';
+                area.appendChild(tip);
+            }
+        } else {
+            hist.forEach(m => {
+                if (m.sender === 'system') area.appendChild(buildSystemEl(m.content));
+                else area.appendChild(buildInstanceMsgEl(m));
+            });
+        }
+
+        // 3) 思考中指示器（用状态变量判断，不能依赖 DOM，因为上面刚清空过）
+        if (thinkingActive) area.appendChild(buildThinkingEl());
+        if (stick) instScrollToBottom();
+    }
+
+    function buildSystemEl(t) {
+        const d = document.createElement('div');
+        d.className = 'msg system';
+        d.innerHTML = '<div class="bubble">' + esc(t) + '</div>';
+        return d;
     }
 
     function showAiThinking(on) {
-        let el = document.getElementById('instanceAiThinking');
+        const area = document.getElementById('instanceMsgArea');
+        thinkingActive = !!on;
+        if (!area) return;
+        const cur = document.getElementById('instanceAiThinking');
         if (on) {
-            if (el) return;
-            const area = document.getElementById('instanceMsgArea');
-            if (!area) return;
-            el = document.createElement('div');
-            el.id = 'instanceAiThinking';
-            el.style.cssText = 'color:#999; font-size:12px; padding:6px 12px; text-align:center;';
-            el.textContent = '💭 AI 正在思考...';
-            area.appendChild(el);
-            area.scrollTop = area.scrollHeight;
-        } else {
-            if (el) el.remove();
+            if (cur) return;
+            area.appendChild(buildThinkingEl());
+            instScrollToBottom();
+        } else if (cur) {
+            cur.remove();
         }
     }
 
-    // ---------- 聊天界面（真正的独立聊天房间） ----------
+    // 失败时把原因显示在聊天区，不再静默超时
+    function showInstanceError(msg) {
+        const area = document.getElementById('instanceMsgArea');
+        if (!area) { toast(msg); return; }
+        const old = document.getElementById('instanceErrorBar');
+        if (old) old.remove();
+        const d = document.createElement('div');
+        d.id = 'instanceErrorBar';
+        d.className = 'inst-err';
+        d.textContent = '⚠️ ' + msg;
+        area.appendChild(d);
+        instScrollToBottom();
+    }
+
+    // ---------- 背景 / 剧情 阅读面板（不再长期占据聊天空间） ----------
+    function openInstanceInfoModal(title, sections) {
+        const mask = document.createElement('div');
+        mask.className = 'inst-modal-mask';
+        mask.onclick = function(e) { if (e.target === mask) mask.remove(); };
+        const body = (sections || []).map(s => (
+            '<h3>' + esc(s.title) + '</h3>' +
+            (s.text ? '<div class="txt">' + esc(s.text) + '</div>' : '<div class="muted">（未填写）</div>')
+        )).join('');
+        mask.innerHTML =
+            '<div class="inst-modal">' +
+                '<h2>' + esc(title) + '</h2>' +
+                body +
+                '<div class="mfoot"><button class="mclose">关闭</button></div>' +
+            '</div>';
+        mask.querySelector('.mclose').onclick = function() { mask.remove(); };
+        document.body.appendChild(mask);
+    }
+
+    window.openInstanceBackground = function() {
+        const inst = instances[currentInstanceId];
+        if (!inst) return;
+        const parts = (inst.participants || []).map(p =>
+            (p.type === 'user' ? '👤 ' : (p.type === 'ai' ? '🤖 ' : '🧑 ')) +
+            p.name + (p.type === 'npc' ? '（NPC）' : '') +
+            (p.profile ? '：' + p.profile : '')
+        ).join('\n');
+        openInstanceInfoModal('🖼️ ' + (inst.name || '副本'), [
+            { title: '🌍 副本背景', text: inst.background },
+            { title: '🕰️ 剧情时间', text: inst.time_setting },
+            { title: '📖 前情提要', text: inst.premise },
+            { title: '👥 参与者', text: parts }
+        ]);
+    };
+
+    window.openInstanceChapters = function() {
+        const inst = instances[currentInstanceId];
+        if (!inst) return;
+        const chapters = inst.chapters || [];
+        if (!chapters.length) {
+            toast('📚 还没有已完成的章节（每 30 轮生成一章）');
+            return;
+        }
+        openInstanceInfoModal('📚 ' + (inst.name || '副本') + ' · 剧情章节',
+            chapters.map(c => ({
+                title: (c.title || ('第' + (c.chapter || '?') + '章')) + '（第' + (c.round_start || '?') + '-' + (c.round_end || '?') + '轮）',
+                text: c.summary || ''
+            }))
+        );
+    };
+
+    // ---------- 聊天界面（InstanceChatShell：Header / StoryHeader / MessageList / Composer） ----------
     function renderChatRoom(history, settings) {
+        injectInstanceChatStyles();
         setContentChatMode();
+        thinkingActive = false;   // 进入/重绘聊天页时重置思考态
         let inst = instances[currentInstanceId];
         if (!inst) {
             if (settings && settings.name) {
@@ -912,6 +1273,7 @@
                     background: settings.background || '',
                     premise: settings.premise || '',
                     participants: settings.participants || [],
+                    chapters: settings.chapters || [],
                     chat_history: history || []
                 };
                 instances[currentInstanceId] = inst;
@@ -928,129 +1290,202 @@
         }
         if (history && history.length > 0) inst.chat_history = history;
         else if (!inst.chat_history) inst.chat_history = [];
-
-        const chapters = inst.chapters || [];
+        // settings 里可能带来更完整的副本信息（enter 接口返回）
+        if (settings) {
+            if (settings.name) inst.name = settings.name;
+            if (settings.background != null) inst.background = settings.background;
+            if (settings.premise != null) inst.premise = settings.premise;
+            if (settings.time_setting != null) inst.time_setting = settings.time_setting;
+            if (settings.participants) inst.participants = settings.participants;
+            if (settings.chapters) inst.chapters = settings.chapters;
+        }
 
         const content = document.getElementById('instanceContent');
         content.innerHTML = `
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-shrink:0; background:rgba(255,255,255,0.85); padding:8px 12px; border-radius:8px; gap:8px; flex-wrap:wrap;">
-                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                    <span onclick="backToLibraryFromChat()" style="cursor:pointer; color:#3498db; font-size:14px;">← 返回</span>
-                    <span style="font-weight:600; font-size:16px; color:#333;">🎬 ${esc(inst.name)}</span>
-                    <span style="color:#888; font-size:12px;">${esc(inst.time_setting || '')}</span>
+            <div class="inst-shell">
+                <div class="inst-header">
+                    <span class="inst-back" onclick="backToLibraryFromChat()">← 返回</span>
+                    <span class="inst-title">🎬 ${esc(inst.name || '未命名')}</span>
+                    ${inst.time_setting ? `<span class="inst-sub">${esc(inst.time_setting)}</span>` : ''}
+                    <span class="inst-actions">
+                        <button class="inst-hbtn" onclick="openInstanceBackground()" title="查看副本背景 / 前情提要 / 参与者">🖼 背景</button>
+                        <button class="inst-hbtn" onclick="openInstanceChapters()" title="查看已完成章节">📚 剧情</button>
+                        <button class="inst-hbtn warn" onclick="pauseAndLeaveInstance()" title="暂离副本，AI 回到现实世界住宅">⏸ 暂离</button>
+                        <button class="inst-hbtn danger" onclick="endInstance('${escAttr(currentInstanceId)}')" title="结束副本并生成剧情总结">🏁 结束</button>
+                    </span>
                 </div>
-                <div style="display:flex; gap:6px;">
-                    <button class="btn" onclick="pauseInstance('${currentInstanceId}')" style="background:#f39c12; color:#fff; border:none; padding:4px 12px; border-radius:6px; cursor:pointer; font-size:12px;">⏸ 暂离</button>
-                    <button class="btn red" onclick="endInstance('${currentInstanceId}')" style="background:#c0392b; color:#fff; border:none; padding:4px 12px; border-radius:6px; cursor:pointer; font-size:12px;">🏁 结束剧情</button>
+                <div id="instanceMsgArea"></div>
+                <div class="inst-composer">
+                    <div class="row">
+                        <div class="tools">
+                            <select id="instanceModelSel" class="inst-model" onchange="onInstanceModelChange()" title="使用你设置里已保存的模型配置">
+                                <option value="__ph">模型加载中…</option>
+                            </select>
+                            <button id="instanceVoiceBtn" class="inst-tts" onclick="toggleAutoVoice()" title="自动朗读">🔇</button>
+                        </div>
+                        <input id="instanceMsgInput" placeholder="说点什么…" autocomplete="off"
+                               onkeydown="if(event.key==='Enter') sendInstanceMsg()">
+                        <button id="instanceSendBtn" onclick="sendInstanceMsg()">发送</button>
+                    </div>
                 </div>
-            </div>
-
-            ${(inst.background || inst.premise) ? `
-                <div style="flex-shrink:0; background:rgba(255,255,255,0.85); border-radius:8px; padding:10px 14px; margin-bottom:8px; font-size:13px; color:#555; line-height:1.6; max-height:22vh; overflow-y:auto;">
-                    ${inst.background ? `<div style="margin-bottom:6px;"><b>🌍 副本背景</b><br>${esc(inst.background)}</div>` : ''}
-                    ${inst.premise ? `<div><b>📖 前情提要</b><br>${esc(inst.premise)}</div>` : ''}
-                </div>
-            ` : ''}
-
-            ${chapters.length ? `
-                <div style="flex-shrink:0; margin-bottom:8px;">
-                    ${chapters.map(c => `
-                        <details style="background:rgba(255,255,255,0.75); border-radius:8px; padding:6px 12px; margin-bottom:4px; font-size:13px;">
-                            <summary style="cursor:pointer; font-weight:600; color:#555;">📚 ${esc(c.title || ('第' + (c.chapter || '?') + '章'))}（第${c.round_start}-${c.round_end}轮）</summary>
-                            <div style="margin-top:6px; color:#666; line-height:1.6; white-space:pre-wrap;">${esc(c.summary || '')}</div>
-                        </details>
-                    `).join('')}
-                </div>
-            ` : ''}
-
-            <div id="instanceMsgArea" style="flex:1; min-height:0; overflow-y:auto; padding:10px; background:#f5f2ef; border-radius:8px; background-size:cover; background-position:center;">
-                <div style="color:#aaa; text-align:center; padding:40px;">✨ 空荡荡的，开始你的冒险吧...</div>
-            </div>
-
-            <div style="display:flex; gap:8px; margin-top:8px; flex-shrink:0;">
-                <input id="instanceChatInput" style="flex:1; border:1px solid #ddd; border-radius:8px; padding:8px 12px; background:#fff; color:#333; outline:none;" placeholder="说点什么…" onkeydown="if(event.key==='Enter') sendInstanceMsg()">
-                <button class="btn" onclick="sendInstanceMsg()" style="background:#3498db; color:#fff; border:none; padding:8px 16px; border-radius:8px; cursor:pointer;">发送</button>
             </div>
         `;
         renderChatMessages();
+        renderModelTools();
+        updateVoiceToggleUI();
     }
 
     // ---------- 聊天相关辅助函数 ----------
     window.backToLibraryFromChat = function() {
+        const iid = currentInstanceId;
+        currentInstanceId = null;
         if (isReadOnly) {
             const publicList = publicInstancesMap[selectedAi] || [];
             renderPublicLibrary(publicList, selectedOwner);
-        } else {
+        } else if (selectedAi) {
             loadInstanceLibrary(selectedAi);
+        } else {
+            renderAiSelection();
         }
-        currentInstanceId = null;
+        // 只清除 UI 状态，不发送 pause：用户可能只是返回看看副本库
+        if (iid) console.log('[instance] 返回副本库（副本仍为 active）:', iid);
     };
     window.setChatBg = function() {
         const url = prompt('输入背景图片URL：');
-        if (url) document.getElementById('instanceMsgArea').style.backgroundImage = 'url(' + url + ')';
+        const area = document.getElementById('instanceMsgArea');
+        if (url && area) area.style.backgroundImage = 'url(' + url + ')';
     };
-    window.sendInstanceMsg = function() {
-        const input = document.getElementById('instanceChatInput');
-        const content = input.value.trim();
-        if (!content || !currentInstanceId) return;
-        input.value = '';
 
-        // 1. 立即本地显示用户消息
-        const inst = instances[currentInstanceId];
-        if (inst) {
-            inst.chat_history = inst.chat_history || [];
-            inst.chat_history.push({
-                sender: currentUser, content: content, time: new Date().toLocaleString(), role: 'user'
-            });
-            renderChatMessages();
-        }
-
-        // 2. 显示"AI 思考中"
-        showAiThinking(true);
-
-        // 3. 发送请求
-        api('/api/instance/' + currentInstanceId + '/message', {
+    // ---------- 暂离并退出聊天页（顶栏「⏸ 暂离」） ----------
+    window.pauseAndLeaveInstance = function() {
+        const id = currentInstanceId;
+        if (!id) { toast('⚠️ 缺少副本ID'); return; }
+        toast('⏸ 正在暂离副本…');
+        api('/api/instance/' + id + '/pause', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user: currentUser, content: content })
+            body: JSON.stringify({ user: currentUser })
         }).then(() => {
-            // 4. 短轮询等 AI 回复（最多 10 次，间隔递增）
-            let tries = 0;
-            const tick = () => {
-                tries++;
-                if (tries > 10) {
-                    showAiThinking(false);
-                    toast('⚠️ AI 回复超时，请手动刷新');
-                    return;
-                }
-                refreshInstanceChat().then(hasNewAi => {
-                    if (hasNewAi) {
-                        showAiThinking(false);
-                    } else {
-                        setTimeout(tick, Math.min(2000, 500 + tries * 200));
-                    }
-                });
-            };
-            setTimeout(tick, 500);
+            toast('✅ 已暂离副本，AI 回到现实世界住宅');
+            // 关键修复：必须清空 currentInstanceId，否则会残留 active 状态
+            currentInstanceId = null;
+            if (isReadOnly) {
+                const publicList = publicInstancesMap[selectedAi] || [];
+                renderPublicLibrary(publicList, selectedOwner);
+            } else if (selectedAi) {
+                loadInstanceLibrary(selectedAi);
+            } else {
+                renderAiSelection();
+            }
         }).catch(e => {
-            showAiThinking(false);
-            toast('❌ 发送失败：' + e.message);
+            toast('❌ 暂离失败：' + e.message);
             console.error(e);
         });
     };
 
-    function refreshInstanceChat() {
+    window.sendInstanceMsg = function() {
+        const input = document.getElementById('instanceMsgInput');
+        const btn = document.getElementById('instanceSendBtn');
+        if (!input || !currentInstanceId) return;
+        const content = input.value.trim();
+        if (!content) return;
+        input.value = '';
+        if (btn) btn.disabled = true;
+
+        const iid = currentInstanceId;
+        const inst = instances[iid];
+        const prevHist = inst ? (inst.chat_history || []).slice() : [];
+        const errBar = document.getElementById('instanceErrorBar');
+        if (errBar) errBar.remove();
+
+        // 1. 乐观显示用户消息（失败时回滚）
+        if (inst) {
+            inst.chat_history = prevHist.concat([{
+                sender: currentUser, content: content, time: new Date().toLocaleString(), role: 'user'
+            }]);
+            renderChatMessages();
+        }
+        showAiThinking(true);
+
+        // 2. 发送请求（带上模型覆盖；后端未支持时该字段被忽略）
+        const body = { user: currentUser, content: content };
+        if (currentInstanceModel) body.model_override = currentInstanceModel;
+
+        api('/api/instance/' + iid + '/message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        }).then(() => {
+            // 3. 轮询等待 AI 回复：以「收到新的 assistant 消息」为准，不依赖固定条数
+            const before = countAssistantMsgs(prevHist);
+            let tries = 0;
+            const MAX_TRIES = 15;   // 约 22 秒
+            const finish = () => { showAiThinking(false); if (btn) btn.disabled = false; };
+
+            const tick = () => {
+                tries++;
+                refreshInstanceChat(before).then(done => {
+                    if (done) { finish(); maybeAutoSpeak((instances[iid] || {}).chat_history); return; }
+                    if (tries >= MAX_TRIES) {
+                        finish();
+                        showInstanceError('AI 没有回复。你的消息已保存。请检查「设置 → AI 集成总开关」是否开启、以及「模型与服务」里的 API Key / 模型是否可用。');
+                        const area = document.getElementById('instanceMsgArea');
+                        if (area) {
+                            const wrap = document.createElement('div');
+                            wrap.style.cssText = 'text-align:center;margin-bottom:10px;';
+                            const b = document.createElement('button');
+                            b.className = 'inst-hbtn';
+                            b.textContent = '🔄 刷新（只看 AI 是否稍后回复）';
+                            // 只重新拉取，绝不重发消息：重发会在 chat_history 里重复用户消息，
+                            // 污染 round_count 与每 30 轮的章节切片。
+                            b.onclick = function() {
+                                b.disabled = true;
+                                b.textContent = '🔄 检查中…';
+                                refreshInstanceChat(before).then(done => {
+                                    if (done) { maybeAutoSpeak((instances[iid] || {}).chat_history); return; }
+                                    // 未回复 → 重新渲染会清空本按钮，再给一条明确提示
+                                    showInstanceError('AI 仍未回复。多半是「AI 集成总开关」未开启，或 API Key / 模型不可用。');
+                                });
+                            };
+                            wrap.appendChild(b);
+                            area.appendChild(wrap);
+                            instScrollToBottom();
+                        }
+                        return;
+                    }
+                    setTimeout(tick, Math.min(2000, 600 + tries * 200));
+                });
+            };
+            setTimeout(tick, 700);
+        }).catch(e => {
+            showAiThinking(false);
+            if (btn) btn.disabled = false;
+            // POST 失败 → 回滚乐观消息，不留假消息
+            if (inst) { inst.chat_history = prevHist; renderChatMessages(); }
+            showInstanceError('发送失败：' + e.message + '（消息未保存，请重试）');
+            console.error(e);
+        });
+    };
+
+    // 拉取最新副本数据并重绘；返回「是否已经出现新的 AI 回复」
+    function refreshInstanceChat(beforeAssistantCount) {
         if (!currentInstanceId) return Promise.resolve(false);
+        const iid = currentInstanceId;
         return api('/api/instances?user=' + encodeURIComponent(currentUser))
             .then(d => {
-                const inst = d.instances[currentInstanceId];
+                const inst = (d.instances || {})[iid];
                 if (!inst) return false;
-                const oldAi = (instances[currentInstanceId] && instances[currentInstanceId].chat_history || [])
-                    .filter(x => x.role === 'assistant').length;
-                const newAi = (inst.chat_history || []).filter(x => x.role === 'assistant').length;
-                instances[currentInstanceId] = inst;
+                const oldCount = (typeof beforeAssistantCount === 'number')
+                    ? beforeAssistantCount
+                    : countAssistantMsgs((instances[iid] || {}).chat_history);
+                instances[iid] = inst;
                 renderChatMessages();
-                return newAi > oldAi;
+                // 只要最后一条不是用户自己发的，就认为 AI 已回
+                const hist = inst.chat_history || [];
+                const last = hist[hist.length - 1];
+                const replied = countAssistantMsgs(hist) > oldCount
+                    || (!!last && last.sender !== currentUser && last.role !== 'user');
+                return replied;
             }).catch(() => false);
     }
     window.endInstance = function(id) {
@@ -1103,7 +1538,7 @@
     function init() {
         modifyMapBar();
         createOverlay();
-        console.log('[ext] 副本插件 v9 加载完成（修复进入/暂离逻辑）');
+        console.log('[ext] 副本插件 v10 加载完成（住宅聊天风格 UI / 前情进消息区 / 暂离 / 模型+语音接口）');
     }
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
