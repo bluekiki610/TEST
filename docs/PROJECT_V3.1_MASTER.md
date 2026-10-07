@@ -94,15 +94,44 @@
   - 新增 `docs/test_c3_boundary.py`（E1 ～ E11）
   - 6 组测试全部通过
 - ✅ V3.1 Phase C-4 PROJECT Update 已完成。
-- 🔍 **V3.1 Phase D-0（World / Activity / Capability Preflight）已启动 — 当前处于 Conflict Audit 阶段。**
-  - D-0 Preflight 设计文件已就位：`docs/D0_WORLD_ACTIVITY_CAPABILITY_PREFLIGHT.md`
-  - D-0 Conflict Audit 已产出：**`docs/D0_CONFLICT_AUDIT.md`**
-  - 审计结论：**45 项发现**（36 项判定为冲突，6 项待架构侧裁决，2 项正面确认）+ **5 项 D-0 OPEN QUESTION**
-  - 本阶段**未修改任何生产代码**（唯一产物为审计文档）
-  - **D-0 当前不得 Seal**：阻塞项为 OPEN-2 / OPEN-3 / OPEN-4 及执行环境限制
-  - **D-0 未进入 D-1**，等待架构确认
-  - 环境限制（已如实记录于审计 §1）：本工作区**不是 Git 仓库**（无 `.git`），**无 `data/` 运行时数据**，且**Shell 完全不可用**（`pwsh` / `cmd` 均失败）
-  - 因此本阶段**无法提供 Git commit SHA**，**无法运行回归测试**
+- ✅ **V3.1 Phase D-0（World / Activity / Capability Preflight）**
+
+  | 子阶段 | 状态 |
+  |--------|------|
+  | D-0 Preflight（设计冻结准备） | ✅ 已完成（`docs/D0_WORLD_ACTIVITY_CAPABILITY_PREFLIGHT.md`） |
+  | D-0 Conflict Audit | ✅ **ACCEPTED**（`docs/D0_CONFLICT_AUDIT.md`：45 项发现 / 36 YES / 6 UNCERTAIN / 3 NO / 5 OPEN QUESTION） |
+  | D-0 Architecture Decisions | ✅ **COMPLETED**（`docs/D0_ARCHITECTURE_DECISIONS.md`：D0-DEC-1 ～ D0-DEC-8，**关闭全部 5 个 OPEN QUESTION，无新增**） |
+  | D-0 Contract Change | ✅ **COMPLETED**（CC-20260930-04，`docs/V3.1_ARCHITECTURE_CONTRACT.md` 新增 §5C，不重写 A/B/C） |
+  | D-0 Architecture Tests | ⚠️ **CREATED / NOT RUN**（`docs/test_d0_world_activity_capability.py`） |
+  | **D-0 Seal** | ⏸ **待架构审核批准** |
+  | D-1 World Query | ⛔ **未开始（D-0 Seal 前禁止开始）** |
+
+  **D-0 裁决要点（详见 `docs/D0_ARCHITECTURE_DECISIONS.md` 与 Contract §5C）：**
+
+  - `main.data` 仍是唯一 World **存储位置**；但明确「唯一存储位置 ≠ 事实治理」（D0G-2）
+  - Activity = 未来唯一正式「持续世界过程」抽象；现有 18 类旧活动字段正式定义为 **Legacy Activity State / Legacy Projection**（只登记，不修改）
+  - **只有 `agent.Event` 是正式 Domain Event**；`enqueue_event` = Legacy Memory ingestion；SSE = Presentation / Transport Notification
+  - **不删除 `execute_action`**；但**禁止 Agent Core 继续新增对它的直接依赖**；它暂时作为 **Legacy Execution Adapter** 存活
+  - Memory Runtime = **业务功能关闭状态**（非「模块不存在」），不进入 D 阶段任何依赖
+  - World Tick 可靠性缺陷（`D0-030` / `D0-031`）登记为 **D-3 前置 Blocker**，D-0 不修
+  - 45 项发现按 **A/B/C/D/E 类**分层，**禁止一次性全部修复**
+  - 事实基线 = **当前代码 + `D0_CONFLICT_AUDIT.md`**；`V3.1_GLOBAL_ARCHITECTURE_INVENTORY.md` 不再作为当前事实依据
+  - A/B/C 已冻结 Contract **不需要重写**
+
+  **D-0 测试结果（必须如实记录）：**
+
+  ```text
+  TEST NOT RUN
+  Reason: environment execution unavailable
+          pwsh / cmd 均以 exit code 3221225794 (0xC0000142, STATUS_DLL_INIT_FAILED) 失败
+          工作区不是 Git 仓库（无 .git），也不是可运行实例（无 data/）
+  测试文件：docs/test_d0_world_activity_capability.py（已创建，未执行）
+  ```
+
+  **D-0 阶段生产代码修改：0。**
+  **D-0 涉及文件：** `docs/D0_CONFLICT_AUDIT.md`（新增）、`docs/D0_ARCHITECTURE_DECISIONS.md`（新增）、`docs/V3.1_ARCHITECTURE_CONTRACT.md`（§5C 增补）、`docs/test_d0_world_activity_capability.py`（新增）、`PROJECT_V3.1_MASTER.md`（本文件）。
+
+  **下一步：** 等待架构侧审核 D-0 Seal。**D-0 Seal 前不得进入 D-1。**
 
 现在不要直接继续堆 autonomous behavior；
 先完成 Context Foundation，再进入 Agent Decision / Motivation 层。
@@ -1106,7 +1135,7 @@ PROJECT 是“架构地图”，不是代码实现说明书。
 - Phase A（Global Architecture Inventory）：✅ 已完成
 - Phase B（V3.1 Context Foundation）：✅ 已完成（含 B5-4 归档）
 - Phase C（Motivation / Goal / Commitment / Intent）：✅ 已完成（含 C-4 归档）
-- Phase D（World Query / Activity Lifecycle）：⏳ 未开始
+- Phase D（World Query / Activity / Capability）：🔵 **进行中 — D-0 已完成，等待 D-0 Seal**
 - Phase E（Memory Recall）：⏳ 未开始
 - Phase F（Brain / Decision）：⏳ 未开始
 
@@ -1270,14 +1299,35 @@ THINK（仍为 Stub）
 
 ---
 
-### 20.5 Phase D — World Query / Activity Lifecycle（未开始）
+### 20.5 Phase D — World Query / Activity / Capability（进行中 · D-0 已完成）
 
-让 AI 能查询真实世界并保持活动连续性。
+让 AI 能查询真实世界、保持活动连续性，并建立 Capability 边界。
 
 - 依赖 Phase C 完成的 Goal / Motivation / Commitment。
 - 不引入新数据源；基于现有 `main.data` 结构。
 - 必须先完成 Preflight。
-- 当前状态：⏳ 未开始（依赖 Phase C 完成）。
+- 当前状态：🔵 **D-0 已完成（Preflight / Audit / Decisions / Contract Change / Tests），等待 D-0 Seal。**
+
+**Phase D 子阶段状态：**
+
+| 阶段 | 内容 | 状态 |
+|------|------|------|
+| D-0 | World / Activity / Capability Preflight | ✅ 已完成 |
+| D-0 | Conflict Audit（45 项发现） | ✅ ACCEPTED |
+| D-0 | Architecture Decisions（D0-DEC-1 ～ 8） | ✅ COMPLETED |
+| D-0 | Contract Change（CC-20260930-04，§5C） | ✅ COMPLETED |
+| D-0 | Architecture Tests | ⚠️ 已创建，**未运行**（环境不可用） |
+| D-0 | **Seal** | ⏸ **待架构审核** |
+| D-1 | World Query | ⛔ 未开始（D-0 Seal 前禁止开始） |
+| D-2 | Activity Contract | ⛔ 未开始 |
+| D-3 | Location / Movement Continuity | ⛔ 未开始（前置 Blocker：World Tick 可靠性，见 Contract §5C.6） |
+| D-4 | Capability / Action Port | ⛔ 未开始 |
+| D-5 | Agent Decision → Capability | ⛔ 未开始 |
+| D-6 | Legacy Behavior Migration | ⛔ 未开始 |
+
+**Phase D 正式 Contract 依据：** `docs/V3.1_ARCHITECTURE_CONTRACT.md` **§5C**（CC-20260930-04）。
+
+**D-0 阶段生产代码修改：0。** D-0 只产出文档与边界测试，不实现任何功能。
 
 ---
 
