@@ -77,6 +77,7 @@ import copy
 import time
 import uuid
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 # =========================================================
@@ -183,6 +184,100 @@ BINDING_SECONDARY = "secondary"
 BINDING_KINDS: Tuple[str, ...] = (BINDING_PRIMARY, BINDING_SECONDARY)
 
 # =========================================================
+# 3.5 隔离原语（Immutable Boundary）
+# =========================================================
+#
+# 为什么需要（D-2 Implementation Verification，架构侧裁决 A）：
+#
+#     `@dataclass(frozen=True)` **只冻结属性重绑定**，
+#     **不冻结容器内容**。真实运行已证实三层穿透：
+#
+#         registry.get(id).metadata["k"] = v          → 穿透
+#         registry.get(id).role_map["x"] = "y"        → 穿透
+#         registry.get(id).metadata["n"][...].append() → 穿透
+#
+# 因此必须在**两个方向**建立隔离：
+#
+#     输入侧：调用方传入的 metadata / role_map **不得**保留外部别名
+#             （否则调用方事后再改，会改到 Activity 内部真相）
+#     输出侧：任何返回 Activity 的路径都必须给出**不可穿透**的副本
+#             （get / require / list_* / primary_activity / bound_activities /
+#               transition 的 TransitionResult）
+#
+# 实现策略（架构侧允许）：
+#     输入 → `_deep_freeze()`：嵌套 dict → MappingProxyType，list → tuple
+#     输出 → `_deep_thaw()`  ：返回可变副本，与内部真相**完全脱钩**
+#
+# ⚠️ 本组原语**不改变**生命周期语义 / ownership / SOT 语义，
+#     也不引入 persistence / Event / scheduler。
+
+
+def _deep_freeze(value: Any) -> Any:
+    """
+    递归把可变容器冻结为**不可变**形式（输入侧隔离）。
+
+        dict  → MappingProxyType（只读视图，写操作抛 TypeError）
+        list  → tuple
+        tuple → tuple（元素递归冻结）
+
+    这保证：调用方传入的嵌套结构**不会**保留可变别名。
+    """
+    if isinstance(value, MappingProxyType) or isinstance(value, tuple):
+        return tuple(_deep_freeze(item) for item in value)
+    if isinstance(value, dict):
+        return MappingProxyType({k: _deep_freeze(v) for k, v in value.items()})
+    if isinstance(value, list):
+        return tuple(_deep_freeze(item) for item in value)
+    return value
+
+
+def _deep_thaw(value: Any) -> Any:
+    """
+    递归把冻结值还原为**可变深拷贝**（输出侧隔离）。
+
+        MappingProxyType → dict（新对象）
+        tuple            → list（新对象）
+
+    返回对象与内部真相**不存在任何共享引用**，
+    因此调用方无论怎样修改，都**不会**影响 Registry 内部 Activity。
+    """
+    if isinstance(value, MappingProxyType) or isinstance(value, dict):
+        return {k: _deep_thaw(v) for k, v in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_deep_thaw(item) for item in value]
+    return copy.deepcopy(value)
+
+
+def _copy_for_read(activity: "Activity") -> "Activity":
+    """
+    输出侧隔离：返回 Activity 的**防穿透副本**。
+
+    所有返回 Activity 的公开路径都必须经过本函数
+    （`create_activity` / `get` / `require` / `list_*` /
+      `primary_activity` / `bound_activities` / `transition`）。
+
+    ## 语义（冻结）
+
+        * **内部真相**（Registry 中保存的对象）= **永远冻结**
+          （`role_map` / `metadata` 为 `MappingProxyType`，嵌套 tuple）
+        * **对外返回** = **可变快照**
+          （`role_map` / `metadata` 为**新构造**的 dict，嵌套 list）
+
+    因为内部真相是冻结的、且对外快照是新构造的，
+    调用方无论如何修改返回值，都**不会**触及 Registry 内部真相。
+
+    ⚠️ 注意：返回的对象**仍是 frozen dataclass** ——
+       属性重绑定依然被拒绝（`EF-*` 语义不变）；
+       但容器内容可安全修改（因为那是副本）。
+    """
+    return replace(
+        activity,
+        role_map=_deep_thaw(activity.role_map),
+        metadata=_deep_thaw(activity.metadata),
+    )
+
+
+# =========================================================
 # 4. Activity Domain Object（Contract §5E.3 / §5E.18）
 # =========================================================
 
@@ -197,6 +292,19 @@ class Activity:
         `EC-1` / `EC-4`：Activity 是 Domain Object，且同一 `activity_id`
         在 Runtime 中只有一个对象真相。frozen 保证其他 Holder
         **无法就地篡改** Activity，只能通过 Registry 的显式转换产生新对象。
+
+    ## 不可变边界（Immutable Boundary —— 架构侧裁决 A）
+
+        `frozen=True` **只冻结属性重绑定**，**不冻结容器内容**。
+        因此额外增加两层隔离（见 `__post_init__` 与 `_copy_for_read`）：
+
+            输入侧：`role_map` / `metadata` 在**构造期**递归冻结
+                    → 调用方事后修改自己传入的 dict **不会**影响本对象
+
+            输出侧：Registry 的一切读取路径返回**防穿透快照**
+                    → 修改返回值的内容**不会**影响 Registry 内部真相
+
+        **内部真相永远冻结；对外返回永远是独立快照。**
 
     ## 字段（语义见 Contract §5E.18 / ER-1 / ER-2）
 
@@ -243,6 +351,28 @@ class Activity:
     #: 终止原因（`EF-5`：CANCELLED 必须有原因）
     end_reason: str = ""
 
+    def __post_init__(self) -> None:
+        """
+        构造期**输入侧隔离**（架构侧裁决 A）。
+
+        把传入的 `role_map` / `metadata` 递归冻结为不可变形式，
+        因此：
+
+            调用方 = {}
+            registry.create_activity(..., metadata=caller)
+
+            调用方["k"] = "later"        # 事后修改自己的 dict
+                ↓
+            **不会**影响 Activity —— 因为内部保存的是冻结副本，无别名
+
+        同时保证：即使有人绕过 Registry 直接构造 Activity，
+        其容器也不可被穿透修改。
+        """
+        if not isinstance(self.role_map, MappingProxyType):
+            object.__setattr__(self, "role_map", _deep_freeze(dict(self.role_map)))
+        if not isinstance(self.metadata, MappingProxyType):
+            object.__setattr__(self, "metadata", _deep_freeze(dict(self.metadata)))
+
     # --- 只读便捷判定 ---------------------------------------
 
     def is_terminal(self) -> bool:
@@ -282,16 +412,18 @@ class Activity:
 
     def to_dict(self) -> Dict[str, Any]:
         """
-        只读序列化（返回新 dict；嵌套结构为副本）。
+        只读序列化（返回**新** dict；嵌套结构为可变副本）。
 
         ⚠️ 本方法**不**使 Activity 可持久化 —— 仅用于调试 / 呈现。
+        ⚠️ 返回的 `role_map` / `metadata` 是**新构造**的可变副本，
+           与内部冻结真相无共享引用（输出侧隔离）。
         """
         return {
             "activity_id": self.activity_id,
             "type": self.type,
             "actor_ids": list(self.actor_ids),
             "participant_ids": list(self.participant_ids),
-            "role_map": copy.deepcopy(dict(self.role_map)),
+            "role_map": _deep_thaw(self.role_map),
             "location_id": self.location_id,
             "status": self.status,
             "started_at": self.started_at,
@@ -301,7 +433,7 @@ class Activity:
             "commitment_ids": list(self.commitment_ids),
             "current_step": self.current_step,
             "origin": self.origin,
-            "metadata": copy.deepcopy(dict(self.metadata)),
+            "metadata": _deep_thaw(self.metadata),
             "end_reason": self.end_reason,
         }
 
@@ -439,26 +571,36 @@ class ActivityRegistry:
             commitment_ids=self._normalize_ids(commitment_ids, "commitment_ids"),
             current_step=current_step,
             origin=origin,
-            metadata=copy.deepcopy(dict(metadata or {})),
+            # 输入侧隔离由 Activity.__post_init__ 统一完成（递归冻结）
+            metadata=dict(metadata or {}),
             end_reason="",
         )
         self._store(activity)
-        return activity
+        # 输出侧隔离：返回可变快照（内部真相保持冻结）
+        return _copy_for_read(activity)
 
     # ------------------------------------------------------------------
     # 6.2 读取
     # ------------------------------------------------------------------
 
     def get(self, activity_id: str) -> Optional[Activity]:
-        """按 id 取 Activity（不存在返回 None）。"""
-        return self._activities.get(activity_id)
+        """
+        按 id 取 Activity（不存在返回 None）。
+
+        ⚠️ 返回**防穿透副本**（输出侧隔离）：
+           修改返回值的 `metadata` / `role_map` **不会**影响 Registry 内部真相。
+        """
+        activity = self._activities.get(activity_id)
+        if activity is None:
+            return None
+        return _copy_for_read(activity)
 
     def require(self, activity_id: str) -> Activity:
-        """按 id 取 Activity；不存在则抛错（供显式调用方使用）。"""
+        """按 id 取 Activity；不存在则抛错（返回防穿透副本）。"""
         activity = self._activities.get(activity_id)
         if activity is None:
             raise ActivityRegistryError(f"activity_id 不存在：{activity_id}")
-        return activity
+        return _copy_for_read(activity)
 
     def exists(self, activity_id: str) -> bool:
         return activity_id in self._activities
@@ -467,8 +609,15 @@ class ActivityRegistry:
         return len(self._activities)
 
     def list_all(self) -> List[Activity]:
-        """列出全部 Activity（新列表；不暴露内部容器）。"""
-        return [self._activities[k] for k in sorted(self._activities.keys())]
+        """
+        列出全部 Activity（新列表 + 每项防穿透副本）。
+
+        ⚠️ 返回值既不是内部容器，也不与内部真相共享嵌套结构。
+        """
+        return [
+            _copy_for_read(self._activities[k])
+            for k in sorted(self._activities.keys())
+        ]
 
     def list_by_status(self, status: str) -> List[Activity]:
         return [a for a in self.list_all() if a.status == status]
@@ -568,7 +717,8 @@ class ActivityRegistry:
 
         updated = replace(current, **updates)
         self._store(updated)
-        return TransitionResult(True, updated, "")
+        # 输出侧隔离：TransitionResult 也返回防穿透副本
+        return TransitionResult(True, _copy_for_read(updated), "")
 
     # --- 语义化便捷方法（全部走 transition，不绕过规则） ---------------
 
@@ -666,9 +816,12 @@ class ActivityRegistry:
         return ""
 
     def primary_activity(self, entity: str) -> Optional[Activity]:
-        """该实体的 primary Activity；无则 None。"""
+        """该实体的 primary Activity；无则 None（返回防穿透副本）。"""
         aid = self.primary_activity_id(entity)
-        return self._activities.get(aid) if aid else None
+        activity = self._activities.get(aid) if aid else None
+        if activity is None:
+            return None
+        return _copy_for_read(activity)
 
     def secondary_activity_ids(self, entity: str) -> List[str]:
         """该实体的全部 secondary Activity id（排序后返回）。"""
@@ -684,7 +837,8 @@ class ActivityRegistry:
         for aid in primaries + secondaries:
             activity = self._activities.get(aid)
             if activity is not None:
-                out.append(activity)
+                # 输出侧隔离：每项都是防穿透副本
+                out.append(_copy_for_read(activity))
         return out
 
     # ------------------------------------------------------------------
