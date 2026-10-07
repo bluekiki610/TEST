@@ -94,6 +94,15 @@
   - 新增 `docs/test_c3_boundary.py`（E1 ～ E11）
   - 6 组测试全部通过
 - ✅ V3.1 Phase C-4 PROJECT Update 已完成。
+- 🔍 **V3.1 Phase D-0（World / Activity / Capability Preflight）已启动 — 当前处于 Conflict Audit 阶段。**
+  - D-0 Preflight 设计文件已就位：`docs/D0_WORLD_ACTIVITY_CAPABILITY_PREFLIGHT.md`
+  - D-0 Conflict Audit 已产出：**`docs/D0_CONFLICT_AUDIT.md`**
+  - 审计结论：**45 项发现**（36 项判定为冲突，6 项待架构侧裁决，2 项正面确认）+ **5 项 D-0 OPEN QUESTION**
+  - 本阶段**未修改任何生产代码**（唯一产物为审计文档）
+  - **D-0 当前不得 Seal**：阻塞项为 OPEN-2 / OPEN-3 / OPEN-4 及执行环境限制
+  - **D-0 未进入 D-1**，等待架构确认
+  - 环境限制（已如实记录于审计 §1）：本工作区**不是 Git 仓库**（无 `.git`），**无 `data/` 运行时数据**，且**Shell 完全不可用**（`pwsh` / `cmd` 均失败）
+  - 因此本阶段**无法提供 Git commit SHA**，**无法运行回归测试**
 
 现在不要直接继续堆 autonomous behavior；
 先完成 Context Foundation，再进入 Agent Decision / Motivation 层。
