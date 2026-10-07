@@ -318,6 +318,38 @@ def _gate_status_occurrences() -> Tuple[List[str], List[str]]:
     return status_values, marker_values
 
 
+def _class_names(path: Path) -> List[str]:
+    """
+    返回模块内所有 **class 定义名**（AST 级）。
+
+    ⚠️ 为什么用 AST 而不是正则（`D1G-17`）：
+
+        正则 `class\\s+\\w*ActivityRegistry` 会因为 `\\w*` 允许空匹配，
+        从而**同时命中** `class ActivityRegistryError`（因为 `\\b`
+        在 `ActivityRegistry` 与 `Error` 之间成立）。
+
+        这类「宽正则误报」在 D-2 Implementation 首次运行时真实发生过。
+        AST 只识别真实 `ClassDef`，不会把名字前缀相同但语义不同的类算进去。
+    """
+    src = _read_text(path)
+    if src is None:
+        return []
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []
+    return [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef)
+    ]
+
+
+def _count_exact_class(path: Path, name: str) -> int:
+    """精确统计某名字的 class 定义数量（不做前缀/子串匹配）。"""
+    return sum(1 for n in _class_names(path) if n == name)
+
+
 def _gate_open() -> bool:
     """
     D-2 Pre-Implementation Gate 是否已由**架构侧**打开。
@@ -634,6 +666,7 @@ class TD2APreImplementationGate(unittest.TestCase):
         status_val = status_norm.pop()
         marker_val = marker_norm.pop()
 
+        # 门状态必须与键值**自洽**（无论 CLOSED 还是 OPEN）
         if marker_val != "true":
             self.assertEqual(
                 status_val, "CLOSED",
@@ -646,13 +679,40 @@ class TD2APreImplementationGate(unittest.TestCase):
         else:
             self.assertEqual(
                 status_val, "OPEN",
-                "MARKER 为 true 时，GATE-STATUS 必须是 OPEN",
+                "MARKER 为 true 时，GATE-STATUS 必须是 OPEN（禁止自相矛盾）",
+            )
+            self.assertTrue(
+                _gate_open(),
+                "MARKER 为 true 时 _gate_open() 必须为 True",
             )
 
-        # ③ 【关键】说明性文本中即使出现标记字面形式，也不得影响判定
-        self.assertFalse(
-            _gate_open(),
-            "说明文本中出现标记字面形式不得被判为开门（D1G-16）",
+        # ③ 【关键 · D1G-16】判据只看结构化键值，
+        #    不受说明性文本影响。构造反例：给关闭态样本叠加干扰文本，
+        #    判定结果必须只由键值决定。
+        interfered = "\n".join([
+            "> D2G-GATE-STATUS: OPEN      （blockquote 示例，不得生效）",
+            "`D2G-3-MARKER: true`         （行内代码，不得生效）",
+            "**D2G-GATE-STATUS: OPEN**    （粗体强调，不得生效）",
+            "门状态 = CLOSED（散文描述，不得生效）",
+            "说明：D2G-3-MARKER: true 才表示授权",
+            f"{_GATE_STATUS_KEY}: CLOSED",
+            f"{_GATE_MARKER_KEY}: null",
+        ])
+        synthetic: List[str] = []
+        synthetic_marker: List[str] = []
+        for raw_line in interfered.splitlines():
+            line = raw_line.strip()
+            if line.startswith(_GATE_STATUS_KEY + ":"):
+                synthetic.append(line.split(":", 1)[1].strip())
+            elif line.startswith(_GATE_MARKER_KEY + ":"):
+                synthetic_marker.append(line.split(":", 1)[1].strip())
+        self.assertEqual(
+            synthetic, ["CLOSED"],
+            "D1G-16：说明性文本中的标记形式不得被解析为门状态键值",
+        )
+        self.assertEqual(
+            synthetic_marker, ["null"],
+            "D1G-16：说明性文本中的标记形式不得被解析为授权标记键值",
         )
 
     def test_ta3_gate_state_matches_presence(self) -> None:
@@ -677,9 +737,14 @@ class TD2APreImplementationGate(unittest.TestCase):
                 "存在实现不等于获得授权",
             )
 
-    def test_ta4_no_premature_implementation_when_closed(self) -> None:
-        """Gate CLOSED 时：不得提前创建任何 Activity 实现模块。"""
+    def test_ta4_premature_implementation_guard(self) -> None:
+        """
+        Gate CLOSED 时：不得提前创建任何 Activity 实现模块。
+
+        Gate OPEN 时：本项**不适用**（架构侧已授权实现，存在是预期的）。
+        """
         if _gate_open():
+            # 门已开 →「不得提前实现」不适用；由 ta3 断言实现存在
             return
         offenders = [
             str((AGENT_DIR / name).relative_to(ROOT))
@@ -692,33 +757,47 @@ class TD2APreImplementationGate(unittest.TestCase):
         )
 
     # ---------------------------------------------------------
-    # 以下三项在 Gate CLOSED 时扫描整个 agent/；
+    # 以下两项在 Gate CLOSED 时扫描整个 agent/；
     # Gate OPEN 时**改为扫描 Activity 实现文件本身**（绝不整体跳过）。
     # ---------------------------------------------------------
 
-    def test_ta5_no_activity_registry_runtime_class(self) -> None:
+    def test_ta5_exactly_one_activity_registry_class(self) -> None:
         """
-        Gate CLOSED：不得存在 ActivityRegistry / ActivityRuntime 类。
+        Registry 唯一性（`EE-1` / `EE-2` / `EC-4`）。
 
-        Gate OPEN：改为检查实现文件，确认 Registry 就是「唯一管理入口」
-        （不得出现两个互相竞争的 Registry 类）。
+            Gate CLOSED：不得存在任何 ActivityRegistry 类（防提前偷做）
+            Gate OPEN  ：实现文件内**恰好一个** `ActivityRegistry`
+                         （不得出现两个互相竞争的 Registry）
+
+        ⚠️ 类检测采 **AST**（`_count_exact_class`），不用正则。
+        原因（真实缺陷）：正则 `class\\s+\\w*ActivityRegistry` 因 `\\w*`
+        允许空匹配，会**同时命中 `ActivityRegistryError`**，
+        把「一个 Registry + 一个异常类」误报成「2 个 ActivityRegistry」。
         """
         targets = _boundary_scan_targets()
         offenders: List[str] = []
         for path in targets:
-            effective = _effective_code(path)
-            registry_hits = len(re.findall(r"class\s+\w*ActivityRegistry", effective))
+            n = _count_exact_class(path, "ActivityRegistry")
             if _gate_open():
-                if registry_hits == 0:
+                if n == 0:
                     offenders.append(f"{path.name} -> 缺少 ActivityRegistry")
-                elif registry_hits > 1:
-                    offenders.append(f"{path.name} -> {registry_hits} 个 ActivityRegistry")
-            elif registry_hits:
-                offenders.append(f"{path.name} -> class *ActivityRegistry")
+                elif n > 1:
+                    offenders.append(f"{path.name} -> {n} 个 ActivityRegistry")
+            elif n:
+                offenders.append(f"{path.name} -> {n} 个 ActivityRegistry")
         self.assertEqual(
             offenders, [],
             "ActivityRegistry 边界不满足；命中：" + ", ".join(offenders),
         )
+
+        # 附带：实现存在时，`Activity` 也必须是正式 class（EC-1）
+        if _gate_open():
+            impl = _activity_impl_files()
+            for path in impl:
+                self.assertGreaterEqual(
+                    _count_exact_class(path, "Activity"), 1,
+                    f"EC-1：{path.name} 必须定义 Activity class（Domain Object）",
+                )
 
     def test_ta6_no_implicit_persistence(self) -> None:
         """

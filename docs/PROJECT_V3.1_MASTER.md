@@ -116,9 +116,9 @@
   | **D-2 Preflight** | ✅ **APPROVED WITH ARCHITECTURAL CORRECTIONS** |
   | **D-2 Contract §5E** | ✅ **APPROVED**（CC-20260930-06，含 §5E.22 D-2 阶段门） |
   | **D-2 Architecture Tests** | ✅ **APPROVED**（架构审核 SHA `a622e537…`，Ran 53 tests … OK）<br>✅ **SEALED**（门控修正后 **Ran 64 tests … OK**，见 §20.5.3 Seal Record） |
-  | **D-2 Gate** | 🔒 **CLOSED**（`D2G-GATE-STATUS: CLOSED` / marker `null`；实测确认） |
-  | **D-2 Implementation** | 🔴 **NOT AUTHORIZED**（`agent/activity.py` 未创建） |
-  | D-3 | 🔴 **BLOCKED** |
+  | **D-2 Gate** | 🔓 **OPEN**（`D2G-GATE-STATUS: OPEN` / `D2G-3-MARKER: true`；架构侧正式授权） |
+  | **D-2 Implementation** | 🔵 **IN PROGRESS**（新增 `agent/activity.py`，待真实运行 D-2 测试） |
+  | D-3 | 🔴 **BLOCKED**（本轮禁止进入） |
 
   **D-2 进展：**
 
@@ -126,15 +126,43 @@
   D-2 Preflight                ✅ APPROVED WITH ARCHITECTURAL CORRECTIONS
   D-2 Contract §5E             ✅ APPROVED（CC-20260930-06）
   D-2 Architecture Tests       ✅ APPROVED（SHA a622e537，Ran 53 tests … OK）
-  D-2 Architecture Tests SEAL  ✅ SEALED（门控修正后 Ran 64 tests … OK）
-  D-2 门控设计修正              ✅ APPLIED（presence ≠ authorization；EG-12 ～ EG-17）
-  D-2 门状态结构化              ✅ APPLIED（D2G-GATE-STATUS / D2G-3-MARKER 单一来源）
-  D-2 Gate CLOSED               ✅ 实测 GATE STATE = CLOSED
-  D-2 四套回归                  ✅ D-0 / D-1 / D-1 behavior / D-2 全部 OK
-  D-2 Gate                     🔒 CLOSED（D2G-GATE-STATUS: CLOSED / marker null）
-  D-2 Implementation           🔴 NOT AUTHORIZED
+  D-2 Architecture Tests SEAL  ✅ SEALED（Ran 64 tests … OK）
+  D-2 Implementation 授权       ✅ AUTHORIZED
+                                （Architecture Review SHA a622e537 /
+                                  D-2 Seal Commit c676abd… / 64-64 tests OK）
+  D-2 Gate                     🔓 OPEN（D2G-GATE-STATUS: OPEN / marker true）
+  D-2 Implementation 交付       agent/activity.py（Activity Domain Object +
+                                  Runtime-scoped Activity Registry）
+  D-2 测试（门开后首次真实运行）  Ran 64 tests … FAILED (failures=2)
+                                  → 2 处均为**测试断言自身**问题，非实现问题
+                                  → 已修正，待重跑
   D-3                          🔴 BLOCKED
   ```
+
+  **门开后首次真实运行结果（必须记录）：**
+
+  ```text
+  GATE STATE      : OPEN (implementation authorized)
+  impl presence   : PRESENT -> agent/activity.py
+  boundary scan   : 1 impl file(s) —— 实现存在，扫实现文件本身
+  Ran 64 tests … FAILED (failures=2)
+
+  失败项定性：
+      test_ta2 → 硬编码 assertFalse(_gate_open())，门合法打开后必失败
+                 （断言写成「门必须关闭」，与门可开合的设计矛盾）
+      test_ta5 → 正则 `class\\s+\\w*ActivityRegistry` 误报：
+                 `\\w*` 允许空匹配 → 同时命中 `class ActivityRegistryError`
+                 → 把「1 个 Registry + 1 个异常类」误报成「2 个 ActivityRegistry」
+  ```
+
+  **修正（均为测试侧，未改实现）：**
+
+  | 项 | 修正 |
+  |----|------|
+  | `ta2` | 改为**门态自洽**断言（CLOSED 或 OPEN 都验证一致），并新增 `D1G-16` 干扰文本反例验证 |
+  | `ta5` | 类检测由**正则**改为 **AST 精确 class 计数**（`_count_exact_class`），并按 `D1G-17` 记录原因 |
+  | `ta4` | 重命名为 `test_ta4_premature_implementation_guard`，门开后明确「不适用」 |
+  | 附 | `ta5` 增加附带断言：门开时实现文件必须定义 `Activity` class（`EC-1`） |
 
   **门控 bug（`EV-20`）最终记录 —— 三轮才收敛：**
 
@@ -1867,6 +1895,19 @@ Activity implementation   : NOT AUTHORIZED
                             agent/activity.py = 不存在（未创建）
 
 本次最终 SHA（架构审核通过）: a622e5371aa25605a165b708b171a1e4445ecb25
+
+（历史链条，避免后续误读）：
+    Architecture Review SHA : a622e5371aa25605a165b708b171a1e4445ecb25
+                              （架构审核通过的 **测试版本**）
+    D-2 Seal Commit         : c676abd28f2ef28f595491d0fa6d227ab063c4a9
+                              （把 Seal 结果正式写入 PROJECT / Contract 的提交）
+
+D-2 Implementation 授权      : ✅ AUTHORIZED
+                              （依据：Architecture Review SHA a622e537 /
+                                D-2 Seal Commit c676abd… / 64-64 tests OK）
+                              Contract §5E.22 门状态已置为：
+                                  D2G-GATE-STATUS: OPEN
+                                  D2G-3-MARKER: true
 
 ----------------------------------------------------------------
 本轮门控修正（架构侧 D-2 Architecture Tests Review 要求）
