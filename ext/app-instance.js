@@ -1,4 +1,4 @@
-// app-instance.js - 副本系统 v17（半屏阅读态：对话占下半屏露背景，回看自动全屏 + 字号小一号 + 语音降级）
+// app-instance.js - 副本系统 v18（半屏阅读态：修正收起判定 + 真实内容测高 + 回看自动全屏）
 (function() {
     'use strict';
     console.log('[ext] app-instance.js v9 加载...');
@@ -1643,7 +1643,6 @@
     // 而占位块始终在滚动容器内部，内容真的往下走，上半屏自然露出背景图。
     const CHAT_PEEK = 0.5;           // 半屏阅读：对话占下半屏
     const CHAT_EXPAND_SLACK = 24;    // 离底部多远就算"在回看"（带迟滞，避免来回抖）
-    const CHAT_MIN_CONTENT = 160;    // 内容太少就别收，不然只剩背景
     let chatCollapsed = false;
     let chatOffset = 0;              // 当前占位高度(px)
     let chatUserScrolling = false;   // 正在手动滚动时不强制收放
@@ -1655,11 +1654,33 @@
         const a = chatAreaEl();
         return a ? a.clientHeight * CHAT_PEEK : 0;
     }
-    // 能往回看才有必要收起来（内容比可视区高）
+    // 能往回看才有必要收起来。
+    // 必须在「展开态」量真实内容高度：收起时占位块占了半屏，scrollHeight 会失真。
+    function chatContentHeight() {
+        const m = chatMsgEl();
+        if (!m) return 0;
+        const saved = chatOffset;
+        if (!saved) return m.scrollHeight;
+        // 临时归零占位块量真实内容高度（期间挂起滚动判定，避免误触发收放）
+        const sp = chatSpacerEl();
+        const wasScrolling = chatUserScrolling;
+        chatUserScrolling = true;
+        if (sp) sp.style.height = '0px';
+        const h = m.scrollHeight;
+        if (sp) sp.style.height = saved + 'px';
+        chatUserScrolling = wasScrolling;
+        return h;
+    }
     function chatScrollable() {
         const m = chatMsgEl();
-        if (!m) return false;
-        return (m.scrollHeight - m.clientHeight) > CHAT_MIN_CONTENT;
+        const a = chatAreaEl();
+        if (!m || !a) return false;
+        const view = m.clientHeight;
+        if (view <= 0) return false;              // 还没布局出来
+        const content = chatContentHeight();
+        // 至少要能滚出一点距离才值得收起（原来固定 160px 太苛刻，
+        // 短对话永远收不起来，表现就是"全是全屏"）
+        return (content - view) > 40;
     }
 
     function applyChatOffset(px) {
@@ -1703,10 +1724,16 @@
     function setChatCollapsed(on, opts) {
         if (!chatAreaEl()) return;
         const want = !!on;
-        if (want && !chatScrollable()) return;      // 内容不足，保持全屏
+        if (want && !chatScrollable()) {
+            console.log('[instance] 半屏未启用：内容不足以回看',
+                { content: chatContentHeight(), view: (chatMsgEl() || {}).clientHeight, peekH: chatPeekHeight() });
+            return;
+        }
         if (want === chatCollapsed && !(opts && opts.force)) return;
         chatCollapsed = want;
         animateChatOffset(chatCollapsed ? chatPeekHeight() : 0);
+        console.log('[instance] 半屏阅读态:', chatCollapsed ? '收起' : '全屏',
+            { peek: chatPeekHeight(), content: chatContentHeight(), view: (chatMsgEl() || {}).clientHeight });
         if (chatCollapsed) {
             // 收起后对齐到最新消息（下半屏看最新）
             setTimeout(() => {
@@ -1721,11 +1748,11 @@
     }
     window.isInstanceChatPeeking = function() { return chatCollapsed; };
 
-    // 是否停在最新消息处
-    function chatAtBottom() {
+    // 是否停在最新消息处（供 scroll 判定复用）
+    function chatGapFromBottom() {
         const m = chatMsgEl();
-        if (!m) return true;
-        return m.scrollTop >= m.scrollHeight - m.clientHeight - 4;
+        if (!m) return 0;
+        return m.scrollHeight - m.clientHeight - m.scrollTop;
     }
 
     function bindChatScroll() {
@@ -1735,9 +1762,9 @@
         msgArea.dataset.peekBound = '1';
 
         msgArea.addEventListener('scroll', function() {
-            // 动画补偿 scrollTop 时不要误判
+            // 动画补偿 scrollTop / 测高时不要误判
             if (chatUserScrolling) return;
-            const gap = msgArea.scrollHeight - msgArea.clientHeight - msgArea.scrollTop;
+            const gap = chatGapFromBottom();
             if (chatCollapsed) {
                 // 离开底部（在回看之前的内容）→ 自动全屏
                 if (gap > CHAT_EXPAND_SLACK) setChatCollapsed(false);
@@ -1754,7 +1781,7 @@
             if (!touching) return;
             touching = false;
             chatUserScrolling = false;
-            const gap = msgArea.scrollHeight - msgArea.clientHeight - msgArea.scrollTop;
+            const gap = chatGapFromBottom();
             if (chatCollapsed && gap > CHAT_EXPAND_SLACK) setChatCollapsed(false);
             else if (!chatCollapsed && gap <= 2) setChatCollapsed(true);
         };
@@ -2211,7 +2238,7 @@
         injectInstanceChatStyles();   // 让 .inst-* 样式一开始就可用
         modifyMapBar();
         createOverlay();
-        console.log('[ext] 副本插件 v17 加载完成（半屏阅读态 + 回看自动全屏 + 字号小一号 + 语音降级）');
+        console.log('[ext] 副本插件 v18 加载完成（半屏阅读态修正 + 回看自动全屏 + 字号小一号 + 语音降级）');
     }
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
