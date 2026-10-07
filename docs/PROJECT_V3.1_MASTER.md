@@ -115,6 +115,57 @@
   | **D-1 SEAL** | ✅ **SEALED**（见 §20.5.2 SEAL Record） |
   | D-2 | 🔓 **READY / NEXT**（Preflight 尚未创建） |
 
+  **D-2 进展：**
+
+  ```text
+  D-2 Preflight                ✅ APPROVED WITH ARCHITECTURAL CORRECTIONS
+  D-2 Contract §5E             ✅ APPROVED（CC-20260930-06）
+  D-2 Architecture Tests       ✅ CREATED（docs/test_d2_activity_contract.py）
+  D-2 Tests 首次真实运行        Ran 53 tests … FAILED (failures=3)
+  D-2 Implementation           🔴 NOT AUTHORIZED
+  D-3                          🔴 BLOCKED
+  ```
+
+  **D-2 Tests 首次真实运行结果（必须记录）：**
+
+  ```text
+  PHASE GATE : CLOSED (implementation not authorized)
+  activity module : ABSENT
+  Ran 53 tests … FAILED (failures=3)
+
+  失败项：
+      test_g4_forbidden_jumps_declared
+      test_g7_recovery_does_not_create_new_identity
+      test_h3_no_activity_event_production
+  ```
+
+  **3 处失败的定性（关键 —— 其中 2 处是 Contract/测试的真实缺口）：**
+
+  | 失败项 | 定性 | 修正 |
+  |--------|------|------|
+  | `test_g4` | ✅ **测试正确抓到 Contract 真实缺口**：§5E.6 只有「禁止随意跳跃」一句，**未逐条列举**被禁止的具体跳跃（D-0 Preflight §12 有，但未搬入 §5E） | **修 Contract**：新增「禁止的跳跃（冻结，逐条列举）13 条」+ 新规则 `EF-11` ～ `EF-13` |
+  | `test_g7` | 测试措辞未对齐（Contract 原文含 `**不得**` 粗体标记，子串不连续） | 改为兼容粗体标记的正则 |
+  | `test_h3` | 测试范围过宽（在门关闭时扫描全部 `agent/`，命中 **B5/C-2 已存在的合法模块** `event_adapter.py` / `runtime.py` 对 `agent.event` 的依赖） | 补门控 + 收窄为「仅检查 Activity 实现文件」 |
+
+  > **注：** `test_g4` 是本轮最有价值的发现 ——
+  > 它证明**架构测试确实能反向发现 Contract 的遗漏**，而不是只做实现的单向检查。
+
+  **D-2 Architecture Tests 覆盖（15 项重点验证 + 阶段门）：**
+
+  ```text
+  A  阶段门（不得提前偷做 Activity / Registry / persistence / scheduler）
+  B  Registry 唯一性 / 单一真相 / AgentRuntime 不拥有 / primary=binding
+  C  World SOT（无 activities key / 无 persistence / 无隐式持久化）
+  D  Motivation（Formal Activity 不进入）/ AgentState（Legacy Label）
+  E  Scheduler 边界（无 tick/timer；expected_end_at 不自动完成）
+  F  Legacy 单向关系（禁止 Activity → Legacy / 双向同步）
+  G  生命周期与终态不可逆（含禁止跳跃逐条列举）
+  H  未冻结项不得提前实现
+  I  Contract / Preflight 文档边界
+  J  D-0 / D-1 未被破坏
+  K  环境能力（不伪造结果）
+  ```
+
   **D-1 SEAL 结论：**
 
   ```text
