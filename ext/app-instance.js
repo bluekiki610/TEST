@@ -165,23 +165,71 @@
     function loadAllAisAndPublic() {
         const content = document.getElementById('instanceContent');
         content.innerHTML = '<div style="text-align:center; color:#999; padding:40px;">⏳ 加载中...</div>';
-        const allUserAis = window.mapData && window.mapData.user_ais ? window.mapData.user_ais : {};
-        allAis = [];
-        for (const [owner, ais] of Object.entries(allUserAis)) {
-            ais.forEach(ai => {
-                allAis.push({ name: ai, owner: owner, isMine: (owner === currentUser) });
-            });
+
+        function buildAiList() {
+            const allUserAis =
+                window.mapData && window.mapData.user_ais
+                    ? window.mapData.user_ais
+                    : {};
+
+            allAis = [];
+
+            for (const [owner, ais] of Object.entries(allUserAis)) {
+                if (!Array.isArray(ais)) continue;
+                ais.forEach(ai => {
+                    allAis.push({
+                        name: ai,
+                        owner: owner,
+                        isMine: (owner === currentUser)
+                    });
+                });
+            }
         }
-        // 并行请求公开副本
-        api('/api/instance/public/all')
+
+        function renderAfterMap() {
+            buildAiList();
+            api('/api/instance/public/all')
+                .then(d => {
+                    publicInstancesMap = d.public_instances || {};
+                    renderAiSelection();
+                })
+                .catch(e => {
+                    publicInstancesMap = {};
+                    renderAiSelection();
+                    toast('⚠️ 加载公开副本失败，仅显示自己的AI');
+                });
+        }
+
+        // 已经有 AI 数据，直接用
+        if (
+            window.mapData &&
+            window.mapData.user_ais &&
+            Object.keys(window.mapData.user_ais).length > 0
+        ) {
+            renderAfterMap();
+            return;
+        }
+
+        // 地图数据尚未准备好，主动重新取一次
+        api('/api/map')
             .then(d => {
-                publicInstancesMap = d.public_instances || {};
-                renderAiSelection();
+                if (d && typeof d === 'object') {
+                    window.mapData = d;
+                }
+                renderAfterMap();
             })
             .catch(e => {
-                publicInstancesMap = {};
-                renderAiSelection();
-                toast('⚠️ 加载公开副本失败，仅显示自己的AI');
+                // 兜底：即使地图接口失败，也不卡死
+                buildAiList();
+                api('/api/instance/public/all')
+                    .then(d => {
+                        publicInstancesMap = d.public_instances || {};
+                        renderAiSelection();
+                    })
+                    .catch(() => {
+                        publicInstancesMap = {};
+                        renderAiSelection();
+                    });
             });
     }
 
@@ -883,7 +931,7 @@
 
         const chapters = inst.chapters || [];
 
-        content = document.getElementById('instanceContent');
+        const content = document.getElementById('instanceContent');
         content.innerHTML = `
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-shrink:0; background:rgba(255,255,255,0.85); padding:8px 12px; border-radius:8px; gap:8px; flex-wrap:wrap;">
                 <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
