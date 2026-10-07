@@ -750,7 +750,7 @@ async def send_message(m: MessageIn):
     content = m.content.strip()
     if not content:
         raise HTTPException(400, "消息不能为空")
-    msg = {"sender": m.sender, "content": content[:1000], "role": m.role, "time": room_time(room)}
+    msg = {"sender": m.sender, "content": content, "role": m.role, "time": room_time(room)}
     data["messages"].setdefault(room, []).append(msg)
     data["active_room"]["current"] = room
     save_data()
