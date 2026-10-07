@@ -31,15 +31,31 @@ D-2 Architecture Tests 阶段**不实现任何 Activity 代码**：
     **禁止把本组实现为「永久断言不存在」。**
 
 --------------------------------------------------------------------------
-阶段门
+阶段门（与 D-1 §5D.16 同构）
 --------------------------------------------------------------------------
 
-本阶段唯一的实现边界是 **`agent/activity.py` 是否存在**：
+**两个概念必须分开（架构侧 D-2 Architecture Tests Review）：**
 
-    不存在 → Pre-Implementation 形态 → 断言「不存在 + 未提前偷做」
-    存在   → 实现已授权 → 本组自动放宽为「存在性确认」，
-             并把「registry / 唯一真相 / binding / 终态不可逆」等
-             转为**实现级**断言（若届时仍缺失则失败）
+    implementation presence    = agent/activity.py 是否存在（客观事实）
+    implementation authorized  = Contract §5E.22 中的肯定式标记
+                                 D2G-3-SATISFIED: true
+
+    **禁止把「文件存在」本身当作授权条件。**
+
+    Gate CLOSED → Activity 实现必须不存在；不得提前创建
+                  Activity / Registry / persistence / scheduler；
+                  不得提前做 Event / Capability / Motivation 集成
+    Gate OPEN   → Activity 实现必须存在；继续执行**实现级**边界验证
+
+    **严禁**「因为 agent/activity.py 已存在就 return」从而
+    跳过 persistence / scheduler / Event 等边界检查
+    （Contract `EG-15` / `EG-16` / `EG-17`）。
+
+    判据实现：
+        `_gate_open()`              → 读 Contract 标记（唯一授权依据）
+        `_implementation_present()` → 只回答「文件是否存在」
+        `_boundary_scan_targets()`  → 实现存在时扫**实现文件本身**，
+                                      实现不存在时扫整个 agent/
 
 --------------------------------------------------------------------------
 15 项重点验证（架构侧指定）
@@ -222,8 +238,19 @@ def _word_in(token: str, text: str) -> bool:
 
 
 # =========================================================
-# 2. 阶段门：agent/activity.py 是否存在
+# 2. 阶段门（与 D-1 同构）
 # =========================================================
+#
+# 两个概念必须分开（架构侧 D-2 Architecture Tests Review）：
+#
+#     implementation presence   = agent/activity.py 是否存在（客观事实）
+#     implementation authorized = Contract 中的肯定式标记 D2G-3-SATISFIED: true
+#
+#     **禁止把「文件存在」本身当作授权条件。**
+#
+# 因此：
+#     _gate_open()              → 读 Contract 标记（唯一授权判据）
+#     _implementation_present() → 只回答「文件是否存在」
 
 ACTIVITY_MODULE = AGENT_DIR / "activity.py"
 ACTIVITY_PKG = AGENT_DIR / "activity"
@@ -238,14 +265,121 @@ ACTIVITYISH_NAMES: Sequence[str] = (
     "activity_scheduler.py",
 )
 
+# 门状态的**结构化、可机读**形式（Contract §5E.22 是唯一来源）：
+#
+#     D2G-GATE-STATUS: CLOSED
+#     D2G-3-MARKER: null
+#
+# 开门时：
+#
+#     D2G-GATE-STATUS: OPEN
+#     D2G-3-MARKER: true
+#
+# ⚠️ 为什么必须结构化（两次真实缺陷的教训）：
+#
+#   ① 裸标识符判定：Contract 把标记与说明分行写时，
+#      逐行查找裸标识符会把「标记名」误判为「门已开」。
+#
+#   ② 说明文本污染（**`D1G-16` 的教科书级复现**）：
+#      Contract 在「定义」中写了一句
+#
+#          implementation authorized = 架构侧写入肯定式标记 <标记>: true
+#
+#      于是「说明标记是什么」这句话本身被当成「门已开」。
+#
+#   因此：**不使用开放式字符串匹配**，改为解析显式键值。
+_GATE_STATUS_KEY = "D2G-GATE-STATUS"
+_GATE_MARKER_KEY = "D2G-3-MARKER"
+
+
+def _gate_status_occurrences() -> Tuple[List[str], List[str]]:
+    """
+    返回 Contract 中所有以「行首即键名 + 紧跟冒号」形式出现的门状态取值。
+
+    **严格前缀匹配**：只有行首即键名且紧跟 `:` 才算。
+    因此下列**说明性文本**一律不构成解析目标：
+
+        > D2G-GATE-STATUS: OPEN      （blockquote 示例，行首是 `>`）
+        `D2G-3-MARKER: true`         （行内代码，行首是反引号）
+        **D2G-GATE-STATUS**          （粗体强调）
+        门状态 = CLOSED               （散文描述，无键名前缀）
+
+    返回 `(status_values, marker_values)`，均为原始字符串列表（已 strip）。
+    """
+    contract = _read_text(CONTRACT_DOC) or ""
+    status_values: List[str] = []
+    marker_values: List[str] = []
+    for raw_line in contract.splitlines():
+        line = raw_line.strip()
+        if line.startswith(_GATE_STATUS_KEY + ":"):
+            status_values.append(line.split(":", 1)[1].strip())
+        elif line.startswith(_GATE_MARKER_KEY + ":"):
+            marker_values.append(line.split(":", 1)[1].strip())
+    return status_values, marker_values
+
+
+def _gate_open() -> bool:
+    """
+    D-2 Pre-Implementation Gate 是否已由**架构侧**打开。
+
+    判据**只有** Contract §5E.22 门状态块中的结构化键值：
+
+        D2G-GATE-STATUS: CLOSED   → 门关闭
+        D2G-3-MARKER:    true     → 架构侧授权（同时要求 STATUS 为 OPEN）
+
+    **一致性要求（重要）：** 若键值在文档中出现多次（例如变更日志引用），
+    则**所有出现必须一致**；出现任何分歧即判为**不可判定 → 关闭**
+    （fail-closed）。
+
+    说明性文本中出现标记**不构成**开门
+    （继承 `D1G-16` ～ `D1G-20`：状态构造 ≠ 说明文本）。
+    """
+    status_values, marker_values = _gate_status_occurrences()
+    if not status_values or not marker_values:
+        return False
+
+    status_norm = {v.upper() for v in status_values}
+    marker_norm = {v.lower() for v in marker_values}
+
+    # 出现分歧 → fail-closed
+    if len(status_norm) != 1 or len(marker_norm) != 1:
+        return False
+
+    return status_norm.pop() == "OPEN" and marker_norm.pop() == "true"
+
 
 def _implementation_present() -> bool:
     """
-    D-2 的实现边界：`agent/activity.py`（或 `agent/activity/` 包）是否存在。
+    **只回答**「Activity 实现是否存在」，**不代表任何授权**。
 
-    这是唯一判据 —— 不由本测试自行发明第二套门控。
+    ⚠️ 架构侧明确要求：
+        文件存在只能说明 implementation presence；
+        `D2G-3-SATISFIED` 才代表架构侧授权进入 Post-Implementation Gate。
     """
     return ACTIVITY_MODULE.is_file() or ACTIVITY_PKG.is_dir()
+
+
+def _activity_impl_files() -> List[Path]:
+    """返回 Activity 实现文件列表（存在时）；不存在则返回空列表。"""
+    if ACTIVITY_MODULE.is_file():
+        return [ACTIVITY_MODULE]
+    if ACTIVITY_PKG.is_dir():
+        return _py_files(ACTIVITY_PKG)
+    return []
+
+
+def _boundary_scan_targets() -> List[Path]:
+    """
+    边界检查的扫描目标（架构侧要求：实现存在时必须扫实现文件本身）。
+
+        Gate CLOSED / 实现不存在 → 扫描整个 `agent/`（防止提前偷做）
+        实现存在                 → 扫描 **Activity 实现文件**
+                                   （绝不允许因为文件存在就整体跳过）
+    """
+    impl = _activity_impl_files()
+    if impl:
+        return impl
+    return _py_files(AGENT_DIR)
 
 
 # =========================================================
@@ -390,40 +524,162 @@ _RULE_GROUP_FIRST: Sequence[str] = (
 # A. 阶段门
 # =========================================================
 
-class AD2GateState(unittest.TestCase):
-    """阶段门必须可判定，且不得形成「无法通过」的终态。"""
+class TD2APreImplementationGate(unittest.TestCase):
+    """
+    T-A · Pre-Implementation Gate —— 门控断言。
 
-    def test_a1_gate_state_is_determinate(self) -> None:
+    **门状态判据 = Contract §5E.22 的结构化键值**
+    （`D2G-GATE-STATUS` + `D2G-3-MARKER`），
+    **不是 `agent/activity.py` 是否存在。**
+
+        Gate CLOSED → 实现必须不存在（防提前偷做）
+        Gate OPEN   → 实现必须存在（否则无法形成正式通过状态）
+
+    本组**具有生命周期**：实现落地后自动由「断言不存在」转为「断言存在」，
+    **不会形成「无法通过」的终态**（`D1G-7` / `D1G-10` 的同一原则）。
+    """
+
+    def setUp(self) -> None:
+        self.contract = _read_text(CONTRACT_DOC) or ""
+
+    def test_ta0_gate_state_is_determinate(self) -> None:
+        """门状态必须可判定，且其判定依据必须存在于 Contract。"""
+        self.assertIn(
+            _GATE_STATUS_KEY, self.contract,
+            f"Contract §5E.22 必须定义门状态键 {_GATE_STATUS_KEY}",
+        )
+        self.assertIn(
+            _GATE_MARKER_KEY, self.contract,
+            f"Contract §5E.22 必须定义授权标记键 {_GATE_MARKER_KEY}",
+        )
+        self.assertIn(
+            "**EG-14**", self.contract,
+            "Contract 必须含 EG-14（Gate 判定由 Contract 显式标记决定）",
+        )
+        # 门状态必须是 bool（可判定）
+        self.assertIsInstance(_gate_open(), bool)
+
+    def test_ta1_gate_is_contract_marker_not_file_presence(self) -> None:
         """
-        门状态必须可判定。
+        【核心】门控判据必须是 **Contract 标记**，不是 **文件存在**。
 
-        判据 = `agent/activity.py`（或 `agent/activity/` 包）是否存在 ——
-        不由本测试自行发明第二套门控。
-
-        同时确认 Contract 把 `agent/activity.py` 明确列为 D-2 禁止项。
+        架构侧明确要求：
+            不得把「文件存在」本身作为授权条件。
         """
+        self.assertIn(
+            "implementation authorized", self.contract,
+            "Contract 必须区分 implementation presence 与 implementation authorized",
+        )
+        self.assertIn(
+            "implementation presence", self.contract,
+            "Contract 必须写明 implementation presence 的定义",
+        )
+        self.assertIn(
+            "**EG-12**", self.contract,
+            "Contract 必须含 EG-12（禁止把文件存在当作授权条件）",
+        )
+        self.assertIn(
+            "**EG-13**", self.contract,
+            "Contract 必须含 EG-13（只有 marker 为 true 才是授权依据）",
+        )
+
+    def test_ta2_gate_status_is_structured_and_parseable(self) -> None:
+        """
+        【核心 · 回归】门状态必须是**结构化键值**，且说明文本不得污染判定。
+
+        ⚠️ 本断言来自**两次真实缺陷**（都已实测发生）：
+
+            ① 裸标识符判定
+               Contract 把标记与说明分行：
+                   D2G-3-SATISFIED
+                   当前不存在
+               逐行查找裸标识符 → 第一行无否定词 → **误判为门已开**
+
+            ② 说明文本污染（**`D1G-16` 教科书级复现**）
+               Contract 在「定义」中写：
+                   implementation authorized = 架构侧写入肯定式标记 <标记>: true
+               这句**说明标记是什么**的文字，被当成**门已开**。
+
+        冻结要求：
+            门状态只能是 `D2G-GATE-STATUS` / `D2G-3-MARKER` 两个键；
+            判定只读这两个键；其余任何文本不得影响判定。
+        """
+        # ① Contract 必须含结构化门状态块
+        self.assertIn(
+            _GATE_STATUS_KEY, self.contract,
+            f"Contract §5E.22 必须含 {_GATE_STATUS_KEY}",
+        )
+        self.assertIn(
+            _GATE_MARKER_KEY, self.contract,
+            f"Contract §5E.22 必须含 {_GATE_MARKER_KEY}",
+        )
+
+        # ② 当前状态必须自洽：MARKER 非 true → 门必须 CLOSED
+        status_values, marker_values = _gate_status_occurrences()
+        self.assertTrue(status_values, "Contract 必须至少有一处门状态键值")
+        self.assertTrue(marker_values, "Contract 必须至少有一处授权标记键值")
+
+        # 一致性（而非唯一性）：所有出现必须取值一致，否则 fail-closed
+        status_norm = {v.upper() for v in status_values}
+        marker_norm = {v.lower() for v in marker_values}
+        self.assertEqual(
+            len(status_norm), 1,
+            f"门状态键出现多次且取值分歧：{sorted(status_norm)} —— 门状态必须唯一一致",
+        )
+        self.assertEqual(
+            len(marker_norm), 1,
+            f"授权标记键出现多次且取值分歧：{sorted(marker_norm)} —— 标记必须唯一一致",
+        )
+
+        status_val = status_norm.pop()
+        marker_val = marker_norm.pop()
+
+        if marker_val != "true":
+            self.assertEqual(
+                status_val, "CLOSED",
+                "MARKER 非 true 时，GATE-STATUS 必须是 CLOSED（禁止自相矛盾）",
+            )
+            self.assertFalse(
+                _gate_open(),
+                "MARKER 非 true 时 _gate_open() 必须为 False",
+            )
+        else:
+            self.assertEqual(
+                status_val, "OPEN",
+                "MARKER 为 true 时，GATE-STATUS 必须是 OPEN",
+            )
+
+        # ③ 【关键】说明性文本中即使出现标记字面形式，也不得影响判定
+        self.assertFalse(
+            _gate_open(),
+            "说明文本中出现标记字面形式不得被判为开门（D1G-16）",
+        )
+
+    def test_ta3_gate_state_matches_presence(self) -> None:
+        """
+        门状态与实现存在性必须**一致**：
+
+            CLOSED → 实现不存在
+            OPEN   → 实现存在
+        """
+        gate = _gate_open()
         present = _implementation_present()
-        self.assertIsInstance(present, bool)
+        if gate:
+            self.assertTrue(
+                present,
+                "D-2 Gate 已打开（D2G-3-SATISFIED: true），"
+                "但未发现 agent/activity.py —— 实现缺失无法形成正式通过状态",
+            )
+        else:
+            self.assertFalse(
+                present,
+                "D-2 Gate 处于 CLOSED，但发现 agent/activity.py —— "
+                "存在实现不等于获得授权",
+            )
 
-        contract = _read_text(CONTRACT_DOC) or ""
-        self.assertIn(
-            "agent/activity.py", contract,
-            "Contract §5E 必须把 agent/activity.py 列为 D-2 禁止项（EA-2 / EU-1）",
-        )
-        self.assertIn(
-            "**EA-2**", contract,
-            "Contract 必须含 EA-2（D-2 禁止创建 agent/activity.py）",
-        )
-
-    def test_a2_no_activity_module_in_pre_implementation_phase(self) -> None:
-        """
-        **门关闭时**：不得提前创建 Activity 实现模块。
-
-        门打开后本断言自动放宽（架构侧 TEST GATE CORRECTION 的同一原则）。
-        """
-        if _implementation_present():
-            # 门已打开：断言实现确实存在（由 B 组做实现级验证）
-            self.assertTrue(ACTIVITY_MODULE.is_file() or ACTIVITY_PKG.is_dir())
+    def test_ta4_no_premature_implementation_when_closed(self) -> None:
+        """Gate CLOSED 时：不得提前创建任何 Activity 实现模块。"""
+        if _gate_open():
             return
         offenders = [
             str((AGENT_DIR / name).relative_to(ROOT))
@@ -432,63 +688,223 @@ class AD2GateState(unittest.TestCase):
         ]
         self.assertEqual(
             offenders, [],
-            "D-2 Architecture Tests 阶段禁止实现 Activity；命中：" + ", ".join(offenders),
+            "Gate CLOSED：禁止提前实现 Activity；命中：" + ", ".join(offenders),
         )
 
-    def test_a3_no_activity_runtime_or_registry_created(self) -> None:
-        """
-        ❌ Activity Runtime / Registry 实现。
+    # ---------------------------------------------------------
+    # 以下三项在 Gate CLOSED 时扫描整个 agent/；
+    # Gate OPEN 时**改为扫描 Activity 实现文件本身**（绝不整体跳过）。
+    # ---------------------------------------------------------
 
-        门关闭时应完全不存在；门打开后须确认 registry 语义存在
-        （由 B 组验证「唯一管理入口」）。
+    def test_ta5_no_activity_registry_runtime_class(self) -> None:
         """
-        if _implementation_present():
-            return
+        Gate CLOSED：不得存在 ActivityRegistry / ActivityRuntime 类。
+
+        Gate OPEN：改为检查实现文件，确认 Registry 就是「唯一管理入口」
+        （不得出现两个互相竞争的 Registry 类）。
+        """
+        targets = _boundary_scan_targets()
         offenders: List[str] = []
-        for path in _py_files(AGENT_DIR):
+        for path in targets:
             effective = _effective_code(path)
-            if re.search(r"class\s+\w*ActivityRegistry", effective):
+            registry_hits = len(re.findall(r"class\s+\w*ActivityRegistry", effective))
+            if _gate_open():
+                if registry_hits == 0:
+                    offenders.append(f"{path.name} -> 缺少 ActivityRegistry")
+                elif registry_hits > 1:
+                    offenders.append(f"{path.name} -> {registry_hits} 个 ActivityRegistry")
+            elif registry_hits:
                 offenders.append(f"{path.name} -> class *ActivityRegistry")
-            if re.search(r"class\s+\w*ActivityRuntime", effective):
-                offenders.append(f"{path.name} -> class *ActivityRuntime")
         self.assertEqual(
             offenders, [],
-            "D-2 Architecture Tests 阶段禁止实现 ActivityRegistry / ActivityRuntime；"
-            "命中：" + ", ".join(offenders),
+            "ActivityRegistry 边界不满足；命中：" + ", ".join(offenders),
         )
 
-    def test_a4_no_implicit_persistence_for_activity(self) -> None:
+    def test_ta6_no_implicit_persistence(self) -> None:
         """
-        ❌ Activity persistence / 隐式 persistence。
+        ❌ Activity persistence / 隐式 persistence（`ED-5` / `ED-12` / `EH-1`）。
 
-        门关闭时，agent/ 下不得出现落盘机制。
+        ⚠️ 本断言**在实现存在时同样执行**（扫描实现文件本身），
+        不得因为 `agent/activity.py` 已存在而跳过。
         """
-        if _implementation_present():
-            return
         offenders: List[str] = []
-        for path in _py_files(AGENT_DIR):
+        for path in _boundary_scan_targets():
             effective = _effective_code(path)
             for token in _IMPLICIT_PERSISTENCE_TOKENS:
                 if token in effective:
                     offenders.append(f"{path.name} -> {token}")
         self.assertEqual(
             offenders, [],
-            "D-2 禁止 Activity persistence / 隐式 persistence；命中：" + ", ".join(offenders),
+            "禁止 Activity persistence / 隐式 persistence；命中：" + ", ".join(offenders),
         )
 
-    def test_a5_no_activity_scheduler_or_tick_or_timer(self) -> None:
-        """❌ scheduler / tick / timer（Contract `EP-6`）。"""
-        if _implementation_present():
-            return
+    def test_ta7_no_scheduler_tick_timer(self) -> None:
+        """
+        ❌ scheduler / tick / timer（`EP-6`）。
+
+        ⚠️ 本断言**在实现存在时同样执行**（扫描实现文件本身），
+        不得因为 `agent/activity.py` 已存在而跳过。
+        """
         offenders: List[str] = []
-        for path in _py_files(AGENT_DIR):
+        for path in _boundary_scan_targets():
             effective = _effective_code(path)
             for token in _SCHEDULER_TOKENS:
                 if token in effective:
                     offenders.append(f"{path.name} -> {token}")
         self.assertEqual(
             offenders, [],
-            "D-2 禁止 scheduler / tick / timer；命中：" + ", ".join(offenders),
+            "禁止 scheduler / tick / timer；命中：" + ", ".join(offenders),
+        )
+
+
+# =========================================================
+# T-B. Post-Implementation Boundary Gate
+#    （仅实现存在时生效；实现不存在时逐项不适用，不 skip、不失败）
+# =========================================================
+
+class TD2BPostImplementationBoundary(unittest.TestCase):
+    """
+    T-B · Post-Implementation Boundary Gate。
+
+    架构侧要求（`EG-15` ～ `EG-17`）：
+        **严禁**「因为实现已存在就 return」从而跳过边界检查。
+        实现存在时，必须对 **Activity 实现文件本身** 执行完整边界验证。
+
+    实现不存在时，本组逐项**不适用**（不是 skip、不是失败）。
+    """
+
+    def setUp(self) -> None:
+        self.impl = _activity_impl_files()
+
+    def test_tb0_scan_targets_cover_implementation(self) -> None:
+        """
+        【核心】实现存在时，边界扫描目标**必须**包含 Activity 实现文件本身。
+
+        这是对 `EG-16` 的直接断言 —— 防止未来又改回「直接 return」。
+        """
+        targets = _boundary_scan_targets()
+        if not self.impl:
+            self.assertEqual(
+                targets, _py_files(AGENT_DIR),
+                "实现不存在时，扫描目标应为整个 agent/（防提前偷做）",
+            )
+            return
+        for path in self.impl:
+            self.assertIn(
+                path, targets,
+                f"EG-16：实现存在时，扫描目标必须包含 {path.name}",
+            )
+
+    def test_tb1_no_persistence_in_implementation(self) -> None:
+        """实现存在时：Activity 实现内不得有任何持久化。"""
+        if not self.impl:
+            return
+        offenders: List[str] = []
+        for path in self.impl:
+            effective = _effective_code(path)
+            for token in _IMPLICIT_PERSISTENCE_TOKENS:
+                if token in effective:
+                    offenders.append(f"{path.name} -> {token}")
+        self.assertEqual(
+            offenders, [],
+            "ED-5 / EH-1：Activity 实现不得持久化；命中：" + ", ".join(offenders),
+        )
+
+    def test_tb2_no_scheduler_in_implementation(self) -> None:
+        """实现存在时：Activity 实现内不得有 scheduler / tick / timer。"""
+        if not self.impl:
+            return
+        offenders: List[str] = []
+        for path in self.impl:
+            effective = _effective_code(path)
+            for token in _SCHEDULER_TOKENS:
+                if token in effective:
+                    offenders.append(f"{path.name} -> {token}")
+        self.assertEqual(
+            offenders, [],
+            "EP-6：Activity 实现不得含 scheduler / tick / timer；命中：" + ", ".join(offenders),
+        )
+
+    def test_tb3_no_event_production_in_implementation(self) -> None:
+        """实现存在时：Activity 实现不得产生 Event（`EB-13` / `EF-6`）。"""
+        if not self.impl:
+            return
+        offenders: List[str] = []
+        for path in self.impl:
+            effective = _effective_code(path)
+            for token in ("EventBus", "EventStore", "emit_event", "push_event", "enqueue_event"):
+                if _word_in(token, effective):
+                    offenders.append(f"{path.name} -> {token}")
+        self.assertEqual(
+            offenders, [],
+            "EB-13：Activity 实现不得产生 Event；命中：" + ", ".join(offenders),
+        )
+
+    def test_tb4_no_reverse_write_to_legacy(self) -> None:
+        """实现存在时：Activity 不得反向写 Legacy / `main.data`（`EO-9` ～ `EO-12`）。"""
+        if not self.impl:
+            return
+        offenders: List[str] = []
+        for path in self.impl:
+            effective = _effective_code(path)
+            for pattern in _REVERSE_WRITE_PATTERNS:
+                if re.search(pattern, effective):
+                    offenders.append(f"{path.name} -> {pattern}")
+            for key in _LEGACY_ACTIVITY_KEYS:
+                if re.search(
+                    r"\[\s*[\"']" + re.escape(key) + r"[\"']\s*\]\s*=", effective
+                ):
+                    offenders.append(f"{path.name} -> write {key}")
+        self.assertEqual(
+            offenders, [],
+            "EO-9 ～ EO-12：Activity 不得反向写 Legacy / main.data；命中："
+            + ", ".join(offenders),
+        )
+
+    def test_tb5_no_motivation_wiring_in_implementation(self) -> None:
+        """实现存在时：Activity 不得接入 Motivation（`ET-1` / `ET-7`）。"""
+        if not self.impl:
+            return
+        offenders: List[str] = []
+        for path in self.impl:
+            effective = _effective_code(path)
+            for token in ("motivation", "agent_state_snapshot", "current_activity_id"):
+                if _word_in(token, effective):
+                    offenders.append(f"{path.name} -> {token}")
+        self.assertEqual(
+            offenders, [],
+            "ET-1 / ET-7：Activity 不得接入 Motivation；命中：" + ", ".join(offenders),
+        )
+
+    def test_tb6_no_capability_integration_in_implementation(self) -> None:
+        """实现存在时：Activity 不得接入 Capability（`EN-6` / `EN-8`）。"""
+        if not self.impl:
+            return
+        offenders: List[str] = []
+        for path in self.impl:
+            effective = _effective_code(path)
+            for token in ("execute_action", "CapabilityRequest", "CapabilityResult"):
+                if _word_in(token, effective):
+                    offenders.append(f"{path.name} -> {token}")
+        self.assertEqual(
+            offenders, [],
+            "EN-6 / EN-8：Activity 不得接入 Capability；命中：" + ", ".join(offenders),
+        )
+
+    def test_tb7_no_undeclared_imports_in_implementation(self) -> None:
+        """实现存在时：Activity 实现不得 import main / ext_*（`WQ-75` 的同类边界）。"""
+        if not self.impl:
+            return
+        offenders: List[str] = []
+        for path in self.impl:
+            effective = _effective_code(path)
+            for pattern in (r"\bimport\s+main\b", r"\bfrom\s+main\s+import\b",
+                            r"\bimport\s+ext_", r"\bfrom\s+ext_\w*\s+import\b"):
+                if re.search(pattern, effective):
+                    offenders.append(f"{path.name} -> {pattern}")
+        self.assertEqual(
+            offenders, [],
+            "Activity 实现不得 import main / ext_*；命中：" + ", ".join(offenders),
         )
 
 
@@ -623,16 +1039,18 @@ class CD2WorldSotAndPersistence(unittest.TestCase):
         )
 
     def test_c3_no_implicit_persistence_anywhere(self) -> None:
-        """⑦ 不存在隐式 persistence（`ED-12`）。"""
+        """
+        ⑦ 不存在隐式 persistence（`ED-12`）。
+
+        ⚠️ 架构侧要求（`EG-15`）：**不得**因为实现存在就跳过。
+        实现存在时改为扫描 Activity 实现文件本身。
+        """
         contract = _read_text(CONTRACT_DOC) or ""
         self.assertIn("**ED-12**", contract)
         self.assertIn("隐式持久化", contract, "Contract 必须明确禁止隐式持久化")
 
-        if _implementation_present():
-            return
-        # 门关闭时：agent/ 下不得有任何落盘调用
         offenders: List[str] = []
-        for path in _py_files(AGENT_DIR):
+        for path in _boundary_scan_targets():
             effective = _effective_code(path)
             for token in _IMPLICIT_PERSISTENCE_TOKENS:
                 if token in effective:
@@ -760,15 +1178,17 @@ class ED2SchedulerBoundary(unittest.TestCase):
     """⑩ ⑪：无 scheduler / tick / timer；expected_end_at 不自动完成。"""
 
     def test_e1_no_scheduler_implemented(self) -> None:
-        """⑩ 不存在 Activity scheduler / tick / timer（`EP-6`）。"""
+        """
+        ⑩ 不存在 Activity scheduler / tick / timer（`EP-6`）。
+
+        ⚠️ 架构侧要求（`EG-15`）：**不得**因为实现存在就跳过。
+        """
         contract = _read_text(CONTRACT_DOC) or ""
         for rule in ("**EP-1**", "**EP-2**", "**EP-3**", "**EP-6**", "**EP-9**", "**EP-10**"):
             self.assertIn(rule, contract, f"Contract 必须包含 {rule}")
 
-        if _implementation_present():
-            return
         offenders: List[str] = []
-        for path in _py_files(AGENT_DIR):
+        for path in _boundary_scan_targets():
             effective = _effective_code(path)
             for token in _SCHEDULER_TOKENS:
                 if token in effective:
@@ -784,6 +1204,8 @@ class ED2SchedulerBoundary(unittest.TestCase):
 
         **这是本节最关键的一条**：一旦「到期即结束」被允许，
         Activity 就退化为 Scheduler 的包装。
+
+        实现存在时对实现文件本身执行该检查（`EG-15` / `EG-16`）。
         """
         contract = _read_text(CONTRACT_DOC) or ""
         self.assertIn("**EP-4**", contract)
@@ -797,11 +1219,8 @@ class ED2SchedulerBoundary(unittest.TestCase):
             "Contract 必须记录该条的理由（否则容易被后人误解）",
         )
 
-        if not _implementation_present():
-            return
-        # 门打开后：不得出现「到点即完成」的实现
         offenders: List[str] = []
-        for path in _py_files(AGENT_DIR):
+        for path in _boundary_scan_targets():
             effective = _effective_code(path)
             for pattern in _AUTO_COMPLETE_PATTERNS:
                 if re.search(pattern, effective):
@@ -851,12 +1270,9 @@ class FD2LegacyOneWay(unittest.TestCase):
             "Contract 必须明确写出禁止 Activity → Legacy",
         )
 
-        if not _implementation_present():
-            return
-        # 门打开后：Activity 实现不得反向写 Legacy 字段
+        # Gate CLOSED 时扫整个 agent/；实现存在时扫实现文件本身（EG-15 / EG-16）
         offenders: List[str] = []
-        targets = [ACTIVITY_MODULE] if ACTIVITY_MODULE.is_file() else _py_files(ACTIVITY_PKG)
-        for path in targets:
+        for path in _boundary_scan_targets():
             effective = _effective_code(path)
             for pattern in _REVERSE_WRITE_PATTERNS:
                 if re.search(pattern, effective):
@@ -1073,42 +1489,35 @@ class HD2UnfrozenNotImplemented(unittest.TestCase):
         """
         `EB-13` / `EF-6`：D-2 不实现 Activity → Event 生产。
 
-        ⚠️ 范围收窄（首次真实运行后修正）：
+        ⚠️ 范围说明（首次真实运行 + 门控评审后确立）：
 
-            原实现在**门关闭时也**扫描 `agent/` 全目录并断言
-            「不得出现 `agent.event` / `EventBus` / `EventStore`」，
-            命中：
-
-                event_adapter.py -> agent.event
-                runtime.py       -> agent.event
-
-            但这两个是 **B5 / C-2 阶段就已存在的合法模块**
-                （AgentRuntime 与 Event Adapter 本来就依赖 `agent.Event`），
+            不在 Gate CLOSED 时扫描整个 `agent/` —— 因为
+            `event_adapter.py` / `runtime.py` 是 **B5 / C-2 已存在的合法模块**
+            （AgentRuntime 与 Event Adapter 本来就依赖 `agent.Event`），
             **与 Activity 无关**。
 
-            `EB-13` 约束的是「Activity 不产生 Event」，
-            **不是**「任何 agent 模块都不得 import agent.event」。
+            `EB-13` 约束的是「**Activity 不产生 Event**」，
+            **不是**「任何 agent 模块都不得 import `agent.event`」。
 
-            改为：
-                ① 门关闭时：只断言仍然**没有 Activity 实现**（不扫描全体）；
-                ② 门打开时：只在 **Activity 实现文件内部** 断言不产生 Event。
+            因此：
+                实现不存在 → 由 T-A 断言「实现不存在」即可，本项不适用；
+                实现存在   → 扫 **Activity 实现文件本身**（`EG-15` / `EG-16`）。
         """
         contract = _read_text(CONTRACT_DOC) or ""
         self.assertIn("**EB-13**", contract)
         self.assertIn("**EF-6**", contract)
 
-        if not _implementation_present():
-            # 门关闭：Activity 实现不存在即已满足「尚无 Activity Event 生产」
+        impl = _activity_impl_files()
+        if not impl:
+            # 实现不存在 → 本项不适用（不是 skip，也不是失败）
             self.assertFalse(
-                ACTIVITY_MODULE.is_file() or ACTIVITY_PKG.is_dir(),
-                "D-2 Architecture Tests 阶段不得存在 Activity 实现",
+                _implementation_present(),
+                "实现不存在时，本项不适用；若存在则由实现级检查覆盖",
             )
             return
 
-        # 门打开：只检查 Activity 实现文件本身
         offenders: List[str] = []
-        targets = [ACTIVITY_MODULE] if ACTIVITY_MODULE.is_file() else _py_files(ACTIVITY_PKG)
-        for path in targets:
+        for path in impl:
             effective = _effective_code(path)
             for token in ("EventBus", "EventStore", "emit_event", "push_event", "enqueue_event"):
                 if _word_in(token, effective):
@@ -1308,8 +1717,11 @@ class KD2EnvironmentCapability(unittest.TestCase):
 
 
 def _print_header() -> None:
+    gate_open = _gate_open()
     present = _implementation_present()
-    gate = "OPEN (implementation authorized)" if present else "CLOSED (implementation not authorized)"
+    gate = "OPEN (implementation authorized)" if gate_open else "CLOSED (implementation not authorized)"
+    presence = "PRESENT" if present else "ABSENT"
+
     print("=" * 74)
     print("V3.1 Phase D-2 · Activity Contract Architecture Boundary Tests")
     print("       （CC-20260930-06，Contract §5E）")
@@ -1319,12 +1731,22 @@ def _print_header() -> None:
     print(f"ext/            : {len(_py_files(EXT_DIR))} py files")
     print(f"d2 preflight    : {'OK' if PREFLIGHT_DOC.is_file() else '--'} -> {PREFLIGHT_DOC}")
     print(f"contract        : {'OK' if CONTRACT_DOC.is_file() else '--'} -> {CONTRACT_DOC}")
-    print(f"activity module : {'PRESENT' if present else 'ABSENT'} -> {ACTIVITY_MODULE}")
     print("-" * 74)
-    print(f"PHASE GATE      : {gate}")
-    print("                  D-2 Architecture Tests 阶段不实现任何 Activity 代码")
+    print(f"GATE STATE      : {gate}")
+    print("                  gate 由 Contract §5E.22 的 D2G-3-SATISFIED 标记决定")
+    print(f"impl presence   : {presence} -> {ACTIVITY_MODULE}")
+    print("                  注：presence ≠ authorization（EG-12 / EG-13）")
     print("-" * 74)
-    print("A: 阶段门（不得提前偷做 Activity / Registry / persistence / scheduler）")
+    targets = _boundary_scan_targets()
+    if present:
+        print(f"boundary scan   : {len(targets)} impl file(s) —— 实现存在，扫实现文件本身")
+        print("                  （绝不因文件存在而跳过边界检查：EG-15）")
+    else:
+        print(f"boundary scan   : {len(targets)} agent file(s) —— 实现不存在，扫整个 agent/")
+    print("-" * 74)
+    print("T-A: Pre-Implementation Gate —— 门关闭时断言「实现不存在」")
+    print("T-B: Post-Implementation Boundary Gate —— 仅在实现存在时生效")
+    print("A: 阶段门（Registry / persistence / scheduler 边界）")
     print("B: Registry 唯一性 / 单一真相 / AgentRuntime 不拥有 / primary=binding")
     print("C: World SOT（无 activities key / 无 persistence / 无隐式持久化）")
     print("D: Motivation（Formal Activity 不进入）/ AgentState（Legacy Label）")
@@ -1336,9 +1758,10 @@ def _print_header() -> None:
     print("J: D-0 / D-1 未被破坏")
     print("K: 环境能力（不伪造结果）")
     print("=" * 74)
-    if not present:
-        print("注意：本阶段门为 CLOSED，A/C/E/H 组断言「实现不存在」。")
-        print("      实现落地后这些断言会自动放宽 —— 不会形成永久失败。")
+    if not gate_open:
+        print("注意：Gate 为 CLOSED，T-A 断言「实现不存在」。")
+        print("      架构侧把门状态块改为 OPEN + marker=true 后，本组自动转为断言「实现存在」。")
+        print("      该结构化键值是唯一授权依据；文件存在本身不构成授权。")
         print("=" * 74)
 
 

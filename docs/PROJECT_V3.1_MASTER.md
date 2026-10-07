@@ -120,10 +120,82 @@
   ```text
   D-2 Preflight                ✅ APPROVED WITH ARCHITECTURAL CORRECTIONS
   D-2 Contract §5E             ✅ APPROVED（CC-20260930-06）
-  D-2 Architecture Tests       ✅ CREATED（docs/test_d2_activity_contract.py）
-  D-2 Tests 首次真实运行        Ran 53 tests … FAILED (failures=3)
+  D-2 Architecture Tests       ✅ 53/53 PASSED（首次真实运行修正后）
+  D-2 门控设计修正              ✅ APPLIED（presence ≠ authorization；EG-12 ～ EG-17）
+  D-2 Gate CLOSED 已恢复        ✅ 实测 GATE STATE = CLOSED（第三轮）
+  D-2 门状态结构化              ✅ APPLIED（D2G-GATE-STATUS / D2G-3-MARKER 单一来源）
+  D-2 Architecture Tests 重跑   ⏳ 待回填（64 项；上次 63/64，余 1 项为本轮修正项）
+  D-2 Gate                     🔒 CLOSED（D2G-GATE-STATUS: CLOSED / marker null）
   D-2 Implementation           🔴 NOT AUTHORIZED
   D-3                          🔴 BLOCKED
+  ```
+
+  **门控 bug（`EV-20`）最终记录 —— 三轮才收敛：**
+
+  ```text
+  第 1 轮：GATE 误报 OPEN → test_ta2 / test_ta4 失败
+      推断「裸标识符被逐行匹配」→ 加否定词表
+      结果：无效（未打中根因）
+
+  第 2 轮：GATE 仍误报 OPEN → test_ta3 / test_ta5 失败
+      读 Contract 原文后定位真实根因：
+          §5E.22「定义」段写了
+              implementation authorized = …肯定式标记 D2G-3-SATISFIED: true
+          这句**说明标记是什么**的文字被当成了**门已开**
+      → 改为结构化键值 + 严格前缀匹配
+      结果：GATE STATE = CLOSED ✅（实测）
+
+  第 3 轮：test_ta2 失败（2 != 1）
+      我的断言把「单一来源」误解为「只能出现一次」；
+      而变更日志中另有一处**取值一致**的引用
+      → 改为**一致性**语义（所有出现必须一致；分歧则 fail-closed）
+      → Contract 变更日志改为非键值描述，真正实现单一来源
+  ```
+
+  **教训（比 bug 更重要）：**
+
+  ```text
+  ① 第一次修正是「基于推断」而非「读取原文」→ 未命中根因，浪费一轮运行
+  ② 「单一来源」≠「只出现一次」；正确语义是「所有出现必须一致」
+  ③ D1G-16（区分「状态构造」与「说明文本」）在 Contract 文档自身也会被违反，
+     且比代码中的 docstring 误报更隐蔽
+  ```
+
+  **门控 bug（`EV-20`）—— 必须记录（两次尝试才对）：**
+
+  ```text
+  现象：Gate 误报为 OPEN，导致 test_ta3 / test_ta5 连锁失败
+
+  第一次尝试（修正 ①）—— 未打中根因：
+      推断「裸标识符 D2G-3-SATISFIED 被逐行匹配」
+      改为要求带值形式 `D2G-3-SATISFIED: true`
+      → 复跑仍然 OPEN
+
+  真实根因（修正 ② 才定位）：
+      Contract §5E.22 的「定义」段写了：
+
+          implementation authorized = 架构侧在 Contract 中写入肯定式标记 D2G-3-SATISFIED: true
+
+      **这句「说明标记是什么」的文字，本身被当成了「门已开」。**
+
+  定性：这是 `D1G-16`（静态边界断言必须区分「代码构造」与「说明文本」）
+        的**教科书级复现** —— 而且发生在 Contract 文档自身，
+        比 D-1 的 docstring 误报更隐蔽。
+
+  最终修正：
+      ① 门状态改为**结构化、可机读、单一来源**：
+             D2G-GATE-STATUS: CLOSED
+             D2G-3-MARKER: null
+      ② `_gate_open()` 改为**严格前缀匹配**（行首即键名 + 紧跟冒号），
+         因此 blockquote 示例 / 行内代码 / 粗体强调**一律不构成开门**
+      ③ 说明文本**不再使用标记的字面赋值形式**（改用 `STATUS = OPEN` 等非解析形式）
+      ④ 回归断言 `test_ta2_gate_status_is_structured_and_parseable`：
+         同时验证结构化、唯一性、自洽性，以及「说明文本不得影响判定」
+
+  教训（比 bug 本身更重要）：
+      第一次修正是**基于推断**而非**读取原文**，因此没打中根因。
+      「先读事实、再下结论」在本次被违反了一次；
+      第二次改为直接读 Contract 原文定位，一次命中。
   ```
 
   **D-2 Tests 首次真实运行结果（必须记录）：**
@@ -150,10 +222,27 @@
   > **注：** `test_g4` 是本轮最有价值的发现 ——
   > 它证明**架构测试确实能反向发现 Contract 的遗漏**，而不是只做实现的单向检查。
 
-  **D-2 Architecture Tests 覆盖（15 项重点验证 + 阶段门）：**
+  **D-2 Architecture Tests 覆盖（15 项重点验证 + T-A/T-B 双门）：**
 
   ```text
-  A  阶段门（不得提前偷做 Activity / Registry / persistence / scheduler）
+  T-A · Pre-Implementation Gate（按 Contract 标记 D2G-3-SATISFIED 判定）
+      ta0 门状态可判定
+      ta1 门控判据必须是 Contract 标记，不是文件存在
+      ta2 门状态与实现存在性一致（CLOSED→不存在；OPEN→存在）
+      ta3 门关闭时不得提前实现
+      ta4 ActivityRegistry / ActivityRuntime 边界
+      ta5 无隐式 persistence        ← 实现存在时同样执行
+      ta6 无 scheduler / tick/timer ← 实现存在时同样执行
+  T-B · Post-Implementation Boundary Gate（仅实现存在时生效）
+      tb0 扫描目标必须覆盖实现文件（EG-16）
+      tb1 实现内无 persistence
+      tb2 实现内无 scheduler
+      tb3 实现内不产生 Event
+      tb4 实现内不反向写 Legacy
+      tb5 实现内不接入 Motivation
+      tb6 实现内不接入 Capability
+      tb7 实现内不 import main / ext_*
+  A  阶段门（Registry / persistence / scheduler 边界）
   B  Registry 唯一性 / 单一真相 / AgentRuntime 不拥有 / primary=binding
   C  World SOT（无 activities key / 无 persistence / 无隐式持久化）
   D  Motivation（Formal Activity 不进入）/ AgentState（Legacy Label）
@@ -165,6 +254,14 @@
   J  D-0 / D-1 未被破坏
   K  环境能力（不伪造结果）
   ```
+
+  **D-2 门控设计修正（架构侧 Review）：**
+
+  | 问题 | 修正 |
+  |------|------|
+  | `_implementation_present()` 把「文件存在」当作 Gate OPEN/CLOSED，**混淆 presence 与 authorization** | 新增 Contract §5E.22 + 标记 `D2G-3-SATISFIED`；测试判据改为 `_gate_open()`（读 Contract），`_implementation_present()` 只回答「文件是否存在」 |
+  | `test_a3` / `test_a4` / `test_a5` / `test_c3` / `test_e1` / `test_e2` / `test_f2` / `test_h3` 在实现存在时 **`return` 跳过** → 未来会漏检 persistence / scheduler | 移除全部跳过路径；新增 `_boundary_scan_targets()`（实现存在时扫**实现文件本身**）；新增 T-B 组 `test_tb0` ～ `test_tb7` **直接断言扫描目标必须覆盖实现文件** |
+  | 新增规则 | `EG-12` ～ `EG-17` |
 
   **D-1 SEAL 结论：**
 
