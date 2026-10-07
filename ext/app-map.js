@@ -252,23 +252,20 @@
       if(!d || !d.ok) return;
       var locs = d.locations || {};
       var pend = d.pending_moves || {};
-      var vacs = d.vacations || {};
       // 同步 mapData 缓存（让地图标记等其他组件也能及时更新）
       mapData.ai_location = locs;
       mapData.ai_pending_moves = pend;
-      mapData.ai_vacation = vacs;
       // 用 API 返回值直接渲染（不依赖缓存）
       var txt = '';
       ais.forEach(function(ai){
         var l = locs[ai];
         if(l === undefined || l === null || l === '') l = '未知';
         if(l === 'main') l = '💬 群聊中（不在具体场所）';
-        var vacMark = vacs[ai] ? ' <span style="color:#ffd166;font-size:11px">🏖️ 跟随中</span>' : '';
-        var line = '🤖 ' + esc(ai) + '：📍 ' + esc(displayRoom(l)) + vacMark;
+        var line = '🤖 ' + esc(ai) + '：📍 ' + esc(l);
         var p = pend[ai];
         if(p && p.room){
           var left = Math.max(0, Math.ceil((p.at_ts - Date.now()/1000)/60));
-          line += '　🚶 正赶往 ' + esc(displayRoom(p.room)) + (left > 0 ? '（约 ' + left + ' 分钟）' : '');
+          line += '　🚶 正赶往 ' + esc(p.room) + (left > 0 ? '（约 ' + left + ' 分钟）' : '');
         }
         line += ' <span style="color:#7fd0ff;cursor:pointer;font-size:12px" onclick="summonAIHere(currentRoom)">📣召唤</span>';
         txt += '<div style="padding:4px 0">' + line + '</div>';
@@ -627,7 +624,7 @@ function updateGroupStatus(isVac, isStay) {
         var inner='';
         Object.keys(rooms).forEach(function(r){
           var its=rooms[r]||[]; if(!its.length) return;
-          inner+='<div style="margin-bottom:6px;font-size:12px;color:#9fd8ff">📍 '+esc2(displayRoom(r))+'：<span style="font-size:14px;color:#ffd166">'+its.map(function(i){return i.icon;}).join(' ')+'</span></div>';
+          inner+='<div style="margin-bottom:6px;font-size:12px;color:#9fd8ff">📍 '+esc2(r)+'：<span style="font-size:14px;color:#ffd166">'+its.map(function(i){return i.icon;}).join(' ')+'</span></div>';
         });
         box.innerHTML+='<div>'+inner+'</div><div class="tip">这些装饰摆在家里，进房间格下方就能看到</div>';
         el.appendChild(box);
@@ -971,15 +968,12 @@ function updateGroupStatus(isVac, isStay) {
   };
   function setupHeaderSummon(){
     var btn=document.getElementById('privBtn'); if(!btn) return;
-    if(currentRoom==='main'){
-      btn.style.display='none';
-      btn.onclick=function(){};
-      return;
-    }
-    btn.style.display='';
-    if(btn.getAttribute('data-summon')) return;
-    btn.setAttribute('data-summon','1'); btn.innerHTML='📣'; btn.title='召唤我的 AI';
-    btn.onclick=function(){ summonAIHere(currentRoom); };
+    // 右上角已改为语音朗读开关（#voiceBtn）。
+    // 这里不再把 #privBtn 改造成 📣 召唤，避免每 2 秒轮询把语音按钮覆盖掉。
+    // 召唤仍可从「私人空间」页内按钮 / 「我的」页 📣 召唤AI 使用。
+    if(btn.getAttribute('data-summon-disabled')==='1') return;
+    btn.setAttribute('data-summon-disabled','1');
+    btn.style.display='none';
   }
   window.togglePanel=function(id){ var d=document.getElementById(id); if(!d) return; d.style.display=(d.style.display==='none'?'block':'none'); };
   window.FEAT_CN = {work:'工作', shop:'购物', fun:'娱乐', date:'约会', food:'餐饮', medical:'医疗', culture:'文化', service:'服务', transport:'交通', special:'特殊'};
@@ -1159,7 +1153,7 @@ function updateGroupStatus(isVac, isStay) {
           var hall = r.indexOf('·会客厅')>=0;
           var granted = canEnterRoom(r);
           var stateCls = hall?'hall':(granted?'open':'locked');
-          var lockTxt = hall?'<span class="r-hall">🏛️ Hall</span>':(granted?'<span class="r-hall">✅ 已开放</span>':'<span class="r-lock">🔒 私密·需申请</span>');
+          var lockTxt = hall?'<span class="r-hall">🛋️ 公共会客区</span>':(granted?'<span class="r-hall">✅ 已开放</span>':'<span class="r-lock">🔒 私密·需申请</span>');
           var rdesc = (mapData.rooms && mapData.rooms[r] && mapData.rooms[r].description)||'';
           
           // 获取房间背景图
@@ -1175,7 +1169,7 @@ function updateGroupStatus(isVac, isStay) {
           
           html += '<div style="position:relative; z-index:2;">';
           html += '<span class="r-emoji">'+(hall?'🛋️':'🚪')+'</span>';
-          html += '<span class="r-name">'+esc(displayRoom(r))+'</span>'+lockTxt;
+          html += '<span class="r-name">'+esc(r)+'</span>'+lockTxt;
           if(rdesc) html += '<span style="font-size:10px;color:#6d8bb0;display:block;margin-top:2px">'+esc(rdesc.slice(0,12))+(rdesc.length>12?'…':'')+'</span>';
           html += '</div>';
           html += '</div>';

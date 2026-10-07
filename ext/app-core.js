@@ -101,6 +101,16 @@
       return;
     }
 
+    // ⚠️ 注意：'review'（🎬 副本）必须在这里先接住。
+    // 下面那行的 else 兜底是 'stories'，所以任何没被显式处理的 tab
+    // 都会渲染成「剧情」——这就是之前点副本 tab 却显示剧情内容的原因。
+    if(memoryTab==='review'){
+      el.innerHTML='<div class="tip">加载副本中…</div>';
+      if(typeof window.loadInstanceReviews==='function') window.loadInstanceReviews(el);
+      else el.innerHTML='<div class="tip">副本回顾模块未加载（请刷新页面）</div>';
+      return;
+    }
+
     var key=memoryTab==='note'?'notes':(memoryTab==='diary'?'diaries':'stories');
     var list=memoryData[key]||[];
     if(!list.length){ el.innerHTML='<div class="tip">这个分类还没有内容（显示你和你的 AI 写下的）</div>'; return; }
@@ -122,7 +132,7 @@
         document.getElementById('bellMask').querySelector('h3').textContent='🔔 通知';
         if(!items.length){ el.innerHTML='<div class="tip">还没有新动态～有人来你家 / 留纸条 / 申请权限 / AI 出门时会提醒你。</div>'; }
         else {
-          var ic={visit:'🚶',note:'💌',diary:'📖',request:'📨',ai_note:'💌',ai_diary:'📖',ai_story:'🎬',ai_move:'📍',ai_date:'💞'};
+          var ic={visit:'🚶',note:'💌',diary:'📖',request:'📨',ai_note:'💌',ai_diary:'📖',ai_story:'🎬',ai_move:'📍'};
           items.forEach(function(n){
             var icon=ic[n.type]||'🔔';
             var act='';
@@ -142,86 +152,31 @@
   };
 
   window.openNotifyRoom = function(room, tab){
-    if(!room) return;
-
-    try{
-        // 先根据 room 找到所属建筑
-        var bid = null;
-        for(var k in (mapData.buildings || {})){
-            var b = mapData.buildings[k];
-            if((b.rooms || []).indexOf(room) >= 0){
-                bid = k;
-                break;
-            }
-        }
-
-        // 如果能找到建筑，先建立正确的 currentBuilding / privBuildingId
-        if(bid){
-            currentBuilding = bid;
-            privBuildingId = bid;
-
-            // 记录当前建筑，方便返回
-            try{ window._lastBuilding = bid; }catch(e){}
-
-            // 建筑页本身不强制打开，通知最终目标仍然是具体 room
-        }
-
-        // 使用正常的房间切换流程
-        if(typeof switchRoom === 'function'){
-            switchRoom(room, localStorage.getItem('gc_pwd_'+room) || '');
-        }else{
-            currentRoom = room;
-            localStorage.setItem('gc_room', room);
-        }
-
-        // 进入聊天视图
-        if(typeof showChat === 'function'){
-            showChat();
-        }
-
-        // 等房间状态完成后打开对应内容
-        setTimeout(function(){
-
-            if(tab === 'story'){
-                // 剧情通知：直接打开当前房间的剧情簿
-                if(typeof loadStoryModal === 'function'){
-                    loadStoryModal();
-                }
-                return;
-            }
-
-            if(tab === 'note' || tab === 'diary'){
-                // 纸条 / 随笔：打开私人空间对应标签
-                if(typeof togglePrivate === 'function'){
-                    privTab = tab;
-                    togglePrivate();
-                }
-                return;
-            }
-
-            // 普通聊天通知
-            if(tab === 'chat'){
-                if(typeof showChat === 'function') showChat();
-                return;
-            }
-
-            // 其他情况保留原来的轨迹跳转
-            if(typeof goToTrailSpot === 'function'){
-                goToTrailSpot(room, tab);
-            }
-
-        }, 500);
-
-    }catch(e){
-        console.warn('[notify] openNotifyRoom error', e);
-        try{
-            if(typeof goToTrailSpot === 'function'){
-                goToTrailSpot(room, tab);
-            }
-        }catch(e2){}
-    }
-};
-
+      if(!room) return;
+      // 如果页面有 enterRoom 函数（切换房间），优先使用
+      if(typeof window.enterRoom === 'function'){
+          window.enterRoom(room, function(){
+              // 进入房间后，根据 tab 打开对应面板
+              if(tab === 'story'){
+                  setTimeout(function(){
+                      if(typeof loadStoryModal === 'function') loadStoryModal();
+                  }, 300);
+              } else if(tab === 'note' || tab === 'diary'){
+                  setTimeout(function(){
+                      if(typeof openPrivPanel === 'function') openPrivPanel(tab);
+                  }, 300);
+              } else if(tab === 'chat'){
+                  if(typeof showChat === 'function') showChat();
+              } else {
+                  // 其他情况 fallback
+                  goToTrailSpot(room, tab);
+              }
+          });
+      } else {
+          // 如果没有 enterRoom，用原来的方式（虽然可能不支持 story）
+          goToTrailSpot(room, tab);
+      }
+  };
   window.openNotifyBid=function(bid){ if(bid) openBuilding(bid); };
 
   var __origRenderMarkers = renderMarkers;

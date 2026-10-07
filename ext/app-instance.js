@@ -1,4 +1,4 @@
-// app-instance.js - 副本系统 v14（气泡操作键复用住宅 + 朗读键移入 meta + 语音开关即时反馈 + 暂离/激活状态事务）
+// app-instance.js - 副本系统 v15（恢复浏览器语音异步加载重试 + 气泡操作键 + 全屏聊天 UI + 状态事务）
 (function() {
     'use strict';
     console.log('[ext] app-instance.js v9 加载...');
@@ -122,9 +122,25 @@
             return !!(v && v.length > 0);
         } catch (e) { return false; }
     }
-    // 语音总开关是否可点：浏览器 TTS 可用，或退路（服务器 TTS）可用
+    // 主动催一下语音引擎（安卓 WebView 必须这样做才会触发 onvoiceschanged）
+    let voiceKickStarted = false;
+    function ensureBrowserVoices() {
+        if (!voiceSupported()) return;
+        try {
+            window.speechSynthesis.getVoices();
+            if (!voiceKickStarted) {
+                voiceKickStarted = true;
+                window.speechSynthesis.onvoiceschanged = function() {
+                    // 引擎就绪后刷新按钮状态
+                    updateVoiceToggleUI();
+                };
+            }
+        } catch (e) {}
+    }
+    // 语音总开关是否可点：浏览器语音可用，或退路（服务器 TTS）可用
     function voiceRouteAvailable() {
-        return browserTTSViable() || !!(window.userName || currentUser);
+        if (voiceSupported()) return true;
+        return !!(window.userName || currentUser);
     }
 
     window.isBrowserTTSAvailable = browserTTSViable;
@@ -173,22 +189,45 @@
     //      退回服务器 TTS（复用已有 /api/tts，不新建第二套 TTS 系统）。
     let instanceAudio = null;
     let ttsWarned = false;
+    let pendingSpeakText = '';   // voices 异步加载时，等待引擎就绪后再读的文本
 
     function speakText(text) {
         if (!text) return;
-        if (browserTTSViable()) {
-            try {
-                window.speechSynthesis.cancel();
-                const u = new SpeechSynthesisUtterance(text);
-                u.lang = 'zh-CN';
-                u.rate = 0.9;
-                window.speechSynthesis.speak(u);
+        if (!voiceSupported()) { speakViaServer(text); return; }
+        try {
+            const synth = window.speechSynthesis;
+            const voices = synth.getVoices();
+            if (!voices || voices.length === 0) {
+                // ⚠️ 关键：安卓/Chrome 的 voices 是异步加载的，第一次取常常是空数组。
+                // 这里绝不能直接 return（那就是"点了没声音"的根因）。
+                // 先催一次加载，等 onvoiceschanged 后再把这句话读出来。
+                ensureBrowserVoices();
+                if (!pendingSpeakText) {
+                    pendingSpeakText = text;
+                    let done = false;
+                    const flush = function() {
+                        if (done) return;
+                        done = true;
+                        const t = pendingSpeakText;
+                        pendingSpeakText = '';
+                        try { synth.onvoiceschanged = null; } catch (e) {}
+                        if (t) speakText(t);
+                    };
+                    try { synth.onvoiceschanged = flush; } catch (e) {}
+                    // 兜底：万一某些内核不触发事件，也能读出来
+                    setTimeout(flush, 800);
+                }
                 return;
-            } catch (e) {
-                console.warn('[instance] 浏览器朗读失败，改走服务器 TTS:', e);
             }
+            synth.cancel();
+            const u = new SpeechSynthesisUtterance(text);
+            u.lang = 'zh-CN';
+            u.rate = 0.9;
+            synth.speak(u);
+        } catch (e) {
+            console.warn('[instance] 浏览器朗读失败，改走服务器 TTS:', e);
+            speakViaServer(text);
         }
-        speakViaServer(text);
     }
 
     // 服务器 TTS：复用 ext_mem.py 的 /api/tts（需要一个填了 Key 的账号）
@@ -1998,7 +2037,7 @@
         injectInstanceChatStyles();   // 让 .inst-* 样式一开始就可用
         modifyMapBar();
         createOverlay();
-        console.log('[ext] 副本插件 v14 加载完成（气泡 🔄/🗑️ 复用住宅 + 朗读键在 meta + 语音即时反馈）');
+        console.log('[ext] 副本插件 v15 加载完成（语音异步加载重试 + 气泡 🔄/🗑️ + 全屏聊天 UI）');
     }
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
