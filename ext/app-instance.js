@@ -114,6 +114,20 @@
     function voiceSupported() {
         return typeof window !== 'undefined' && 'speechSynthesis' in window;
     }
+    // 浏览器语音是否真的可用：安卓 WebView 常见「有 speechSynthesis 但 voices 为空」，等于哑的
+    function browserTTSViable() {
+        if (!voiceSupported()) return false;
+        try {
+            const v = window.speechSynthesis.getVoices();
+            return !!(v && v.length > 0);
+        } catch (e) { return false; }
+    }
+    // 语音总开关是否可点：浏览器 TTS 可用，或退路（服务器 TTS）可用
+    function voiceRouteAvailable() {
+        return browserTTSViable() || !!(window.userName || currentUser);
+    }
+
+    window.isBrowserTTSAvailable = browserTTSViable;
     window.getAutoVoiceEnabled = function() { return autoVoiceEnabled; };
     window.setAutoVoiceEnabled = function(enabled) {
         autoVoiceEnabled = !!enabled;
@@ -121,18 +135,19 @@
         return autoVoiceEnabled;
     };
     window.toggleAutoVoice = function() {
-        if (!voiceSupported()) {
-            toast('当前浏览器不支持语音朗读（需要 speechSynthesis）');
+        if (!voiceRouteAvailable()) {
+            toast('当前环境不支持语音朗读');
             return false;
         }
         const next = !autoVoiceEnabled;
         window.setAutoVoiceEnabled(next);
         if (next) {
             // 立刻读一小段做「开启确认」，否则点了没声音会以为是坏的
-            speakText('语音已开启');
+            window.playMessageVoice('语音已开启');
             toast('🔊 已开启：AI 每次回复后会自动朗读');
         } else {
-            try { window.speechSynthesis.cancel(); } catch (e) {}
+            try { if (voiceSupported()) window.speechSynthesis.cancel(); } catch (e) {}
+            try { if (instanceAudio) { instanceAudio.pause(); instanceAudio = null; } } catch (e) {}
             toast('🔇 已关闭自动朗读');
         }
         return next;
@@ -141,40 +156,74 @@
     function updateVoiceToggleUI() {
         const btn = document.getElementById('instanceVoiceBtn');
         if (!btn) return;
-        const ok = voiceSupported();
-        btn.disabled = !ok;
-        btn.classList.toggle('tts-on', ok && autoVoiceEnabled);
-        btn.textContent = (ok && autoVoiceEnabled) ? '🔊 语音' : '🔇 语音';
-        btn.title = ok
-            ? (autoVoiceEnabled ? '自动朗读 AI 回复：开（点击关闭）' : '自动朗读 AI 回复：关（点击开启）')
-            : '当前浏览器不支持语音朗读';
+        const browserOK = browserTTSViable();
+        const usable = voiceRouteAvailable();
+        btn.disabled = !usable;
+        btn.classList.toggle('tts-on', usable && autoVoiceEnabled);
+        btn.textContent = (usable && autoVoiceEnabled) ? '🔊 语音' : '🔇 语音';
+        const route = browserOK ? '浏览器语音' : '服务器 TTS';
+        btn.title = usable
+            ? (autoVoiceEnabled ? '自动朗读 AI 回复：开（点击关闭）· 当前走 ' + route
+                                : '自动朗读 AI 回复：关（点击开启）· 当前走 ' + route)
+            : '当前环境不支持语音朗读';
     }
 
     // 朗读单条消息（住宅手动播放 / 副本自动+手动都走这里）
+    // 路线：优先浏览器 speechSynthesis；安卓 WebView voices 为空时
+    //      退回服务器 TTS（复用已有 /api/tts，不新建第二套 TTS 系统）。
+    let instanceAudio = null;
+    let ttsWarned = false;
+
     function speakText(text) {
-        if (!voiceSupported() || !text) return;
-        try {
-            const voices = window.speechSynthesis.getVoices();
-            if (voices.length === 0) {
-                window.speechSynthesis.onvoiceschanged = function() {
-                    window.speechSynthesis.onvoiceschanged = null;
-                    setTimeout(function() { speakText(text); }, 120);
-                };
-                window.speechSynthesis.getVoices();
+        if (!text) return;
+        if (browserTTSViable()) {
+            try {
+                window.speechSynthesis.cancel();
+                const u = new SpeechSynthesisUtterance(text);
+                u.lang = 'zh-CN';
+                u.rate = 0.9;
+                window.speechSynthesis.speak(u);
                 return;
+            } catch (e) {
+                console.warn('[instance] 浏览器朗读失败，改走服务器 TTS:', e);
             }
-            window.speechSynthesis.cancel();
-            const u = new SpeechSynthesisUtterance(text);
-            u.lang = 'zh-CN';
-            u.rate = 0.9;
-            window.speechSynthesis.speak(u);
-        } catch (e) {
-            console.warn('[instance] 朗读失败:', e);
         }
+        speakViaServer(text);
+    }
+
+    // 服务器 TTS：复用 ext_mem.py 的 /api/tts（需要一个填了 Key 的账号）
+    function speakViaServer(text) {
+        const who = window.userName || currentUser || localStorage.getItem('gc_name') || '';
+        if (!who) return;
+        fetch('/api/tts?user=' + encodeURIComponent(who) + '&text=' + encodeURIComponent(String(text).slice(0, 500)))
+            .then(r => {
+                if (!r.ok) {
+                    return r.json().then(d => { throw new Error(d.msg || d.detail || ('HTTP ' + r.status)); });
+                }
+                return r.blob();
+            })
+            .then(blob => {
+                if (!blob || !blob.size) throw new Error('空音频');
+                try { if (instanceAudio) instanceAudio.pause(); } catch (e) {}
+                const url = URL.createObjectURL(blob);
+                instanceAudio = new Audio(url);
+                instanceAudio.onended = function() { URL.revokeObjectURL(url); };
+                instanceAudio.play().catch(e => {
+                    console.warn('[instance] 服务器 TTS 播放被拦截:', e);
+                    toast('⚠️ 语音被浏览器拦截，请再点一次朗读');
+                });
+            })
+            .catch(e => {
+                console.warn('[instance] 服务器 TTS 失败:', e);
+                if (!ttsWarned) {
+                    ttsWarned = true;
+                    toast('❌ 语音朗读不可用：' + e.message + '（需在「设置→模型与服务」填好 API Key）');
+                }
+            });
     }
 
     window.playMessageVoice = function(msgOrText) {
-        if (!voiceSupported()) { toast('当前浏览器不支持语音朗读'); return; }
+        if (!voiceRouteAvailable()) { toast('当前环境不支持语音朗读'); return; }
         if (!msgOrText) return;
         const text = (typeof msgOrText === 'string')
             ? msgOrText
@@ -185,7 +234,7 @@
 
     // AI 回复写入后，若开启了自动朗读则朗读最新一条
     function maybeAutoSpeak(history) {
-        if (!autoVoiceEnabled || !voiceSupported()) return;
+        if (!autoVoiceEnabled || !voiceRouteAvailable()) return;
         const hist = history || [];
         for (let i = hist.length - 1; i >= 0; i--) {
             if (isAssistantMsg(hist[i])) {
