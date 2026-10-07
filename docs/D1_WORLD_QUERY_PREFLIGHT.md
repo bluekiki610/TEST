@@ -11,15 +11,36 @@
 
 ---
 
-## 0. 架构侧裁决记录（APPROVED WITH CORRECTIONS）
+## 0. 架构侧裁决记录（CONTRACT APPROVED WITH TEST GATE CORRECTION）
 
-**裁决结论：**
+**裁决结论（最终）：**
 
-> **D-1 Preflight：条件通过（APPROVED WITH CORRECTIONS）**
-> **允许进入 D-1 Contract Change，但必须先把下面 5 个架构点修正/澄清。**
-> **仍然不写实现代码。**
+> **D-1 Architecture Review：CONTRACT APPROVED WITH TEST GATE CORRECTION**
+>
+> * `CC-20260930-05` / §5D 架构语义**通过**
+> * D-1 Preflight 五项修正**全部接受**
+> * **不修改生产代码**
+> * **不实现 `world_query.py`，直到 Pre-Implementation Gate 通过**
 
-### 0.1 架构侧认可的部分（约 85% 直接接受）
+**第二轮追加裁决（本文件已落实）：**
+
+| # | 裁决 | 落点 |
+|---|------|------|
+| **⑥** | 修正测试阶段门生命周期：**T-A = Pre-Implementation Gate only；T-B = Post-Implementation Boundary Gate**；不允许实现后 T-A 永久失败 | §12.1 + `D1G-7` ～ `D1G-10` + 测试 T-A/T-B 重构 |
+| **⑦** | 不推翻 T-B 严格只读，但把「禁止 local append/sort/pop」定位为 **D-1 静态验证策略**，**非永久 Python 架构原则** | §12.2 + `D1G-11` ～ `D1G-15` |
+| **⑧** | 确认 **`FORBIDDEN` 属 visibility / authorization outcome，不应与 `UNKNOWN` 等价** | §12.3 + `WQ-113` ～ `WQ-118` |
+
+**运行顺序要求（架构侧）：**
+
+```text
+此后先运行：
+    ① D-0 Architecture Tests
+    ② D-1 Pre-Implementation Architecture Gate
+
+在实际测试环境可运行并通过之前，不得实现 world_query.py。
+```
+
+### 0.1 第一轮裁决：认可的部分（约 85% 直接接受）
 
 - 没有趁机实现 World Query
 - 没有碰 `ext_ai.py` / `ext_world.py`
@@ -1400,15 +1421,21 @@ D-1 Implementation   ⛔ 直到测试实际通过为止
 ```text
 D-1 Preflight（本文件）
     ↓
-架构审核（APPROVED WITH CORRECTIONS）   ✅ 已完成
+架构裁决（APPROVED WITH CORRECTIONS）   ✅ 已完成
     ↓
-D-1 Contract Change（新增 Contract §5D，冻结 Query 边界与接口形状）
+D-1 Contract Change（Contract §5D）     ✅ 已完成（APPROVED）
     ↓
-D-1 Architecture Tests（docs/test_d1_world_query.py）
+D-1 Architecture Tests（docs/test_d1_world_query.py）  ✅ 已创建
     ↓
-D-1 Tests 运行（⚠️ 需要可执行环境）
+【运行顺序要求（架构侧裁决）】
+    ① D-0 Architecture Tests
+    ② D-1 Pre-Implementation Architecture Gate（T-A）
     ↓
-D-1 Implementation（新增只读 Query 模块）   ⛔ 测试实际通过前禁止
+（两者在可执行环境实际运行并通过）
+    ↓
+D-1 Implementation（新增只读 Query 模块）   ⛔ 在此之前禁止
+    ↓
+D-1 Post-Implementation Boundary Gate（T-B）
     ↓
 D-1 验收
     ↓
@@ -1494,34 +1521,112 @@ Preflight → 直接大量写代码
 
 ```text
 Status:
-    APPROVED WITH CORRECTIONS
-    （架构侧条件通过；5 项修正已落入本文件）
+    APPROVED
+    （架构侧：CONTRACT APPROVED WITH TEST GATE CORRECTION）
+
+Review History:
+    Round 1  APPROVED WITH CORRECTIONS（5 项修正）
+    Round 2  CONTRACT APPROVED WITH TEST GATE CORRECTION
+             - T-A = Pre-Implementation Gate only
+             - T-B = Post-Implementation Boundary Gate
+             - 严格只读定位为 D-1 静态验证策略
+             - FORBIDDEN 属 visibility outcome，不得与 UNKNOWN 等价
 
 Corrections Applied:
-    ① D1-DEC-1  World Fact 定义扩宽（FACT / DERIVED / CACHE / HISTORY 四分类）
-    ② D1-DEC-3  「只读数据视图」措辞修正 + 禁止保存引用 / 禁止暴露内部可变引用
-    ③ D1-DEC-5  新增高频调用禁止条款（WQ-81 ～ WQ-84）
-    ④ §5.2      Q-U3 改为 DERIVED 有限支持（WQ-85 ～ WQ-89）
-    ⑤ D1-DEC-9  requester / visibility 最小边界（WQ-94 ～ WQ-99）
-    额外  §5.4     反模式警示：禁止把 Query 做成「万能世界 API」（WQ-90 ～ WQ-93）
+    Round 1:
+        ① D1-DEC-1  World Fact 定义扩宽（FACT / DERIVED / CACHE / HISTORY 四分类）
+        ② D1-DEC-3  「只读数据视图」措辞修正 + 禁止保存引用 / 禁止暴露内部可变引用
+        ③ D1-DEC-5  新增高频调用禁止条款（WQ-81 ～ WQ-84）
+        ④ §5.2      Q-U3 改为 DERIVED 有限支持（WQ-85 ～ WQ-89）
+        ⑤ D1-DEC-9  requester / visibility 最小边界（WQ-94 ～ WQ-99）
+        额外  §5.4      反模式：禁止把 Query 做成「万能世界 API」（WQ-90 ～ WQ-93）
+    Round 2:
+        ⑥ §12.1     阶段门生命周期分离（D1G-7 ～ D1G-10）
+        ⑦ §12.2     严格只读定位为 D-1 静态验证策略（D1G-11 ～ D1G-15）
+        ⑧ §12.3     FORBIDDEN 与五态语义分离（WQ-113 ～ WQ-118）
 
 Rule Count:
-    WQ-5 ～ WQ-104（含 D-0 既有 WQ-1 ～ WQ-4）
+    WQ-1 ～ WQ-118（含 D-0 既有 WQ-1 ～ WQ-4）
+    D1G-1 ～ D1G-15
 
 Implementation:
-    NOT AUTHORIZED（禁止实现 world_query.py）
+    BLOCKED
+    （必须先运行 D-0 Architecture Tests 与 D-1 Pre-Implementation Gate 并通过）
 
 Next:
-    D-1 Contract Change（新增 Contract §5D，只冻结 Query 正式接口语义）
+    ① 在可执行环境运行 D-0 Architecture Tests
+    ② 在可执行环境运行 D-1 Pre-Implementation Architecture Gate（T-A）
+    ③ 两者通过后，才可授权 D-1 Implementation
 
-After Contract:
-    D-1 Architecture Tests（docs/test_d1_world_query.py）
-
-After Tests 实际通过:
-    D-1 Implementation
+After Implementation:
+    D-1 Post-Implementation Boundary Gate（T-B）
 ```
 
-### 12.1 D-0 测试仍然 NOT RUN 的处置
+### 12.1 阶段门生命周期（架构侧 TEST GATE CORRECTION）
+
+**裁决：**
+
+> **T-A = Pre-Implementation Gate only**
+> **T-B = Post-Implementation Boundary Gate**
+> **不允许未来实现 `world_query.py` 后导致 T-A 永久失败而无法形成正式通过状态。**
+
+**因此两个阶段门必须分开定义、分开生效：**
+
+| 门 | 生效时机 | 断言内容 | 实现落地后 |
+|----|---------|---------|-----------|
+| **T-A · Pre-Implementation Gate** | 实现之前（门关闭） | 断言「实现**不存在**」→ 防提前偷做 | 转为断言「实现**确实存在**」→ **自动通过** |
+| **T-B · Post-Implementation Boundary Gate** | 仅实现存在时 | 断言只读 / 无副作用 / 无 LLM / 无 Event / 无 Activity / 无 AgentState / 五态 / FORBIDDEN / UNSUPPORTED | 全部生效 |
+
+**门状态必须可审计：** 由 Contract §5D.16 的显式标记（`D1G-3-SATISFIED`）决定，**不由 DS 自行判断**。
+
+**关键约束：**
+
+```text
+禁止把 T-A 实现为「永久断言不存在」。
+任何阶段门都不得形成「无法通过」的终态。
+```
+
+### 12.2 D-1 静态验证策略的定位（架构侧裁决）
+
+> **不需要推翻 T-B 的严格只读策略；但必须明确其定位。**
+
+| 项 | 定位 |
+|----|------|
+| 「禁止 **local** `append` / `sort` / `pop`」 | **D-1 静态验证策略（D-1 Static Verification Policy）** |
+| 是否永久 Python 架构原则 | **不是**；不得被引用为「Python 不允许原地修改」之类的架构主张 |
+| 存在理由 | Python 无法语言级保证只读 → D-1 用「禁止一切写入模式」换取「**静态可验证的只读性**」 |
+| 未来可否放宽 | **可以**（若引入不可变视图 / 代理对象 / 类型系统），但必须仍满足「静态可验证」 |
+| 适用范围 | 仅 **World Query 模块本身**；不适用于 Query 之外的现有代码 |
+
+### 12.3 FORBIDDEN 与五态的语义关系（架构侧裁决）
+
+> **裁决：`FORBIDDEN` 属 visibility / authorization outcome，不应与 `UNKNOWN` 等价。**
+
+```text
+五态核心（status）= 关于「世界 / schema 是否可回答」的认识论结论
+                    FOUND / ABSENT / UNKNOWN / UNSUPPORTED / AMBIGUOUS
+
+FORBIDDEN        = 关于「这个 requester 是否被允许知道」的授权结论
+```
+
+**两者正交，不可互换：**
+
+```text
+FORBIDDEN ≠ UNKNOWN
+FORBIDDEN ≠ ABSENT
+FORBIDDEN ∉ 五态核心
+```
+
+**为什么必须分开：**
+
+- **产品理由：** `UNKNOWN` 会让 AI 认为「可以继续观察 / 询问」并反复试探；
+  `FORBIDDEN` 表示「这条信息不在你的可见范围」，AI 不应把它当作认知缺口去追求。
+- **推论理由：** 折叠为 `ABSENT` 会让 AI 误认为事实不存在；
+  折叠为 `UNKNOWN` 会让 AI 误认为自己只是没观察到。两者都会污染后续 Motivation / Intent / Decision。
+
+**落点：** Contract §5D.6.1 + `WQ-113` ～ `WQ-118`。
+
+### 12.4 D-0 测试仍然 NOT RUN 的处置
 
 ```text
 TEST NOT RUN
@@ -1533,7 +1638,8 @@ Reason: environment execution unavailable
 **架构侧处置（R-5）：**
 
 > **不阻塞 D-1 Contract。**
-> 但 **进入 D-1 Implementation 之前，必须找到能运行 Python / Git 的环境，把 D-0 + D-1 架构测试实际跑起来。**
+> 但 **进入 D-1 Implementation 之前，必须找到能运行 Python / Git 的环境**，
+> 先运行 **D-0 Architecture Tests**，再运行 **D-1 Pre-Implementation Architecture Gate**。
 > **不能长期依赖「代码看起来正确」。**
 
 **End of D-1 World Query Preflight**

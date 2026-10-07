@@ -104,11 +104,11 @@
   | D-0 Contract Change | ✅ **ACCEPTED**（CC-20260930-04，`docs/V3.1_ARCHITECTURE_CONTRACT.md` 新增 §5C） |
   | D-0 Architecture Tests | ⚠️ 已创建（`docs/test_d0_world_activity_capability.py`），**状态 NOT RUN** —— 工作区 Shell / Python / Git 均不可执行，**不得伪造测试结果** |
   | **D-0 Seal** | ✅ **SEALED / APPROVED**（D-0 Architecture Review 结果：APPROVED） |
-  | **D-1 Preflight** | ✅ **APPROVED WITH CORRECTIONS**（`docs/D1_WORLD_QUERY_PREFLIGHT.md`：D1-DEC-1 ～ D1-DEC-15，WQ-5 ～ WQ-104；5 项修正已落实） |
-  | D-1 Contract Change | ✅ **已完成**（CC-20260930-05，`docs/V3.1_ARCHITECTURE_CONTRACT.md` 新增 §5D，不重写 A/B/C 与 §5C） |
-  | D-1 Architecture Tests | ⚠️ **已创建 / NOT RUN**（`docs/test_d1_world_query.py`） |
-  | D-1 Implementation | ⛔ **禁止开始**（阶段门 `D1G-3` / `D1G-4`：架构测试实际通过前禁止实现 `world_query.py`） |
-  | D-2 ～ D-6 | ⛔ 未开始 |
+  | **D-1 Preflight** | ✅ **APPROVED WITH CORRECTIONS**（`docs/D1_WORLD_QUERY_PREFLIGHT.md`：D1-DEC-1 ～ D1-DEC-15；第一轮 5 项修正 + 第二轮门控修正均已落实） |
+  | D-1 Contract Change | ✅ **APPROVED**（CC-20260930-05，`docs/V3.1_ARCHITECTURE_CONTRACT.md` §5D；含 TEST GATE CORRECTION 修订） |
+  | D-1 Architecture Tests | ✅ **APPROVED WITH GATE CORRECTION**（`docs/test_d1_world_query.py`：T-A = Pre-Implementation Gate；T-B = Post-Implementation Boundary Gate）<br>⚠️ **NOT RUN** |
+  | **D-1 Implementation** | ⛔ **BLOCKED**（必须先运行 D-0 Tests + D-1 Pre-Implementation Gate 并通过） |
+  | D-2 | ⛔ **BLOCKED** |
 
   **D-0 冻结基线（SEALED）：**
 
@@ -125,18 +125,46 @@
   > 目标：让 Agent Core 能通过统一、只读、无 LLM、无行为决策、无 World mutation 的接口询问当前世界事实。
   > **D-1 不实现 Activity / Capability / Movement / World Command；不改 `ext_ai.py` / `ext_world.py` / `ext_room.py` 旧行为；不修 Memory；不进入 D-2。**
 
-  **D-1 阶段门（Contract §5D.16，`D1G-1` ～ `D1G-6`）：**
+  **D-1 阶段门（Contract §5D.16，`D1G-1` ～ `D1G-15`）：**
 
   ```text
-  D-1 Preflight                ✅ APPROVED WITH CORRECTIONS
-  D-1 Contract Change（§5D）    ✅ 已完成（待架构审核）
-  D-1 Architecture Tests       ✅ 已创建（docs/test_d1_world_query.py）
+  D-1 Preflight                ✅ APPROVED（含两轮修正）
+  D-1 Contract Change（§5D）    ✅ APPROVED（含 TEST GATE CORRECTION）
+  D-1 Architecture Tests       ✅ APPROVED WITH GATE CORRECTION
+  【运行顺序（架构侧要求）】
+      ① D-0 Architecture Tests
+      ② D-1 Pre-Implementation Architecture Gate（T-A）
   D-1 Tests 实际运行            ⚠️ 需要可执行环境（当前不可用）
-  D-1 Implementation           ⛔ 禁止开始（直到架构测试实际通过）
-  D-2                          ⛔ 禁止进入
+  D-1 Implementation           ⛔ BLOCKED（直到 ①② 实际通过）
+  D-1 Post-Implementation Gate（T-B）  ⏸ 实现后生效
+  D-2                          ⛔ BLOCKED
   ```
 
-  **D-1 的 5 项架构侧修正（已落实）：**
+  **阶段门生命周期（第二轮裁决，已落实）：**
+
+  | 门 | 生效时机 | 断言 | 实现落地后 |
+  |----|---------|------|-----------|
+  | **T-A · Pre-Implementation Gate** | 实现之前 | 断言实现**不存在**（防提前偷做） | 转为断言实现**存在** → **自动通过** |
+  | **T-B · Post-Implementation Boundary Gate** | 仅实现存在时 | 只读 / 无副作用 / 无 LLM / 无 Event / 无 Activity / 无 AgentState / 五态 / FORBIDDEN / UNSUPPORTED | 全部生效 |
+
+  > **禁止把 T-A 实现为「永久断言不存在」；任何阶段门都不得形成「无法通过」的终态。**
+  > 门状态由 Contract §5D.16 的显式标记（`D1G-3-SATISFIED`）决定，**不由 DS 自行判断**。
+
+  **D-1 严格只读策略的定位（第二轮裁决）：**
+
+  「禁止 **local** `append` / `sort` / `pop`」= **D-1 静态验证策略**，
+  **不是永久 Python 架构原则**。理由：Python 无法语言级保证只读，D-1 用「禁止一切写入模式」换取「静态可验证的只读性」。
+  未来若引入不可变视图 / 代理对象 / 类型系统，本策略可放宽，但必须仍满足「静态可验证」。
+
+  **FORBIDDEN 与五态的关系（第二轮裁决）：**
+
+  ```text
+  五态核心（status）= FOUND / ABSENT / UNKNOWN / UNSUPPORTED / AMBIGUOUS   ← 认识论结论
+  FORBIDDEN        = visibility / authorization outcome                    ← 授权结论
+                     FORBIDDEN ≠ UNKNOWN ≠ ABSENT；FORBIDDEN ∉ 五态核心
+  ```
+
+  **D-1 的 5 项架构侧修正（第一轮，已落实）：**
 
   1. **World Fact 定义扩宽**（`D1-DEC-1`）：不再等同「必须躺在 `main.data` dict 里」；来源含 `main.data` 直接存储 / 明确定义的世界时钟 / 既定确定性规则的只读投影；强制区分 `FACT` / `DERIVED` / `CACHE` / `HISTORY`
   2. **删除「注入只读引用」措辞**（`D1-DEC-3`）：改为「Query 接收调用方注入的 **World 数据视图**」；追加「不得保存 `data` 引用」「返回值不得暴露内部可变引用」；并明确 **只读不是语言级保证**
