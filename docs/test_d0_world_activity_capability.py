@@ -76,20 +76,47 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 # 0. 路径与常量
 # =========================================================
 
-# 本文件位于 <ROOT>/docs/test_d0_world_activity_capability.py
+# 本文件可能在以下几种布局中：
+#   (a) <ROOT>/docs/test_d0_world_activity_capability.py   （推荐 / 正式布局）
+#   (b) <ROOT>/test_d0_world_activity_capability.py        （旧布局，位于根目录）
+#
+# 因此不能用 `parent.parent` 硬编码，必须用「仓库根标记」向上探测：
+#   一个目录若同时包含 main.py 与 agent/ 与 ext/，即视为仓库根。
 _HERE = Path(__file__).resolve().parent
-ROOT = _HERE.parent
+
+
+def _find_repo_root(start: Path) -> Path:
+    """向上探测仓库根：必须同时包含 main.py、agent/、ext/。"""
+    for candidate in (start, *start.parents):
+        if (
+            (candidate / "main.py").is_file()
+            and (candidate / "agent").is_dir()
+            and (candidate / "ext").is_dir()
+        ):
+            return candidate
+    # 探测失败时退回「本文件的上一级」，并在用例中显式报错（不静默误判）
+    return start.parent
+
+
+ROOT = _find_repo_root(_HERE)
 
 AGENT_DIR = ROOT / "agent"
 EXT_DIR = ROOT / "ext"
 MAIN_PY = ROOT / "main.py"
 DOCS_DIR = ROOT / "docs"
 
+# D-0 起，PROJECT_V3.1_MASTER.md 与 V3.1_PRODUCT_GUIDE.md 已迁入 docs/。
+# 为兼容整理前后的布局，以下文档路径按「候选列表」解析。
 DECISIONS_DOC = DOCS_DIR / "D0_ARCHITECTURE_DECISIONS.md"
 AUDIT_DOC = DOCS_DIR / "D0_CONFLICT_AUDIT.md"
 CONTRACT_DOC = DOCS_DIR / "V3.1_ARCHITECTURE_CONTRACT.md"
 PREFLIGHT_DOC = DOCS_DIR / "D0_WORLD_ACTIVITY_CAPABILITY_PREFLIGHT.md"
 INVENTORY_DOC = DOCS_DIR / "V3.1_GLOBAL_ARCHITECTURE_INVENTORY.md"
+
+PROJECT_MASTER_CANDIDATES: Sequence[Path] = (
+    DOCS_DIR / "PROJECT_V3.1_MASTER.md",   # 整理后的正式位置
+    ROOT / "PROJECT_V3.1_MASTER.md",       # 整理前的旧位置
+)
 
 # D-0 正式定义的 Legacy Activity State 基线（Contract §5C.2）
 LEGACY_ACTIVITY_STATE_KEYS: Sequence[str] = (
@@ -1267,6 +1294,40 @@ class T11EnvironmentCapability(unittest.TestCase):
             f"本测试文件只能依赖标准库；发现额外依赖：{extra}",
         )
 
+    def test_t11_3_repo_root_resolution_is_marker_based(self) -> None:
+        """
+        工作区可能被整理（例如把 PROJECT / PRODUCT_GUIDE 移入 docs/）。
+
+        本测试断言：ROOT 的解析不依赖硬编码层级，而是通过
+        「main.py + agent/ + ext/」标记向上探测 —— 因此在目录整理后
+        仍然指向真正的仓库根（根目录含 main.py），而不是 docs/。
+        """
+        self.assertTrue(
+            (ROOT / "main.py").is_file(),
+            f"ROOT 解析错误：{ROOT} 下没有 main.py（可能是硬编码层级导致）",
+        )
+        self.assertTrue(
+            (ROOT / "agent").is_dir() and (ROOT / "ext").is_dir(),
+            f"ROOT 解析错误：{ROOT} 下缺少 agent/ 或 ext/",
+        )
+        self.assertNotEqual(
+            ROOT.name, "docs",
+            "ROOT 不应被解析为 docs/（目录整理后需使用标记探测）",
+        )
+
+    def test_t11_4_project_master_doc_is_locatable(self) -> None:
+        """
+        目录整理后 PROJECT_V3.1_MASTER.md 已迁入 docs/。
+        本测试断言它至少存在于一个已知候选位置，
+        防止文档搬移后无人发现路径失效。
+        """
+        found = [p for p in PROJECT_MASTER_CANDIDATES if p.is_file()]
+        self.assertTrue(
+            found,
+            "未能在任何候选位置找到 PROJECT_V3.1_MASTER.md；"
+            f"候选：{[str(p) for p in PROJECT_MASTER_CANDIDATES]}",
+        )
+
 
 # =========================================================
 # 入口
@@ -1281,6 +1342,8 @@ def _print_header() -> None:
     print(f"ext/       : {len(_py_files(EXT_DIR))} py files")
     print(f"decisions  : {'OK' if DECISIONS_DOC.exists() else 'MISSING'} -> {DECISIONS_DOC}")
     print(f"contract   : {'OK' if CONTRACT_DOC.exists() else 'MISSING'} -> {CONTRACT_DOC}")
+    for cand in PROJECT_MASTER_CANDIDATES:
+        print(f"project    : {'OK' if cand.is_file() else '--'} -> {cand}")
     print("-" * 72)
     print("这些测试验证的是「架构边界」，不是「完整功能」。")
     print("=" * 72)
