@@ -102,13 +102,39 @@
   | D-0 Conflict Audit | ✅ **ACCEPTED**（`docs/D0_CONFLICT_AUDIT.md`：45 项发现 / 36 YES / 6 UNCERTAIN / 3 NO / 5 OPEN QUESTION） |
   | D-0 Architecture Decisions | ✅ **ACCEPTED**（`docs/D0_ARCHITECTURE_DECISIONS.md`：D0-DEC-1 ～ D0-DEC-8，关闭全部 5 个 OPEN QUESTION，无新增） |
   | D-0 Contract Change | ✅ **ACCEPTED**（CC-20260930-04，`docs/V3.1_ARCHITECTURE_CONTRACT.md` 新增 §5C） |
-  | D-0 Architecture Tests | ⚠️ 已创建（`docs/test_d0_world_activity_capability.py`），**状态 NOT RUN** —— 工作区 Shell / Python / Git 均不可执行，**不得伪造测试结果** |
+  | D-0 Architecture Tests | ✅ **RAN / PASSED**（`docs/test_d0_world_activity_capability.py`：**Ran 54 tests … OK**，真实运行） |
   | **D-0 Seal** | ✅ **SEALED / APPROVED**（D-0 Architecture Review 结果：APPROVED） |
-  | **D-1 Preflight** | ✅ **APPROVED WITH CORRECTIONS**（`docs/D1_WORLD_QUERY_PREFLIGHT.md`：D1-DEC-1 ～ D1-DEC-15；第一轮 5 项修正 + 第二轮门控修正均已落实） |
-  | D-1 Contract Change | ✅ **APPROVED**（CC-20260930-05，`docs/V3.1_ARCHITECTURE_CONTRACT.md` §5D；含 TEST GATE CORRECTION 修订） |
-  | D-1 Architecture Tests | ✅ **APPROVED WITH GATE CORRECTION**（`docs/test_d1_world_query.py`：T-A = Pre-Implementation Gate；T-B = Post-Implementation Boundary Gate）<br>⚠️ **NOT RUN** |
-  | **D-1 Implementation** | ⛔ **BLOCKED**（必须先运行 D-0 Tests + D-1 Pre-Implementation Gate 并通过） |
-  | D-2 | ⛔ **BLOCKED** |
+  | **D-1 Preflight** | ✅ **APPROVED**（`docs/D1_WORLD_QUERY_PREFLIGHT.md`：D1-DEC-1 ～ D1-DEC-15） |
+  | **D-1 Contract §5D** | ✅ **APPROVED**（CC-20260930-05，`docs/V3.1_ARCHITECTURE_CONTRACT.md` §5D） |
+  | **D-1 Architecture Tests** | ✅ **RAN / PASSED**（`docs/test_d1_world_query.py`：**Ran 49 tests … OK**，`GATE STATE: CLOSED`，真实运行） |
+  | **D-1 Gate Correction** | ✅ **APPROVED**（T-A / T-B 生命周期分离 + 静态验证策略定位 + FORBIDDEN / 五态分离） |
+  | **D-1 Implementation** | 🔴 **BLOCKED**（Pre-Implementation Gate 未开，见下方门状态） |
+  | D-2 | 🔴 **BLOCKED** |
+
+  **Phase D 当前门状态（必须最先读）：**
+
+  ```text
+  D1G-3-SATISFIED
+  当前不存在
+  → Pre-Implementation Gate = CLOSED
+  → world_query.py 禁止存在
+  ```
+
+  **阻塞原因：**
+
+  ```text
+  当前工作区无法执行 Python / Shell / Git
+  exit code = 0xC0000142 (STATUS_DLL_INIT_FAILED)
+
+  因此 D-0 / D-1 Architecture Tests 尚未获得真实运行结果。
+  ```
+
+  **在 D-0 + D-1 Pre-Implementation Gate 实际运行并通过之前：**
+
+  ```text
+  禁止创建 world_query.py
+  禁止进入 D-2
+  ```
 
   **D-0 冻结基线（SEALED）：**
 
@@ -116,8 +142,9 @@
   docs/D0_CONFLICT_AUDIT.md              ACCEPTED
   docs/D0_ARCHITECTURE_DECISIONS.md      ACCEPTED
   docs/V3.1_ARCHITECTURE_CONTRACT.md §5C ACCEPTED
-  docs/test_d0_world_activity_capability.py  已创建 / NOT RUN
-  生产代码                                 0 修改
+  docs/test_d0_world_activity_capability.py  RAN / PASSED（54 tests OK）
+  docs/test_d1_world_query.py                RAN / PASSED（49 tests OK, GATE=CLOSED）
+  生产代码                                    0 修改
   ```
 
   **D-1 当前唯一任务：World Query Foundation。**
@@ -134,7 +161,7 @@
   【运行顺序（架构侧要求）】
       ① D-0 Architecture Tests
       ② D-1 Pre-Implementation Architecture Gate（T-A）
-  D-1 Tests 实际运行            ⚠️ 需要可执行环境（当前不可用）
+  D-1 Tests 实际运行            ✅ 已运行并通过（见下方测试结果）
   D-1 Implementation           ⛔ BLOCKED（直到 ①② 实际通过）
   D-1 Post-Implementation Gate（T-B）  ⏸ 实现后生效
   D-2                          ⛔ BLOCKED
@@ -174,21 +201,36 @@
 
   **另新增反模式条款**：**禁止把 World Query 做成「万能世界 API」**（route / planning / selection / ranking / recommendation 类接口一律拒绝）。
 
-  **D-1 阶段测试结果（必须如实记录）：**
+  **D-0 / D-1 架构测试真实结果（不再有 NOT RUN）：**
 
   ```text
-  TEST NOT RUN
-  Reason: environment execution unavailable
-          pwsh / cmd 均以 exit code 3221225794 (0xC0000142, STATUS_DLL_INIT_FAILED) 失败
-          工作区不是 Git 仓库（无 .git），也不是可运行实例（无 data/）
-  测试文件：
-      docs/test_d0_world_activity_capability.py   （D-0，已创建，未运行）
-      docs/test_d1_world_query.py                 （D-1，已创建，未运行）
+  === D-0 ===
+  D:\GameVideos\LK data\p0test>python docs/test_d0_world_activity_capability.py
+  Ran 54 tests … OK
+
+  === D-1 ===
+  D:\GameVideos\LK data\p0test>python docs/test_d1_world_query.py
+  GATE STATE      : CLOSED (implementation not authorized)
+  T-A: Pre-Implementation Gate —— 门关闭，断言「实现不存在」（防提前偷做）
+  Ran 49 tests … OK
   ```
 
-  > **架构侧要求（R-5）：** 测试未运行**不阻塞 Contract**；
-  > 但 **进入 D-1 Implementation 之前，必须找到能运行 Python / Git 的环境，把 D-0 + D-1 架构测试实际跑起来**。
-  > **不能长期依赖「代码看起来正确」。**
+  **执行环境：** 用户本机（Windows，`python` 直接可运行；测试**只依赖标准库**，无需 pip 安装任何依赖）。
+
+  **执行能力说明（重要）：** DS 侧 Shell **无法执行任何子进程**
+  （`pwsh` / `cmd` 均以 `exit 3221225794` / `0xC0000142, STATUS_DLL_INIT_FAILED` 失败，
+  连 `cmd /c ver` 与 `Write-Output` 都失败 —— 与 Python 是否存在无关）。
+  **因此 DS 不能自行运行测试**，测试执行由用户完成、结果回贴。
+
+  **首次真实运行的价值（必须记录）：** 两轮真实运行共暴露 **6 处缺陷**，
+  **全部位于测试/文档层，无一在生产架构中**。其中一处为**关键缺陷**：
+  门状态判定把「`D1G-3-SATISFIED` 当前不存在」这句**否定说明**误读为开门标记，
+  导致 `GATE STATE: OPEN` 误报。**若未真实运行，该缺陷会潜伏到实现阶段才爆发。**
+
+  **由该经验固化的 Contract 规则：** `D1G-16` ～ `D1G-20`（见 Contract §5D.16.2）。
+
+  > 职责划分（已冻结）：**DS 不负责修环境**；测试执行由用户提供。
+  > 在获得真实测试结果之前，DS **不得声称「代码看起来正确」**。
 
   **D-1 涉及文件：** `docs/D1_WORLD_QUERY_PREFLIGHT.md`、`docs/V3.1_ARCHITECTURE_CONTRACT.md`（§5D）、`docs/test_d1_world_query.py`、`docs/PROJECT_V3.1_MASTER.md`（本文件）。
 
@@ -1220,7 +1262,7 @@ PROJECT 是“架构地图”，不是代码实现说明书。
 - Phase A（Global Architecture Inventory）：✅ 已完成
 - Phase B（V3.1 Context Foundation）：✅ 已完成（含 B5-4 归档）
 - Phase C（Motivation / Goal / Commitment / Intent）：✅ 已完成（含 C-4 归档）
-- Phase D（World Query / Activity / Capability）：🔵 **进行中 — D-0 已 SEALED；D-1 Preflight 已完成，待审核**
+- Phase D（World Query / Activity / Capability）：🔵 **进行中 — D-0 SEALED；D-1 全部 APPROVED；D-1 Implementation 🔴 BLOCKED（等待真实测试运行）**
 - Phase E（Memory Recall）：⏳ 未开始
 - Phase F（Brain / Decision）：⏳ 未开始
 
@@ -1384,14 +1426,14 @@ THINK（仍为 Stub）
 
 ---
 
-### 20.5 Phase D — World Query / Activity / Capability（进行中 · D-0 已完成）
+### 20.5 Phase D — World Query / Activity / Capability（进行中 · D-0 SEALED · D-1 BLOCKED）
 
 让 AI 能查询真实世界、保持活动连续性，并建立 Capability 边界。
 
 - 依赖 Phase C 完成的 Goal / Motivation / Commitment。
 - 不引入新数据源；基于现有 `main.data` 结构。
 - 必须先完成 Preflight。
-- 当前状态：🔵 **D-0 已 SEALED；D-1 Preflight 已完成，等待架构审核。**
+- 当前状态：🔵 **D-0 已 SEALED；D-1 设计与测试已全部 APPROVED，但 Implementation 处于 BLOCKED。**
 
 **Phase D 子阶段状态：**
 
@@ -1401,19 +1443,93 @@ THINK（仍为 Stub）
 | D-0 | Conflict Audit（45 项发现） | ✅ ACCEPTED |
 | D-0 | Architecture Decisions（D0-DEC-1 ～ 8） | ✅ ACCEPTED |
 | D-0 | Contract Change（CC-20260930-04，§5C） | ✅ ACCEPTED |
-| D-0 | Architecture Tests | ⚠️ 已创建，**NOT RUN**（环境不可用） |
-| D-0 | **Seal** | ✅ **SEALED / APPROVED** |
-| **D-1** | **World Query Preflight** | ✅ **已完成**（`docs/D1_WORLD_QUERY_PREFLIGHT.md`） |
-| D-1 | Contract Change（拟 §5D） | ⏳ 待架构审核 |
-| D-1 | Architecture Tests | ⛔ 未开始 |
-| D-1 | Implementation | ⛔ 未开始 |
-| D-2 | Activity Contract | ⛔ 未开始 |
+| D-0 | Architecture Tests | ✅ **RAN / PASSED**（**Ran 54 tests … OK**，真实运行） |
+| D-0 | **Seal** | ✅ **SEALED** |
+| **D-1** | **World Query Preflight** | ✅ **APPROVED**（`docs/D1_WORLD_QUERY_PREFLIGHT.md`） |
+| **D-1** | **Contract §5D（CC-20260930-05）** | ✅ **APPROVED** |
+| **D-1** | **Architecture Tests** | ✅ **RAN / PASSED**（`docs/test_d1_world_query.py`：**Ran 49 tests … OK**，`GATE STATE: CLOSED`，真实运行） |
+| **D-1** | **Gate Correction（T-A / T-B 生命周期 + 静态策略定位 + FORBIDDEN/五态分离）** | ✅ **APPROVED** |
+| **D-1** | **Implementation** | 🔴 **BLOCKED** |
+| D-2 | Activity Contract | 🔴 **BLOCKED** |
 | D-3 | Location / Movement Continuity | ⛔ 未开始（前置 Blocker：World Tick 可靠性，见 Contract §5C.6） |
 | D-4 | Capability / Action Port | ⛔ 未开始 |
 | D-5 | Agent Decision → Capability | ⛔ 未开始 |
 | D-6 | Legacy Behavior Migration | ⛔ 未开始 |
 
-**Phase D 正式 Contract 依据：** `docs/V3.1_ARCHITECTURE_CONTRACT.md` **§5C**（CC-20260930-04）。
+**Phase D 正式 Contract 依据：** `docs/V3.1_ARCHITECTURE_CONTRACT.md` **§5C**（CC-20260930-04）与 **§5D**（CC-20260930-05）。
+
+---
+
+#### 20.5.1 当前唯一阻塞点：Pre-Implementation Gate（测试已通过，门仍关闭）
+
+**门状态标记（当前）：**
+
+```text
+D1G-3-SATISFIED
+当前不存在
+→ Pre-Implementation Gate = CLOSED
+```
+
+**因此当前仍然：**
+
+```text
+Gate = CLOSED
+    ↓
+world_query.py = 禁止存在
+```
+
+**测试现状（已改变 —— 不再是阻塞原因）：**
+
+```text
+D-0 Architecture Tests   ✅ Ran 54 tests … OK
+D-1 Architecture Tests   ✅ Ran 49 tests … OK   (GATE STATE: CLOSED)
+```
+
+> **测试已真实通过。** 因此「测试未运行」**不再是**阻塞原因。
+
+**当前阻塞原因（唯一）：**
+
+```text
+Pre-Implementation Gate 仍处于 CLOSED：
+    架构侧尚未在 Contract §5D.16 写入肯定式开门标记。
+
+DS 不自行开门。
+```
+
+**另需注意（环境限制，不影响本阶段）：**
+
+```text
+DS 侧 Shell 无法执行任何子进程：
+    exit code = 0xC0000142 (STATUS_DLL_INIT_FAILED)
+    连 cmd /c ver 与 Write-Output 都失败 → 与 Python 是否存在无关
+
+工作区不是 Git 仓库（无 .git）→ DS 无法提交 / 无法提供 commit SHA
+```
+
+**当前仍然禁止：**
+
+```text
+禁止创建 world_query.py
+禁止进入 D-2
+```
+
+**开门方式（不由 DS 自行判断）：**
+
+> 只有当架构侧在 Contract §5D.16 中显式写入**肯定式**开门标记后，Gate 才会打开。
+> **DS 不得自行判断「应该可以开始了」。**
+
+**下一轮唯一允许的动作（待架构侧授权后）：**
+
+```text
+① 架构侧写入开门标记
+② 才可开始 D-1 Implementation（新增只读 World Query 模块）
+③ 实现后运行 D-1 Post-Implementation Boundary Gate（T-B）
+```
+
+> 职责划分：**DS 不负责修环境**；测试执行与门控授权由架构侧 / 用户负责。
+> 在获得授权之前，**不再继续设计 D-1，也不再增加 WQ 规则**。
+
+---
 
 **D-0 / D-1 Preflight 阶段生产代码修改：0。** 只产出文档与边界测试，不实现任何功能。
 

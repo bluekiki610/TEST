@@ -174,6 +174,8 @@ REQUIRED_D1_RULES: Sequence[str] = (
     "D1G-7", "D1G-8", "D1G-9", "D1G-10",
     # D-1 静态验证策略定位
     "D1G-11", "D1G-12", "D1G-13", "D1G-14", "D1G-15",
+    # 静态边界断言实现策略（首次真实运行经验，CC-20260930-05 追补）
+    "D1G-16", "D1G-17", "D1G-18", "D1G-19", "D1G-20", "D1G-21", "D1G-22",
     # 未冻结
     "NF-9", "NF-10",
 )
@@ -359,9 +361,34 @@ def _query_modules() -> List[Path]:
 # =========================================================
 
 _GATE_MARKERS: Sequence[Tuple[str, str]] = (
-    # (标记文本, 含义)
-    ("D1G-3-SATISFIED", "Pre-Implementation Gate 已通过（架构侧显式标记）"),
-    ("D1G-3: SATISFIED", "Pre-Implementation Gate 已通过（等价标记）"),
+    # (严格标记文本, 含义)
+    #
+    # ⚠️ 必须是「肯定式、独立成行」的显式标记，才能开门。
+    # 首次真实运行时发现：旧逻辑只要发现子串 `D1G-3-SATISFIED` 就开门，
+    # 但 Contract §5D.16 里存在这一行：
+    #
+    #       D1G-3-SATISFIED
+    #       当前不存在
+    #       → Pre-Implementation Gate = CLOSED
+    #
+    # 于是门被**误判为已打开**，导致 T-A 反而要求存在实现而失败。
+    # 因此改为要求明确肯定式标记：
+    #
+    #       **D1G-3-SATISFIED: true**
+    #
+    # 架构侧要开门时，只需在 Contract §5D.16 写入该行。
+    ("**D1G-3-SATISFIED: true**", "Pre-Implementation Gate 已通过（架构侧显式标记）"),
+    ("D1G-3-SATISFIED: true", "Pre-Implementation Gate 已通过（等价标记）"),
+)
+
+# 否定语境标记：出现这些词的行即便含标记名，也**不**视为开门
+_GATE_NEGATIONS: Sequence[str] = (
+    "不存在",
+    "未标记",
+    "false",
+    "False",
+    "CLOSED",
+    "not satisfied",
 )
 
 
@@ -369,10 +396,11 @@ def _gate_open() -> bool:
     """
     判断 D-1 Implementation 是否已被授权（Pre-Implementation Gate 是否已通过）。
 
-    判定规则（从严）：
-        只有当 Contract 中同时满足：
-            (a) 存在 D1G-3 标记；
-            (b) 且出现显式「已通过 / SATISFIED」标记；
+    判定规则（从严，逐行）：
+
+        只有当 Contract 中存在**某一行**同时满足：
+            (a) 含肯定式标记（见 `_GATE_MARKERS`）；
+            (b) 不含任何否定语境词（见 `_GATE_NEGATIONS`）；
         才视为门已打开。
 
     否则视为门关闭 —— 即 **D-1 Implementation 尚未授权**。
@@ -380,14 +408,23 @@ def _gate_open() -> bool:
     这样设计的原因：
         * 门关闭时，T-A 负责「防止提前偷做」；
         * 门打开后，T-A 自动转为「确认实现确实存在」，不会再永久失败；
-        * 是否开门由架构侧在 Contract 中显式标记，不由 DS 自行判断。
+        * 是否开门由架构侧在 Contract 中**显式写下肯定式标记**，不由 DS 自行判断。
     """
-    contract = _read_text(CONTRACT_DOC) or ""
+    contract = _read_text(CONTRACT_DOC)
+    if not contract:
+        return False
     if "D1G-3" not in contract and "D1G-4" not in contract:
         # Contract 尚未包含阶段门 → 保守视为关闭
         return False
-    for marker, _meaning in _GATE_MARKERS:
-        if marker in contract:
+
+    for raw_line in contract.splitlines():
+        line = raw_line.strip()
+        for marker, _meaning in _GATE_MARKERS:
+            if marker not in line:
+                continue
+            if any(neg in line for neg in _GATE_NEGATIONS):
+                # 该行是「声明标记当前不存在」之类的否定语境 → 不构成开门
+                continue
             return True
     return False
 
@@ -1053,6 +1090,47 @@ class TCDocumentationBoundary(unittest.TestCase):
         self.assertIn(
             "不属", contract,
             "Contract 必须说明 FORBIDDEN 不属于五态核心（架构侧裁决）",
+        )
+
+    def test_tc17_contract_records_static_assertion_strategy(self) -> None:
+        """
+        §5D.16.2：静态边界断言实现策略必须记入 Contract
+        （来源：D-0 / D-1 首次真实运行暴露的 6 处缺陷）。
+
+        本断言防止这段经验在后续 Contract 维护中丢失。
+        """
+        contract = _read_text(CONTRACT_DOC) or ""
+
+        self.assertIn(
+            "## 5D.16.2", contract,
+            "Contract 必须包含 §5D.16.2（静态边界断言实现策略）",
+        )
+        self.assertIn(
+            "必须区分「代码构造」与「说明文本」", contract,
+            "§5D.16.2 必须写明核心教训：区分代码构造与说明文本",
+        )
+        self.assertIn(
+            "裸文本包含", contract,
+            "§5D.16.2 必须明确禁止裸文本包含式判断（D1G-17 / D1G-19）",
+        )
+        self.assertIn(
+            "肯定式", contract,
+            "§5D.16.2 必须写明状态标记需区分肯定式与否定式（D1G-18）",
+        )
+        for rule in ("D1G-16", "D1G-17", "D1G-18", "D1G-19", "D1G-20", "D1G-21", "D1G-22"):
+            self.assertIn(rule, contract, f"Contract §5D.16.2 缺少规则 {rule}")
+
+    def test_tc18_contract_records_test_run_outcome(self) -> None:
+        """
+        首次真实运行的结论必须被记录：6 处缺陷全部在测试/文档层。
+
+        注意：本断言**不**要求 Contract 记录具体测试数字
+        （那属于 PROJECT 的职责），只要求结论存在。
+        """
+        contract = _read_text(CONTRACT_DOC) or ""
+        self.assertIn(
+            "全部出现在测试/文档层", contract,
+            "§5D.16.2 必须记录「6 处缺陷全部在测试/文档层」这一结论",
         )
 
 
