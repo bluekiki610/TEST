@@ -1,4 +1,4 @@
-// app-instance.js - 副本系统 v13（返回首页=暂离事务确认 + 进入/重激活以服务器状态为准 + 卡片暂停角标 + 聊天背景存文件）
+// app-instance.js - 副本系统 v14（气泡操作键复用住宅 + 朗读键移入 meta + 语音开关即时反馈 + 暂离/激活状态事务）
 (function() {
     'use strict';
     console.log('[ext] app-instance.js v9 加载...');
@@ -88,6 +88,9 @@
             .inst-model-opt { padding:10px 12px; border-radius:10px; background:#13233d; border:1px solid rgba(80,180,255,.15); color:#cfe8ff; font-size:13.5px; cursor:pointer; margin-bottom:6px; }
             .inst-model-opt:hover { background:#1a2f52; }
             .inst-model-opt.active { border-color:#0e7fd4; color:#fff; }
+            /* 气泡右下角操作键（🔄/🗑️），复用住宅气泡样式 */
+            .inst-bubble-ops { opacity:.75; }
+            .inst-bubble-ops:hover { opacity:1; }
             .inst-modal-mask { position:fixed; inset:0; background:rgba(3,8,18,.78); z-index:400; display:flex; align-items:center; justify-content:center; padding:20px; }
             .inst-modal { background:#0d1a2e; border:1px solid rgba(80,180,255,.25); border-radius:14px; width:100%; max-width:600px; max-height:85vh; overflow-y:auto; padding:20px; box-shadow:0 12px 44px rgba(0,0,0,.6); }
             .inst-modal h2 { margin:0 0 4px; font-size:17px; color:#9fd8ff; }
@@ -118,11 +121,20 @@
         return autoVoiceEnabled;
     };
     window.toggleAutoVoice = function() {
-        if (!voiceSupported()) { toast('当前浏览器不支持语音朗读'); return false; }
+        if (!voiceSupported()) {
+            toast('当前浏览器不支持语音朗读（需要 speechSynthesis）');
+            return false;
+        }
         const next = !autoVoiceEnabled;
         window.setAutoVoiceEnabled(next);
-        if (next) toast('🔊 已开启 AI 回复自动朗读');
-        else { try { window.speechSynthesis.cancel(); } catch (e) {} toast('🔇 已关闭自动朗读'); }
+        if (next) {
+            // 立刻读一小段做「开启确认」，否则点了没声音会以为是坏的
+            speakText('语音已开启');
+            toast('🔊 已开启：AI 每次回复后会自动朗读');
+        } else {
+            try { window.speechSynthesis.cancel(); } catch (e) {}
+            toast('🔇 已关闭自动朗读');
+        }
         return next;
     };
 
@@ -1169,26 +1181,118 @@
         const border = (!p && !isMe) ? 'border:1px solid rgba(255,255,255,.1);' : '';
         const d = document.createElement('div');
         d.className = 'msg ' + (isMe ? 'me' : 'other');
-        d.innerHTML =
-            '<div class="avatar">' + avHtml + '</div>' +
-            '<div class="body">' +
-                '<div class="meta">' +
-                    (isMe ? '' : '<span style="color:' + nameColor + ';font-weight:bold">' + esc(m.sender) + '</span> ') +
-                    '<span>' + esc(m.time || '') + '</span>' +
-                '</div>' +
-                '<div class="bubble" style="background:' + bg + ';color:' + textColor + ';' + border + '">' + esc(m.content) + '</div>' +
-                '<div class="inst-msg-ops" style="margin-top:4px;text-align:right;"></div>' +
-            '</div>';
-        // 单条 AI 消息手动播放（P1 预留）
-        const ops = d.querySelector('.inst-msg-ops');
-        if (ops && isAssistantMsg(m)) {
-            const b = document.createElement('span');
-            b.textContent = '🔊 朗读';
-            b.style.cssText = 'font-size:11px;color:#7fa8cf;cursor:pointer;';
-            b.onclick = function() { window.playMessageVoice(m); };
-            ops.appendChild(b);
+        const idx = m._idx;
+        d.dataset.idx = (idx == null ? '' : String(idx));
+
+        // meta 行：AI 名字 · [🔊 朗读] · 时间   （朗读键在名字后、时间前）
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        if (!isMe) {
+            const nm = document.createElement('span');
+            nm.style.cssText = 'color:' + nameColor + ';font-weight:bold';
+            nm.textContent = m.sender;
+            meta.appendChild(nm);
+            meta.appendChild(document.createTextNode(' · '));
         }
+        if (isAssistantMsg(m)) {
+            const vb = document.createElement('span');
+            vb.textContent = '🔊';
+            vb.title = '朗读这条';
+            vb.style.cssText = 'cursor:pointer;margin:0 2px;';
+            vb.onclick = function(e) {
+                e.stopPropagation();
+                e.preventDefault();
+                window.playMessageVoice(m);
+            };
+            meta.appendChild(vb);
+            meta.appendChild(document.createTextNode(' · '));
+        }
+        const tm = document.createElement('span');
+        tm.textContent = m.time || '';
+        meta.appendChild(tm);
+
+        // 气泡（文案 + 右下角 刷新/删除）
+        const body = document.createElement('div');
+        body.className = 'body';
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble';
+        bubble.style.cssText = 'background:' + bg + ';color:' + textColor + ';' + border;
+        bubble.textContent = m.content;
+
+        // 右下角操作键：复用住宅气泡的 🔄/🗑️（window._bubbleOps）
+        // 但住宅版打的是现实世界接口，副本消息不在 data['messages'] 里，
+        // 所以这里 clone 出结构、改绑到副本专用接口，避免误删/误刷新现实消息。
+        let ops = null;
+        try { ops = window._bubbleOps ? window._bubbleOps(m, '') : null; } catch (e) { ops = null; }
+        if (!ops) ops = buildInstanceBubbleOps(m, isMe);
+        else ops = rebuildInstanceOps(ops, m, isMe);
+        if (ops) bubble.appendChild(ops);
+
+        body.appendChild(meta);
+        body.appendChild(bubble);
+        const avBox = document.createElement('div');
+        avBox.className = 'avatar';
+        avBox.innerHTML = avHtml;
+        d.appendChild(avBox);
+        d.appendChild(body);
         return d;
+    }
+
+    // 用住宅气泡键的样式克隆一份，但事件改绑到副本接口
+    function rebuildInstanceOps(srcOps, m, isMe) {
+        const wrap = document.createElement('span');
+        wrap.className = 'inst-bubble-ops';
+        wrap.style.cssText = srcOps.style.cssText;
+        const canOp = !!(currentInstanceId && currentUser);
+        Array.prototype.forEach.call(srcOps.childNodes, function(node) {
+            if (!node.textContent) return;
+            const icon = node.textContent;
+            const nb = document.createElement('span');
+            nb.textContent = icon;
+            nb.style.cssText = node.style.cssText || '';
+            if (icon.indexOf('🔄') >= 0) {
+                nb.title = '重新生成这条 AI 回复';
+                if (!canOp) return;
+                nb.onclick = function(e) {
+                    e.stopPropagation(); e.preventDefault();
+                    regenerateInstanceMsg(m);
+                };
+            } else if (icon.indexOf('🗑') >= 0) {
+                nb.title = '删除这条消息';
+                if (!canOp) return;
+                nb.onclick = function(e) {
+                    e.stopPropagation(); e.preventDefault();
+                    deleteInstanceMsg(m);
+                };
+            } else {
+                return;
+            }
+            wrap.appendChild(nb);
+        });
+        return wrap.childNodes.length ? wrap : null;
+    }
+
+    function buildInstanceBubbleOps(m, isMe) {
+        if (!currentInstanceId) return null;
+        const wrap = document.createElement('span');
+        wrap.className = 'inst-bubble-ops';
+        wrap.style.cssText = 'float:right;margin-left:8px;font-size:11px;line-height:1;user-select:none;white-space:nowrap;';
+        // AI 回复可重新生成；自己的消息只可删除
+        if (isAssistantMsg(m)) {
+            const rf = document.createElement('span');
+            rf.textContent = '🔄';
+            rf.title = '重新生成这条 AI 回复';
+            rf.style.cssText = 'cursor:pointer;margin-right:4px;';
+            rf.onclick = function(e) { e.stopPropagation(); e.preventDefault(); regenerateInstanceMsg(m); };
+            wrap.appendChild(rf);
+        }
+        const del = document.createElement('span');
+        del.textContent = '🗑️';
+        del.title = '删除这条消息';
+        del.style.cssText = 'cursor:pointer;';
+        del.onclick = function(e) { e.stopPropagation(); e.preventDefault(); deleteInstanceMsg(m); };
+        wrap.appendChild(del);
+        return wrap;
     }
 
     // 前情提要 → 聊天框第一条「剧情系统消息」（仅 UI 层，绝不写入 chat_history）
@@ -1237,9 +1341,13 @@
                 area.appendChild(tip);
             }
         } else {
-            hist.forEach(m => {
+            hist.forEach((m, i) => {
                 if (m.sender === 'system') area.appendChild(buildSystemEl(m.content));
-                else area.appendChild(buildInstanceMsgEl(m));
+                else {
+                    // 带下标渲染，供删除/重新生成精确定位（不写回 chat_history）
+                    const mm = Object.assign({}, m, { _idx: i });
+                    area.appendChild(buildInstanceMsgEl(mm));
+                }
             });
         }
 
@@ -1344,6 +1452,65 @@
             }))
         );
     };
+
+    // ---------- 气泡操作：删除 / 重新生成（副本专用接口，绝不碰现实世界消息） ----------
+    function deleteInstanceMsg(m) {
+        const iid = currentInstanceId;
+        if (!iid) return;
+        if (m._idx == null) { toast('❌ 无法定位这条消息，请刷新重试'); return; }
+        if (!confirm('删除这条消息？')) return;
+        api('/api/instance/' + iid + '/messages/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user: currentUser, idx: m._idx })
+        }).then(d => {
+            if (d && d.chat_history) {
+                if (!instances[iid]) instances[iid] = {};
+                instances[iid].chat_history = d.chat_history;
+            }
+            renderChatMessages();
+            toast('🗑️ 已删除');
+        }).catch(e => toast('❌ 删除失败：' + e.message));
+    }
+
+    function regenerateInstanceMsg(m) {
+        const iid = currentInstanceId;
+        if (!iid) return;
+        if (m._idx == null) { toast('❌ 无法定位这条消息，请刷新重试'); return; }
+        if (!confirm('让 ' + m.sender + ' 重新说一遍？')) return;
+        toast('🔄 正在重新生成…');
+        showAiThinking(true);
+        const before = countAssistantMsgs((instances[iid] || {}).chat_history);
+        api('/api/instance/' + iid + '/messages/regenerate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user: currentUser, idx: m._idx })
+        }).then(d => {
+            if (d && d.chat_history) {
+                if (!instances[iid]) instances[iid] = {};
+                instances[iid].chat_history = d.chat_history;
+            }
+            // AI 回复由后台线程写入，进入轮询等待
+            const baseline = countAssistantMsgs((instances[iid] || {}).chat_history);
+            let tries = 0;
+            const tick = () => {
+                tries++;
+                refreshInstanceChat(baseline).then(done => {
+                    if (done) { showAiThinking(false); maybeAutoSpeak((instances[iid] || {}).chat_history); return; }
+                    if (tries >= 15) {
+                        showAiThinking(false);
+                        showInstanceError('重新生成超时。请检查「AI 集成总开关」与 API Key / 模型，或稍后点 🔄 刷新。');
+                        return;
+                    }
+                    setTimeout(tick, Math.min(2000, 600 + tries * 200));
+                });
+            };
+            setTimeout(tick, 700);
+        }).catch(e => {
+            showAiThinking(false);
+            showInstanceError('重新生成失败：' + e.message);
+        });
+    }
 
     // ---------- 聊天界面（InstanceChatShell：Header / StoryHeader / MessageList / Composer） ----------
     function renderChatRoom(history, settings) {
@@ -1782,7 +1949,7 @@
         injectInstanceChatStyles();   // 让 .inst-* 样式一开始就可用
         modifyMapBar();
         createOverlay();
-        console.log('[ext] 副本插件 v13 加载完成（暂离事务确认 / 状态以服务器为准 / 暂停角标 / 聊天背景存文件）');
+        console.log('[ext] 副本插件 v14 加载完成（气泡 🔄/🗑️ 复用住宅 + 朗读键在 meta + 语音即时反馈）');
     }
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);

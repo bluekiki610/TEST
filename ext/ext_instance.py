@@ -646,6 +646,65 @@ def setup(app, data, helpers):
         save_data()
         return {"ok": True, "recovered": recovered}
 
+    # ---------- 副本气泡操作：删除单条 / 重新生成（只动 inst["chat_history"]） ----------
+    # 说明：现实世界的 /api/messages/delete 与 /api/ai/regenerate 操作的是
+    # data['messages'][room]，副本消息不在那里，直接复用会误删/误刷新现实消息，
+    # 所以这里提供副本专用接口。
+    @app.post("/api/instance/{iid}/messages/delete")
+    async def delete_instance_message(iid: str, body: dict):
+        user = canonical_contact_name(body.get("user", ""))
+        if not user:
+            raise HTTPException(400, "用户名为空")
+        inst = _get_user_instances(user).get(iid)
+        if not inst:
+            raise HTTPException(404, "副本不存在")
+        hist = inst.get("chat_history", []) or []
+        try:
+            idx = int(body.get("idx"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "缺少有效的消息下标")
+        if idx < 0 or idx >= len(hist):
+            raise HTTPException(404, "消息不存在")
+        hist.pop(idx)
+        inst["chat_history"] = hist
+        save_data()
+        return {"ok": True, "chat_history": inst["chat_history"]}
+
+    @app.post("/api/instance/{iid}/messages/regenerate")
+    async def regenerate_instance_message(iid: str, body: dict):
+        user = canonical_contact_name(body.get("user", ""))
+        if not user:
+            raise HTTPException(400, "用户名为空")
+        inst = _get_user_instances(user).get(iid)
+        if not inst:
+            raise HTTPException(404, "副本不存在")
+        if inst.get("status") != "active":
+            raise HTTPException(400, "副本未激活")
+        try:
+            idx = int(body.get("idx"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "缺少有效的消息下标")
+        hist = inst.get("chat_history", []) or []
+        if idx < 0 or idx >= len(hist):
+            raise HTTPException(404, "消息不存在")
+        if hist[idx].get("role") != "assistant":
+            raise HTTPException(400, "只能重新生成 AI 的回复")
+
+        ai_name = _primary_ai(inst)
+        if not ai_name:
+            raise HTTPException(400, "副本没有 AI 参与者")
+
+        # 删掉这条 AI 回复后重新驱动：_build_instance_context 会带上
+        # 删除后的副本历史（末尾即那条 user 消息），AI 自然重说一遍。
+        hist.pop(idx)
+        inst["chat_history"] = hist
+        save_data()
+
+        if hasattr(m, 'drive_ai'):
+            threading.Timer(1.0, m.drive_ai,
+                            args=(ai_name, "instance_chat", iid, "", user)).start()
+        return {"ok": True, "chat_history": inst["chat_history"]}
+
     # ---------- 进入副本 ----------
     @app.post("/api/instance/{iid}/enter")
     async def enter_instance(iid: str, body: dict):
