@@ -350,6 +350,55 @@ def _all_func_names(tree: ast.Module) -> Set[str]:
 
 
 # =========================================================
+# 1.1 D-1 阶段门状态（供阶段感知断言使用）
+# =========================================================
+#
+# 架构侧 TEST GATE CORRECTION 明确：
+#   T-A = Pre-Implementation Gate only
+#   实现落地后不得形成「无法通过」的终态。
+#
+# D-0 的 test_t6_6 与 D-1 的 T-A 同构：
+#   门关闭时断言 world_query.py 不存在；
+#   门打开后断言它存在。
+# 因此 D-0 也需要读取同一个门状态判据。
+#
+# 判据与 docs/test_d1_world_query.py 的 _gate_open() 保持一致：
+#   只有「肯定式、独立成行、且不含否定语境词」的标记才视为开门。
+
+_D1_GATE_MARKERS: Sequence[str] = (
+    "**D1G-3-SATISFIED: true**",
+    "D1G-3-SATISFIED: true",
+)
+
+_D1_GATE_NEGATIONS: Sequence[str] = (
+    "不存在",
+    "未标记",
+    "false",
+    "False",
+    "CLOSED",
+    "not satisfied",
+)
+
+
+def _d1_gate_open() -> bool:
+    """D-1 Pre-Implementation Gate 是否已由架构侧打开（与 D-1 测试同一判据）。"""
+    contract = _read_text(CONTRACT_DOC)
+    if not contract:
+        return False
+    if "D1G-3" not in contract and "D1G-4" not in contract:
+        return False
+    for raw_line in contract.splitlines():
+        line = raw_line.strip()
+        for marker in _D1_GATE_MARKERS:
+            if marker not in line:
+                continue
+            if any(neg in line for neg in _D1_GATE_NEGATIONS):
+                continue
+            return True
+    return False
+
+
+# =========================================================
 # 2. T1 · World 边界
 #    Contract §5C.1 D0G-1：main.data 是唯一 World 存储位置
 # =========================================================
@@ -1025,14 +1074,39 @@ class T6CapabilityBoundary(unittest.TestCase):
         """
         D-1 boundary-form：World Query 属 D-1，D-0 不得实现。
 
-        断言：agent/ 中不存在 world_query 相关模块。
+        ⚠️ 阶段门感知（架构侧 TEST GATE CORRECTION 的同类修正）：
+
+        D-0 阶段断言「world_query.py **不存在**」。
+        但当架构侧打开 D-1 的 Pre-Implementation Gate 并完成实现后，
+        该断言会**永久失败** —— 与 T-A 遇到的死锁同构。
+
+        因此本断言改为**门感知**：
+            门关闭 → 断言不存在（防 D-0 偷做）
+            门打开 → 断言存在  （确认 D-1 已落地）
+
+        门状态由 Contract §5D.16 的肯定式标记决定（与 D-1 测试同一判据）。
         """
+        gate_open = _d1_gate_open()
         for name in ("world_query.py", "world_query_port.py"):
             path = AGENT_DIR / name
-            self.assertFalse(
-                path.exists(),
-                f"D-1 尚未开始：D-0 阶段不得实现 World Query，但发现 {path}",
-            )
+            if gate_open:
+                # 门已开：world_query.py 应已由 D-1 实现；port 仍不应存在（属 D-4）
+                if name == "world_query.py":
+                    self.assertTrue(
+                        path.exists(),
+                        "D-1 门已打开，但未发现 agent/world_query.py；"
+                        "实现若缺失，D-1 无法形成正式通过状态",
+                    )
+                else:
+                    self.assertFalse(
+                        path.exists(),
+                        f"D-4 尚未开始：不应存在 {path}",
+                    )
+            else:
+                self.assertFalse(
+                    path.exists(),
+                    f"D-1 尚未开始：D-0 阶段不得实现 World Query，但发现 {path}",
+                )
 
 
 # =========================================================

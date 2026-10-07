@@ -85,7 +85,9 @@ V3.1 Phase D-1 · World Query Architecture Boundary Tests
 from __future__ import annotations
 
 import ast
+import io
 import re
+import tokenize
 import unittest
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -298,6 +300,55 @@ def _code_lines(path: Path) -> List[str]:
 def _has_code_match(path: Path, pattern: str) -> bool:
     rx = re.compile(pattern)
     return any(rx.search(ln) for ln in _code_lines(path))
+
+
+def _effective_code(path: Path) -> str:
+    """
+    返回「有效代码文本」：已掩掉所有注释与**所有字符串字面量**。
+
+    ⚠️ 本函数是 Contract `D1G-16` ～ `D1G-20` 的直接产物：
+
+        **静态边界断言必须区分「代码构造」与「说明文本」。**
+
+    起因：T-B 的 `test_tb4` / `test_tb7` / `test_tb8` 首次真实运行时误报，
+    命中的全部是 **World Query 自己 docstring 里的否定式说明**：
+
+        "不调用 save_data()"                    → 被误判为调用 save_data
+        "不得读取 AgentState"                    → 被误判为读取 AgentState
+        "禁止返回 … PLANNED / TRAVELING"         → 被误判为实现 Activity 生命周期
+
+    这些句子恰恰是在**声明约束成立**。
+
+    实现：tokenize 级处理
+        * 丢弃 COMMENT token
+        * 把 STRING token 替换为 `""`（保留语法结构，抹掉内容）
+        * 其余 token 原样保留
+
+    这样 `x = "save_data"` 的**字符串内容**不构成耦合，
+    而真正的代码调用 `save_data(...)` 仍会被检出。
+    """
+    src = _read_text(path)
+    if src is None:
+        return ""
+    try:
+        tokens = []
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type == tokenize.COMMENT:
+                continue
+            if tok.type == tokenize.STRING:
+                tokens.append(tokenize.TokenInfo(
+                    type=tokenize.STRING,
+                    string='""',
+                    start=tok.start,
+                    end=tok.end,
+                    line=tok.line,
+                ))
+                continue
+            tokens.append(tok)
+        return tokenize.untokenize(tokens)
+    except Exception:
+        lines = src.splitlines()
+        return "\n".join(ln for ln in lines if not ln.strip().startswith("#"))
 
 
 def _all_func_names(tree: ast.Module) -> Set[str]:
@@ -698,18 +749,25 @@ class TBD1QueryBoundaries(unittest.TestCase):
         )
 
     def test_tb4_query_does_not_call_write_helpers(self) -> None:
-        """WQ-8 / WQ-9：Query 不得调用 save_data 与写入型 helper。"""
+        """
+        WQ-8 / WQ-9：Query 不得调用 save_data 与写入型 helper。
+
+        ⚠️ 使用 `_effective_code()`（已掩掉注释与字符串字面量）——
+        因为 Query 模块的 docstring 会**声明**「不调用 save_data()」，
+        裸文本包含会把这种否定式说明误判为调用（Contract `D1G-16`）。
+        """
         if not self._require_impl():
             return
         offenders: List[str] = []
         for path in self.modules:
-            src = _read_text(path) or ""
+            effective = _effective_code(path)
             for helper in WRITE_HELPERS:
-                if re.search(r"\b" + re.escape(helper) + r"\s*\(", src):
+                if re.search(r"\b" + re.escape(helper) + r"\s*\(", effective):
                     offenders.append(f"{path.name} -> {helper}()")
         self.assertEqual(
             offenders, [],
-            "WQ-8 / WQ-9：Query 不得调用写入型 helper；命中：" + ", ".join(offenders),
+            "WQ-8 / WQ-9：Query 不得调用写入型 helper（有效代码中）；命中："
+            + ", ".join(offenders),
         )
 
     def test_tb5_query_does_not_depend_on_undeclared_mounts(self) -> None:
@@ -745,38 +803,52 @@ class TBD1QueryBoundaries(unittest.TestCase):
         )
 
     def test_tb7_query_does_not_read_agent_state(self) -> None:
-        """WQ-105 ～ WQ-108：Query 不得读取 AgentState。"""
+        """
+        WQ-105 ～ WQ-108：Query 不得读取 AgentState。
+
+        ⚠️ 使用 `_effective_code()`：Query 的 docstring 会**声明**
+        「不得读取 AgentState」，裸文本包含会把该说明误判为依赖
+        （Contract `D1G-16`）。
+        """
         if not self._require_impl():
             return
         offenders: List[str] = []
         for path in self.modules:
-            src = _read_text(path) or ""
+            effective = _effective_code(path)
             for token in ("AgentState", "get_agent_state", "agent.state", "agent_state_dict"):
-                if token in src:
+                if token in effective:
                     offenders.append(f"{path.name} -> {token}")
         self.assertEqual(
             offenders, [],
-            "WQ-105：Query 不得读取 AgentState；命中：" + ", ".join(offenders),
+            "WQ-105：Query 不得读取 AgentState（有效代码中）；命中：" + ", ".join(offenders),
         )
 
     def test_tb8_query_does_not_implement_activity_or_capability(self) -> None:
-        """WQ-42 / WQ-64：Query 不得实现 Activity / Capability / Movement / Command。"""
+        """
+        WQ-42 / WQ-64：Query 不得实现 Activity / Capability / Movement / Command。
+
+        ⚠️ 使用 `_effective_code()`：Query 的 docstring 会**声明**
+        「禁止返回 Activity 生命周期字段（PLANNED / TRAVELING / …）」，
+        裸文本包含会把该说明误判为实现（Contract `D1G-16`）。
+
+        这正是 D-0 测试 T5.2 遇到的同一类问题（说明文本 vs 代码构造）。
+        """
         if not self._require_impl():
             return
         offenders: List[str] = []
         for path in self.modules:
-            src = _read_text(path) or ""
+            effective = _effective_code(path)
             for token in (
                 "class Activity", "CapabilityRequest", "CapabilityResult",
                 "PLANNED", "TRAVELING", "ARRIVED", "PAUSED", "CANCELLED",
                 "WorldCommand", "world_command", "find_route", "query_places",
             ):
-                if token in src:
+                if token in effective:
                     offenders.append(f"{path.name} -> {token}")
         self.assertEqual(
             offenders, [],
-            "WQ-42 / WQ-64：Query 不得实现 Activity / Capability / Movement / Command；"
-            "命中：" + ", ".join(offenders),
+            "WQ-42 / WQ-64：Query 不得实现 Activity / Capability / Movement / Command"
+            "（有效代码中）；命中：" + ", ".join(offenders),
         )
 
     def test_tb9_query_emits_no_events(self) -> None:
@@ -1287,7 +1359,8 @@ class TEEnvironmentCapability(unittest.TestCase):
         tree = _parse(Path(__file__))
         self.assertIsNotNone(tree, "无法解析本测试文件自身")
         stdlib_ok = {
-            "__future__", "ast", "os", "re", "unittest", "pathlib", "typing",
+            "__future__", "ast", "io", "os", "re", "tokenize", "unittest",
+            "pathlib", "typing",
             "sys", "json", "textwrap", "collections",
         }
         mods = _top_level_modules(tree)

@@ -108,8 +108,70 @@
   | **D-1 Contract §5D** | ✅ **APPROVED**（CC-20260930-05，`docs/V3.1_ARCHITECTURE_CONTRACT.md` §5D） |
   | **D-1 Architecture Tests** | ✅ **RAN / PASSED**（`docs/test_d1_world_query.py`：**Ran 49 tests … OK**，`GATE STATE: CLOSED`，真实运行） |
   | **D-1 Gate Correction** | ✅ **APPROVED**（T-A / T-B 生命周期分离 + 静态验证策略定位 + FORBIDDEN / 五态分离） |
-  | **D-1 Implementation** | 🔴 **BLOCKED**（Pre-Implementation Gate 未开，见下方门状态） |
+  | **D-1 Implementation** | ✅ **DONE** —— 新增 `agent/world_query.py`（World Query Foundation，只读） |
+  | **D-1 Post-Implementation Gate（T-B）** | ✅ **RAN / PASSED**（**Ran 51 tests … OK**，`GATE STATE: OPEN`，skipped=1 属预期） |
+  | **D-1 Seal** | ⏸ **待架构审核批准** |
   | D-2 | 🔴 **BLOCKED** |
+
+  **D-1 门状态（当前）：**
+
+  ```text
+  D1G-3-SATISFIED: true        （架构侧正式授权，已写入 Contract §5D.16）
+  → Pre-Implementation Gate = OPEN
+  → D-1 Implementation 已授权（仅限 World Query Foundation）
+  ```
+
+  **D-1 Implementation 交付：**
+
+  ```text
+  agent/world_query.py        新增（World Query Foundation，只读）
+  ```
+
+  **实现严格遵守 Contract §5D：**
+
+  - `QueryResult`：`status`（五态核心）与 `outcome`（ALLOWED / FORBIDDEN）**正交**
+  - Dependency Injection：**不 import main / ext_***；不持有全局状态
+  - **无任何写入模式**（D-1 静态验证策略：不使用就地修改 dict / list 的写法）
+  - 不读 AgentState；不产生 / 不消费 Event；不实现 Activity / Capability / Movement / Command
+  - 不触碰 Memory；不新增 `main.data` 顶层 key；不修改现有 HTTP 接口 / 前端
+  - 反模式守卫：`is_decision_like_request()` + `not_capabilities` 自描述（WQ-90 ～ WQ-93）
+  - `UNSUPPORTED` 清单冻结（`WQ-110` / `WQ-111`）：Map / NPC 位置 / purpose 检索 /
+    relationship / route / available places / activity
+  - `get_agents_in_building` 为 **`DERIVED` 有限支持**（`WQ-85` ～ `WQ-89`），
+    无法解析者记入 notes（不假装不存在）
+
+  **T-B Gate 真实运行结果（最终 —— 通过）：**
+
+  ```text
+  === D-0 ===
+  python docs/test_d0_world_activity_capability.py
+  Ran 54 tests … OK
+
+  === D-1 ===
+  python docs/test_d1_world_query.py
+  GATE STATE      : OPEN (implementation authorized)
+  d1 impl modules : 1
+  Ran 51 tests … OK   (skipped=1 —— test_ta2 仅门关闭时适用)
+  ```
+
+  **过程中修正的 2 类问题（均属测试层，非架构层）：**
+
+  ```text
+  ① T-B 三条断言（tb4 / tb7 / tb8）误报
+     根因：裸文本包含把 world_query.py 自身 docstring 中的「否定式说明」
+           当成了违规（"不调用 save_data()" / "不得读取 AgentState" /
+           "禁止返回 … PLANNED / TRAVELING"）
+     修正：按 Contract §5D.16.2 / D1G-16 ～ D1G-20，
+           移植 _effective_code()（tokenize 级掩掉注释与字符串字面量）
+
+  ② D-0 test_t6_6 阶段冲突
+     根因：断言 world_query.py「不存在」，D-1 落地后必然永久失败
+           （与 T-A 死锁同构）
+     修正：改为「门感知」——门关闭断言不存在；门打开断言存在
+  ```
+
+  **结论：D-1 World Query Foundation 已完成并通过全部架构边界测试。**
+  **D-1 至此具备 Seal 候选资格，等待架构审核。**
 
   **Phase D 当前门状态（必须最先读）：**
 
@@ -1262,7 +1324,7 @@ PROJECT 是“架构地图”，不是代码实现说明书。
 - Phase A（Global Architecture Inventory）：✅ 已完成
 - Phase B（V3.1 Context Foundation）：✅ 已完成（含 B5-4 归档）
 - Phase C（Motivation / Goal / Commitment / Intent）：✅ 已完成（含 C-4 归档）
-- Phase D（World Query / Activity / Capability）：🔵 **进行中 — D-0 SEALED；D-1 全部 APPROVED；D-1 Implementation 🔴 BLOCKED（等待真实测试运行）**
+- Phase D（World Query / Activity / Capability）：🟢 **D-0 SEALED；D-1 实现完成并通过全部架构边界测试，待 Seal 审核；D-2 BLOCKED**
 - Phase E（Memory Recall）：⏳ 未开始
 - Phase F（Brain / Decision）：⏳ 未开始
 
@@ -1426,7 +1488,7 @@ THINK（仍为 Stub）
 
 ---
 
-### 20.5 Phase D — World Query / Activity / Capability（进行中 · D-0 SEALED · D-1 BLOCKED）
+### 20.5 Phase D — World Query / Activity / Capability（D-0 SEALED · D-1 实现完成，待 Seal）
 
 让 AI 能查询真实世界、保持活动连续性，并建立 Capability 边界。
 
@@ -1449,7 +1511,9 @@ THINK（仍为 Stub）
 | **D-1** | **Contract §5D（CC-20260930-05）** | ✅ **APPROVED** |
 | **D-1** | **Architecture Tests** | ✅ **RAN / PASSED**（`docs/test_d1_world_query.py`：**Ran 49 tests … OK**，`GATE STATE: CLOSED`，真实运行） |
 | **D-1** | **Gate Correction（T-A / T-B 生命周期 + 静态策略定位 + FORBIDDEN/五态分离）** | ✅ **APPROVED** |
-| **D-1** | **Implementation** | 🔴 **BLOCKED** |
+| **D-1** | **Implementation** | ✅ **DONE**（`agent/world_query.py`，只读 World Query Foundation） |
+| **D-1** | **Post-Implementation Gate（T-B）** | ✅ **RAN / PASSED**（**Ran 51 tests … OK**，`GATE STATE: OPEN`） |
+| **D-1** | **Seal** | ⏸ **待架构审核批准** |
 | D-2 | Activity Contract | 🔴 **BLOCKED** |
 | D-3 | Location / Movement Continuity | ⛔ 未开始（前置 Blocker：World Tick 可靠性，见 Contract §5C.6） |
 | D-4 | Capability / Action Port | ⛔ 未开始 |
@@ -1460,40 +1524,41 @@ THINK（仍为 Stub）
 
 ---
 
-#### 20.5.1 当前唯一阻塞点：Pre-Implementation Gate（测试已通过，门仍关闭）
+#### 20.5.1 D-1 阶段门记录（Pre-Implementation Gate → 已开放；T-B → 已通过）
 
-**门状态标记（当前）：**
+**门状态标记（历史 → 现状）：**
 
 ```text
-D1G-3-SATISFIED
-当前不存在
+【过去 / D-1 实现前】
+D1G-3-SATISFIED 不存在
 → Pre-Implementation Gate = CLOSED
+
+【现在 / 架构侧已授权】
+D1G-3-SATISFIED: true   （已写入 Contract §5D.16）
+→ Pre-Implementation Gate = OPEN
+→ D-1 Implementation 已完成
+→ T-B Gate 已运行并通过
 ```
 
-**因此当前仍然：**
-
-```text
-Gate = CLOSED
-    ↓
-world_query.py = 禁止存在
-```
-
-**测试现状（已改变 —— 不再是阻塞原因）：**
+**测试现状：**
 
 ```text
 D-0 Architecture Tests   ✅ Ran 54 tests … OK
-D-1 Architecture Tests   ✅ Ran 49 tests … OK   (GATE STATE: CLOSED)
+D-1 Architecture Tests   ✅ Ran 51 tests … OK   (GATE STATE: OPEN, skipped=1 属预期)
 ```
 
-> **测试已真实通过。** 因此「测试未运行」**不再是**阻塞原因。
+> **两套架构测试均已真实通过。** 不存在「未运行」或「测试失败」的阻塞项。
 
-**当前阻塞原因（唯一）：**
+**当前唯一剩余事项：**
 
 ```text
-Pre-Implementation Gate 仍处于 CLOSED：
-    架构侧尚未在 Contract §5D.16 写入肯定式开门标记。
+D-1 Seal —— 待架构侧审核批准
+```
 
-DS 不自行开门。
+**当前仍然禁止：**
+
+```text
+禁止进入 D-2
 ```
 
 **另需注意（环境限制，不影响本阶段）：**
@@ -1506,32 +1571,45 @@ DS 侧 Shell 无法执行任何子进程：
 工作区不是 Git 仓库（无 .git）→ DS 无法提交 / 无法提供 commit SHA
 ```
 
+**D-1 门状态（已完成使命）：**
+
+```text
+Pre-Implementation Gate = 已由架构侧打开（授权 D-1 Implementation）
+Post-Implementation Gate（T-B） = 已运行并通过
+
+D-1 Implementation 与 T-B Gate 均已完成。
+```
+
+**D-1 交付与验证：**
+
+```text
+交付：agent/world_query.py（只读 World Query Foundation）
+
+验证（真实运行）：
+    D-0 Architecture Tests   Ran 54 tests … OK
+    D-1 Architecture Tests   Ran 51 tests … OK（GATE STATE: OPEN, skipped=1 属预期）
+```
+
 **当前仍然禁止：**
 
 ```text
-禁止创建 world_query.py
 禁止进入 D-2
 ```
 
-**开门方式（不由 DS 自行判断）：**
-
-> 只有当架构侧在 Contract §5D.16 中显式写入**肯定式**开门标记后，Gate 才会打开。
-> **DS 不得自行判断「应该可以开始了」。**
-
-**下一轮唯一允许的动作（待架构侧授权后）：**
+**下一步（等待架构侧）：**
 
 ```text
-① 架构侧写入开门标记
-② 才可开始 D-1 Implementation（新增只读 World Query 模块）
-③ 实现后运行 D-1 Post-Implementation Boundary Gate（T-B）
+① 架构侧审核 D-1 Implementation 与 T-B Gate 结果
+② 决定是否 D-1 Seal
+③ 只有 D-1 Seal 后，才讨论 D-2（Activity Contract）
 ```
 
 > 职责划分：**DS 不负责修环境**；测试执行与门控授权由架构侧 / 用户负责。
-> 在获得授权之前，**不再继续设计 D-1，也不再增加 WQ 规则**。
 
 ---
 
-**D-0 / D-1 Preflight 阶段生产代码修改：0。** 只产出文档与边界测试，不实现任何功能。
+**D-0 / D-1 Preflight 阶段生产代码修改：0**（D-0 / D-1 Preflight）。
+**D-1 Implementation 生产代码修改：新增 `agent/world_query.py`（1 个新文件，未改动任何既有文件）。**
 
 ---
 
