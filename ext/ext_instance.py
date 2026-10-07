@@ -492,6 +492,30 @@ def setup(app, data, helpers):
         save_data()
         return {"ok": True}
 
+    # ---------- 副本聊天页背景（只存图片路径，图片本体存磁盘，绝不进 data.json） ----------
+    @app.get("/api/instance/{iid}/chat_bg")
+    async def get_instance_chat_bg(iid: str, user: str = ""):
+        u = canonical_contact_name(user or "")
+        if not u:
+            return {"bg": ""}
+        inst = data.get("instances", {}).get(u, {}).get(iid)
+        if not inst:
+            return {"bg": ""}
+        return {"bg": inst.get("chat_bg", "")}
+
+    @app.post("/api/instance/{iid}/chat_bg")
+    async def set_instance_chat_bg(iid: str, body: dict):
+        u = canonical_contact_name(body.get("user", ""))
+        if not u:
+            raise HTTPException(400, "用户名为空")
+        inst = data.get("instances", {}).get(u, {}).get(iid)
+        if not inst:
+            raise HTTPException(404, "副本不存在")
+        # 复用与封面/背景同一套：base64 → 文件，data.json 里只留路径
+        inst["chat_bg"] = _process_bg(body.get("bg", ""))
+        save_data()
+        return {"ok": True, "bg": inst["chat_bg"]}
+
     @app.get("/api/instance/public/all")
     async def get_all_public_instances():
         """获取所有用户公开的已结束副本，按AI名字分组"""
@@ -616,7 +640,8 @@ def setup(app, data, helpers):
                 "time_setting": inst.get("time_setting", ""),
                 "background": inst.get("background", ""),
                 "premise": inst.get("premise", ""),
-                "participants": inst.get("participants", [])
+                "participants": inst.get("participants", []),
+                "chat_bg": inst.get("chat_bg", "")
             }
         }
 

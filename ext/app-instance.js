@@ -1,4 +1,4 @@
-// app-instance.js - 副本系统 v10（复用住宅聊天 UI + 前情进消息区 + 暂离/回复链路修复 + 模型/语音接口预留）
+// app-instance.js - 副本系统 v12（全屏聊天 UI + 两排顶栏 + 长条输入区 + 返回首页=暂离 + 激活自愈 + 聊天背景存文件 + 模型/语音接口）
 (function() {
     'use strict';
     console.log('[ext] app-instance.js v9 加载...');
@@ -47,17 +47,26 @@
         st.id = 'instanceChatStyles';
         st.textContent = `
             .inst-shell { display:flex; flex-direction:column; flex:1; min-height:0; height:100%; background:#0f1a2e; }
-            .inst-header { display:flex; align-items:center; gap:8px; padding:8px 10px; background:#0d1a2e; border-bottom:1px solid rgba(80,180,255,.15); flex-shrink:0; }
-            .inst-header .inst-back { color:#7fd0ff; font-size:13px; cursor:pointer; flex-shrink:0; padding:4px 6px; border-radius:8px; }
-            .inst-header .inst-back:hover { background:rgba(80,180,255,.12); }
-            .inst-header .inst-title { font-size:15px; font-weight:600; color:#e6f1ff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
-            .inst-header .inst-sub { font-size:11px; color:#6d8bb0; white-space:nowrap; flex-shrink:0; }
-            .inst-header .inst-actions { margin-left:auto; display:flex; gap:5px; flex-shrink:0; }
-            .inst-hbtn { background:rgba(80,180,255,.15); border:1px solid rgba(80,180,255,.3); color:#9fd8ff; padding:4px 9px; border-radius:8px; font-size:12px; cursor:pointer; white-space:nowrap; }
+            /* 聊天页全屏：隐藏外层「叙事副本 / 用户名」头部 */
+            #instanceOverlay.inst-chatting #instanceHeader { display:none !important; }
+            /* 顶排：← 返回首页 + 副本名称（对应住宅的房间名位置） */
+            .inst-top { display:flex; align-items:center; gap:8px; padding:8px 10px 6px; background:#0d1a2e; flex-shrink:0; }
+            .inst-top .inst-back { color:#7fd0ff; font-size:13px; cursor:pointer; flex-shrink:0; padding:4px 8px; border-radius:8px; background:rgba(80,180,255,.12); border:1px solid rgba(80,180,255,.25); white-space:nowrap; }
+            .inst-top .inst-back:hover { background:rgba(80,180,255,.26); }
+            .inst-top .inst-title { font-size:15px; font-weight:600; color:#e6f1ff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+            .inst-top .inst-sub { font-size:11px; color:#6d8bb0; white-space:nowrap; flex-shrink:0; margin-left:auto; }
+            /* 第二排：功能键，一行放得下、不溢出画框 */
+            .inst-bar { display:flex; gap:5px; padding:0 8px 7px; background:#0d1a2e; border-bottom:1px solid rgba(80,180,255,.15); flex-shrink:0; }
+            .inst-bar .inst-hbtn { flex:1 1 0; min-width:0; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+            .inst-hbtn { background:rgba(80,180,255,.15); border:1px solid rgba(80,180,255,.3); color:#9fd8ff; padding:6px 4px; border-radius:8px; font-size:11.5px; cursor:pointer; }
             .inst-hbtn:hover { background:rgba(80,180,255,.28); }
             .inst-hbtn.warn { color:#ffd166; border-color:rgba(255,209,102,.35); background:rgba(255,209,102,.12); }
             .inst-hbtn.danger { color:#ff9d9d; border-color:rgba(255,107,107,.35); background:rgba(255,107,107,.12); }
-            #instanceMsgArea { flex:1; min-height:0; overflow-y:auto; padding:12px; background-color:#0f1a2e; background-size:cover; background-position:center; background-repeat:no-repeat; }
+            .inst-hbtn.tts-on { background:rgba(14,127,212,.4); color:#fff; border-color:#0e7fd4; }
+            .inst-hbtn:disabled { opacity:.4; cursor:not-allowed; }
+            /* 背景层不滚动（固定铺满），消息层在上方滚动 */
+            .inst-chatarea { flex:1; min-height:0; position:relative; display:flex; flex-direction:column; background-color:#0f1a2e; background-size:cover; background-position:center; background-repeat:no-repeat; }
+            #instanceMsgArea { flex:1; min-height:0; overflow-y:auto; padding:12px; background:transparent; }
             .inst-story { display:flex; justify-content:center; margin-bottom:16px; }
             .inst-story .body { max-width:82%; background:rgba(19,35,61,.92); border:1px solid rgba(80,180,255,.22); border-left:3px solid #7fd0ff; border-radius:12px; padding:10px 14px; }
             .inst-story .cap { font-size:12px; color:#7fd0ff; font-weight:600; margin-bottom:5px; letter-spacing:.6px; }
@@ -65,18 +74,20 @@
             .inst-thinking { display:flex; align-items:center; gap:7px; color:#6d8bb0; font-size:12px; padding:6px 4px 10px; }
             .inst-thinking .dot { width:6px; height:6px; border-radius:50%; background:#7fd0ff; animation:instPulse 1.1s ease-in-out infinite; flex-shrink:0; }
             @keyframes instPulse { 0%,100%{ opacity:.25; transform:scale(.8);} 50%{ opacity:1; transform:scale(1.15);} }
-            .inst-err { margin:0 0 10px; padding:8px 11px; border-radius:10px; background:rgba(255,107,107,.12); border:1px solid rgba(255,107,107,.3); color:#ffb3b3; font-size:12px; line-height:1.6; }
+            .inst-err { margin:0 0 10px; padding:8px 11px; border-radius:10px; background:rgba(13,26,46,.94); border:1px solid rgba(255,107,107,.5); color:#ffb3b3; font-size:12px; line-height:1.6; }
             .inst-composer { background:#0d1a2e; border-top:1px solid rgba(80,180,255,.15); padding:7px 8px; flex-shrink:0; }
             .inst-composer .row { display:flex; align-items:center; gap:6px; }
-            .inst-composer .tools { display:flex; align-items:center; gap:5px; flex-shrink:0; }
-            #instanceMsgInput { flex:1; border:1px solid #1d3a5f; border-radius:8px; padding:8px 10px; font-size:15px; outline:none; background:#13233d; color:#e6f1ff; min-width:0; }
+            #instanceMsgInput { flex:1 1 auto; border:1px solid #1d3a5f; border-radius:20px; padding:9px 14px; font-size:15px; outline:none; background:#13233d; color:#e6f1ff; min-width:0; }
             #instanceMsgInput::placeholder { color:#5b7aa0; }
-            #instanceSendBtn { background:#0e7fd4; color:#fff; border:none; border-radius:8px; padding:8px 14px; font-size:14px; cursor:pointer; flex-shrink:0; }
+            #instanceSendBtn { background:#0e7fd4; color:#fff; border:none; border-radius:20px; padding:9px 18px; font-size:14px; cursor:pointer; flex-shrink:0; }
             #instanceSendBtn:disabled { background:#2a4a75; color:#7f9dc0; cursor:not-allowed; }
-            .inst-tts { background:rgba(80,180,255,.15); border:1px solid rgba(80,180,255,.3); color:#9fd8ff; padding:6px 9px; border-radius:8px; font-size:14px; cursor:pointer; line-height:1; flex-shrink:0; }
-            .inst-tts.on { background:rgba(14,127,212,.35); color:#fff; border-color:#0e7fd4; }
-            .inst-tts:disabled { opacity:.4; cursor:not-allowed; }
-            .inst-model { max-width:150px; background:#13233d; border:1px solid rgba(80,180,255,.3); color:#cfe8ff; border-radius:8px; padding:6px; font-size:12px; cursor:pointer; flex-shrink:0; }
+            /* 模型 chip：只显示提供商图标/首字母，长按或悬停看全名 */
+            .inst-model-chip { width:38px; height:38px; border-radius:50%; flex-shrink:0; background:#13233d; border:1px solid rgba(80,180,255,.35); color:#9fd8ff; font-size:15px; font-weight:600; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; }
+            .inst-model-chip:hover { background:#1a2f52; }
+            .inst-model-chip:disabled { opacity:.45; cursor:not-allowed; }
+            .inst-model-opt { padding:10px 12px; border-radius:10px; background:#13233d; border:1px solid rgba(80,180,255,.15); color:#cfe8ff; font-size:13.5px; cursor:pointer; margin-bottom:6px; }
+            .inst-model-opt:hover { background:#1a2f52; }
+            .inst-model-opt.active { border-color:#0e7fd4; color:#fff; }
             .inst-modal-mask { position:fixed; inset:0; background:rgba(3,8,18,.78); z-index:400; display:flex; align-items:center; justify-content:center; padding:20px; }
             .inst-modal { background:#0d1a2e; border:1px solid rgba(80,180,255,.25); border-radius:14px; width:100%; max-width:600px; max-height:85vh; overflow-y:auto; padding:20px; box-shadow:0 12px 44px rgba(0,0,0,.6); }
             .inst-modal h2 { margin:0 0 4px; font-size:17px; color:#9fd8ff; }
@@ -120,10 +131,10 @@
         if (!btn) return;
         const ok = voiceSupported();
         btn.disabled = !ok;
-        btn.classList.toggle('on', ok && autoVoiceEnabled);
-        btn.textContent = (ok && autoVoiceEnabled) ? '🔊' : '🔇';
+        btn.classList.toggle('tts-on', ok && autoVoiceEnabled);
+        btn.textContent = (ok && autoVoiceEnabled) ? '🔊 语音' : '🔇 语音';
         btn.title = ok
-            ? (autoVoiceEnabled ? '自动朗读：开（点击关闭）' : '自动朗读：关（点击开启）')
+            ? (autoVoiceEnabled ? '自动朗读 AI 回复：开（点击关闭）' : '自动朗读 AI 回复：关（点击开启）')
             : '当前浏览器不支持语音朗读';
     }
 
@@ -196,39 +207,75 @@
     function providerLabel(p) {
         return ({ deepseek: 'DeepSeek', siliconflow: '硅基流动', glm: 'GLM' })[p] || (p || '默认');
     }
+    // chip 上只显示「提供商图标/首字母」
+    function providerInitial(p) {
+        return ({ deepseek: 'D', siliconflow: '硅', glm: 'G' })[p] || (String(p || '?').charAt(0).toUpperCase() || '?');
+    }
+
+    let userModelCfg = null;
+    let userModelCfgLoaded = false;
+
+    function updateModelChipUI() {
+        const chip = document.getElementById('instanceModelChip');
+        if (!chip) return;
+        if (!userModelCfg) {
+            chip.textContent = '?';
+            chip.disabled = true;
+            chip.title = '未配置模型：请到「设置 → 模型与服务」填写 API Key';
+            return;
+        }
+        const provider = userModelCfg.provider || 'deepseek';
+        chip.disabled = false;
+        chip.textContent = providerInitial(provider);
+        chip.title = providerLabel(provider) + (currentInstanceModel ? (' · ' + currentInstanceModel) : ' · 默认模型');
+    }
 
     function renderModelTools() {
-        const sel = document.getElementById('instanceModelSel');
-        if (!sel) return;
-        const hint = sel.querySelector('option[value="__ph"]');
-        if (hint) hint.textContent = '模型加载中…';
+        // 同一会话内只查一次，避免每次进副本聊天都打一次接口
+        if (userModelCfgLoaded) { updateModelChipUI(); return; }
         loadUserModelConfig().then(cfg => {
-            const sel2 = document.getElementById('instanceModelSel');
-            if (!sel2) return;
-            if (!cfg) {
-                sel2.innerHTML = '<option value="">未配置模型</option>';
-                sel2.disabled = true;
-                sel2.title = '请先到「设置 → 模型与服务」填写 API Key';
-                return;
-            }
-            sel2.disabled = false;
-            const provider = cfg.provider || 'deepseek';
-            const model = cfg.model || '';
-            currentInstanceModel = model;
-            let opts = '';
-            if (model) opts += `<option value="${escAttr(model)}">${esc(model)}</option>`;
-            opts += `<option value="">${esc(providerLabel(provider))} 默认模型</option>`;
-            sel2.innerHTML = opts;
-            sel2.value = model || '';
-            sel2.title = '当前使用你设置里的 ' + providerLabel(provider) + ' 配置';
+            userModelCfg = cfg;
+            userModelCfgLoaded = true;
+            currentInstanceModel = cfg ? (cfg.model || '') : '';
+            updateModelChipUI();
         });
     }
 
-    window.onInstanceModelChange = function() {
-        const sel = document.getElementById('instanceModelSel');
-        if (!sel) return;
-        currentInstanceModel = sel.value || '';
-        toast(currentInstanceModel ? ('已切换模型：' + currentInstanceModel) : '已切回默认模型');
+    // 点模型 chip → 弹出选择（只用设置里已保存的配置，不新建 Key 系统）
+    window.openInstanceModelPicker = function() {
+        if (!userModelCfg) {
+            toast('未配置模型：请到「设置 → 模型与服务」填写 API Key');
+            return;
+        }
+        const provider = userModelCfg.provider || 'deepseek';
+        const saved = userModelCfg.model || '';
+        const mask = document.createElement('div');
+        mask.className = 'inst-modal-mask';
+        mask.onclick = function(e) { if (e.target === mask) mask.remove(); };
+        const opt = (value, label, active) => (
+            '<div class="inst-model-opt' + (active ? ' active' : '') + '" data-v="' + escAttr(value) + '">' +
+                label + (active ? ' ✓' : '') +
+            '</div>'
+        );
+        mask.innerHTML =
+            '<div class="inst-modal" style="max-width:420px;">' +
+                '<h2>🔀 选择模型</h2>' +
+                '<div class="muted">使用你「设置 → 模型与服务」里已保存的 ' + esc(providerLabel(provider)) + ' 配置，不新建 Key。</div>' +
+                '<h3>模型</h3>' +
+                (saved ? opt(saved, '已保存：' + esc(saved), currentInstanceModel === saved) : '') +
+                opt('', esc(providerLabel(provider)) + ' 默认模型', !currentInstanceModel) +
+                '<div class="mfoot"><button class="mclose">关闭</button></div>' +
+            '</div>';
+        mask.querySelector('.mclose').onclick = function() { mask.remove(); };
+        mask.querySelectorAll('.inst-model-opt').forEach(el => {
+            el.onclick = function() {
+                currentInstanceModel = el.dataset.v || '';
+                mask.remove();
+                updateModelChipUI();
+                toast(currentInstanceModel ? ('已切换模型：' + currentInstanceModel) : '已切回默认模型');
+            };
+        });
+        document.body.appendChild(mask);
     };
 
     // ---------- 修改地图栏 ----------
@@ -279,22 +326,17 @@
         app.appendChild(overlay);
 
         window.closeInstanceOverlay = async function() {
-            // 只有在「确实处于副本聊天页」时才需要自动暂离；
-            // 在副本库 / 选择页关闭时不该对旧 iid 发 pause。
+            // 退出整个副本模块 = 回到现实世界。
+            // 若此时正在副本聊天页，先暂离（已暂离/已结束也算成功，不卡住）。
             if (currentInstanceId) {
-                try {
-                    await api('/api/instance/' + currentInstanceId + '/pause', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ user: currentUser })
-                    });
-                    toast('⏸ 已暂离副本，AI 回到现实世界');
-                } catch (e) {
-                    // 可能已经 paused/ended，不卡死，仅记录
-                    console.warn('[instance] pause failed:', e.message);
-                }
+                const ok = await doPauseInstance(currentInstanceId);
+                if (ok) toast('⏸ 已暂离副本，AI 回到现实世界');
             }
-            document.getElementById('instanceOverlay').style.display = 'none';
+            const ov = document.getElementById('instanceOverlay');
+            if (ov) {
+                ov.style.display = 'none';
+                ov.classList.remove('inst-chatting');
+            }
             currentInstanceId = null;
             selectedAi = null;
             selectedOwner = null;
@@ -335,6 +377,10 @@
         c.style.flexDirection = '';
         c.style.height = '';
         c.style.overflowY = 'auto';
+        c.style.padding = '12px 16px';
+        // 离开聊天页 → 恢复外层头部（AI 选择 / 副本库 / 公开副本都需要它）
+        const overlay = document.getElementById('instanceOverlay');
+        if (overlay) overlay.classList.remove('inst-chatting');
     }
     function setContentChatMode() {
         const c = document.getElementById('instanceContent');
@@ -343,6 +389,10 @@
         c.style.flexDirection = 'column';
         c.style.height = '100%';
         c.style.overflowY = 'hidden';
+        // 聊天页全屏：隐藏外层「叙事副本 / 用户名」头部，去掉内边距
+        c.style.padding = '0';
+        const overlay = document.getElementById('instanceOverlay');
+        if (overlay) overlay.classList.add('inst-chatting');
     }
     window.uploadInstanceBg = function() {
         if (!isAdmin()) { toast('只有站长可以上传背景'); return; }
@@ -1023,6 +1073,7 @@
             if (s.premise) instances[id].premise = s.premise;
             if (s.time_setting) instances[id].time_setting = s.time_setting;
             if (s.participants) instances[id].participants = s.participants;
+            if (s.chat_bg != null) instances[id].chat_bg = s.chat_bg;
             // 3. 直接渲染聊天页
             renderChatRoom(d.chat_history || [], s);
         }).catch(e => {
@@ -1031,9 +1082,8 @@
         });
     };
 
-    // ---------- 暂离副本 ----------
+    // ---------- 暂离副本（副本库编辑弹窗里的按钮） ----------
     window.pauseInstance = function(id) {
-        console.log('[DEBUG] pauseInstance called for', id);
         if (!id) { toast('⚠️ 缺少副本ID'); return; }
         const modal = document.getElementById('instanceModal');
         toast('⏸ 暂离副本...');
@@ -1055,7 +1105,21 @@
                 loadInstanceLibrary(selectedAi);
             }
         }).catch(e => {
-            toast('❌ 暂离失败：' + e.message);
+            const msg = String((e && e.message) || '');
+            // 已暂离 / 已结束：状态本来就对了，不该报错卡住
+            if (/不是进行中|未激活/.test(msg)) {
+                toast('ℹ️ 该副本已不是进行中状态');
+                if (modal) modal.remove();
+                currentEditingInstance = null;
+                if (isReadOnly) {
+                    const publicList = publicInstancesMap[selectedAi] || [];
+                    renderPublicLibrary(publicList, selectedOwner);
+                } else {
+                    loadInstanceLibrary(selectedAi);
+                }
+                return;
+            }
+            toast('❌ 暂离失败：' + msg);
             console.error(e);
         });
     };
@@ -1234,14 +1298,25 @@
             p.name + (p.type === 'npc' ? '（NPC）' : '') +
             (p.profile ? '：' + p.profile : '')
         ).join('\n');
-        openInstanceInfoModal('🖼️ ' + (inst.name || '副本'), [
+        const sections = [
             { title: '🌍 副本背景', text: inst.background },
             { title: '🕰️ 剧情时间', text: inst.time_setting },
             { title: '📖 前情提要', text: inst.premise },
             { title: '👥 参与者', text: parts }
-        ]);
+        ];
+        // 已完成的章节也放进这个面板（不再占用聊天空间）
+        const chapters = inst.chapters || [];
+        chapters.forEach(c => {
+            sections.push({
+                title: '📚 ' + (c.title || ('第' + (c.chapter || '?') + '章')) +
+                       '（第' + (c.round_start || '?') + '-' + (c.round_end || '?') + '轮）',
+                text: c.summary || ''
+            });
+        });
+        openInstanceInfoModal('📖 ' + (inst.name || '副本'), sections);
     };
 
+    // 保留：供未来单独的「📚 剧情」入口调用（本次按需求收进「📖 副本背景」面板）
     window.openInstanceChapters = function() {
         const inst = instances[currentInstanceId];
         if (!inst) return;
@@ -1303,26 +1378,24 @@
         const content = document.getElementById('instanceContent');
         content.innerHTML = `
             <div class="inst-shell">
-                <div class="inst-header">
-                    <span class="inst-back" onclick="backToLibraryFromChat()">← 返回</span>
+                <div class="inst-top">
+                    <span class="inst-back" onclick="pauseAndLeaveInstance()" title="← 返回副本首页（= 暂离副本，AI 回到现实世界）">← 返回首页</span>
                     <span class="inst-title">🎬 ${esc(inst.name || '未命名')}</span>
                     ${inst.time_setting ? `<span class="inst-sub">${esc(inst.time_setting)}</span>` : ''}
-                    <span class="inst-actions">
-                        <button class="inst-hbtn" onclick="openInstanceBackground()" title="查看副本背景 / 前情提要 / 参与者">🖼 背景</button>
-                        <button class="inst-hbtn" onclick="openInstanceChapters()" title="查看已完成章节">📚 剧情</button>
-                        <button class="inst-hbtn warn" onclick="pauseAndLeaveInstance()" title="暂离副本，AI 回到现实世界住宅">⏸ 暂离</button>
-                        <button class="inst-hbtn danger" onclick="endInstance('${escAttr(currentInstanceId)}')" title="结束副本并生成剧情总结">🏁 结束</button>
-                    </span>
                 </div>
-                <div id="instanceMsgArea"></div>
+                <div class="inst-bar">
+                    <button class="inst-hbtn" onclick="changeInstanceChatBg()" title="上传一张图片作为聊天背景（保存在服务器）">🖼 换背景图</button>
+                    <button class="inst-hbtn" onclick="openInstanceBackground()" title="查看副本背景 / 前情提要 / 参与者">📖 副本背景</button>
+                    <button class="inst-hbtn" onclick="pauseAndLeaveInstance()" title="返回副本首页（= 暂离副本）">🏠 返回首页</button>
+                    <button class="inst-hbtn danger" onclick="endInstance('${escAttr(currentInstanceId)}')" title="结束副本并生成剧情总结">🏁 结束副本</button>
+                    <button class="inst-hbtn" id="instanceVoiceBtn" onclick="toggleAutoVoice()" title="自动朗读">🔇 语音</button>
+                </div>
+                <div id="instanceChatArea" class="inst-chatarea">
+                    <div id="instanceMsgArea"></div>
+                </div>
                 <div class="inst-composer">
                     <div class="row">
-                        <div class="tools">
-                            <select id="instanceModelSel" class="inst-model" onchange="onInstanceModelChange()" title="使用你设置里已保存的模型配置">
-                                <option value="__ph">模型加载中…</option>
-                            </select>
-                            <button id="instanceVoiceBtn" class="inst-tts" onclick="toggleAutoVoice()" title="自动朗读">🔇</button>
-                        </div>
+                        <button id="instanceModelChip" class="inst-model-chip" onclick="openInstanceModelPicker()" title="切换模型">…</button>
                         <input id="instanceMsgInput" placeholder="说点什么…" autocomplete="off"
                                onkeydown="if(event.key==='Enter') sendInstanceMsg()">
                         <button id="instanceSendBtn" onclick="sendInstanceMsg()">发送</button>
@@ -1333,11 +1406,17 @@
         renderChatMessages();
         renderModelTools();
         updateVoiceToggleUI();
+        // 恢复本副本已保存的聊天背景（无则保持默认色）
+        applyChatBg(inst.chat_bg || '');
+        loadChatBg(currentInstanceId);
     }
 
     // ---------- 聊天相关辅助函数 ----------
-    window.backToLibraryFromChat = function() {
-        const iid = currentInstanceId;
+    // 语义（按产品定义）：
+    //   返回首页 = 暂离副本（AI 回现实世界住宅），副本保留 chat_history
+    //   结束副本 = 生成总结并真正结束
+    //   关闭整个副本模块 = 回到现实世界
+    function goBackToLibrary() {
         currentInstanceId = null;
         if (isReadOnly) {
             const publicList = publicInstancesMap[selectedAi] || [];
@@ -1347,41 +1426,132 @@
         } else {
             renderAiSelection();
         }
-        // 只清除 UI 状态，不发送 pause：用户可能只是返回看看副本库
-        if (iid) console.log('[instance] 返回副本库（副本仍为 active）:', iid);
-    };
-    window.setChatBg = function() {
-        const url = prompt('输入背景图片URL：');
-        const area = document.getElementById('instanceMsgArea');
-        if (url && area) area.style.backgroundImage = 'url(' + url + ')';
+    }
+
+    // 暂离：已 paused/ended 也算成功（幂等），不能因为 400 就卡住不让退
+    function doPauseInstance(iid, owner) {
+        const u = owner || currentUser;
+        if (!iid || !u) return Promise.resolve(false);
+        return api('/api/instance/' + iid + '/pause', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user: u })
+        }).then(() => true).catch(e => {
+            console.warn('[instance] pause 未生效（可能已暂离/已结束）:', e.message);
+            return false;
+        });
+    }
+
+    // 顶栏「← 返回首页」/「🏠 返回首页」
+    window.pauseAndLeaveInstance = function() {
+        if (!currentInstanceId) { goBackToLibrary(); return; }
+        toast('⏸ 正在暂离副本…');
+        doPauseInstance(currentInstanceId).then(ok => {
+            toast(ok ? '✅ 已暂离副本，AI 回到现实世界住宅' : 'ℹ️ 副本已是非进行状态');
+            goBackToLibrary();
+        });
     };
 
-    // ---------- 暂离并退出聊天页（顶栏「⏸ 暂离」） ----------
-    window.pauseAndLeaveInstance = function() {
-        const id = currentInstanceId;
-        if (!id) { toast('⚠️ 缺少副本ID'); return; }
-        toast('⏸ 正在暂离副本…');
-        api('/api/instance/' + id + '/pause', {
+    window.backToLibraryFromChat = function() { window.pauseAndLeaveInstance(); };
+
+    // 更换聊天背景图：直接上传图片 → 存服务器文件，data.json 里只存路径
+    function applyChatBg(url) {
+        const area = document.getElementById('instanceChatArea');
+        if (!area) return;
+        if (url) {
+            area.style.backgroundImage = 'url(' + url + ')';
+            area.style.backgroundSize = 'cover';
+            area.style.backgroundPosition = 'center';
+        } else {
+            area.style.backgroundImage = 'none';
+        }
+    }
+
+    // 进入聊天页时恢复本副本已保存的背景
+    function loadChatBg(iid) {
+        if (!iid) return;
+        api('/api/instance/' + iid + '/chat_bg?user=' + encodeURIComponent(currentUser))
+            .then(d => {
+                const bg = (d && d.bg) || '';
+                const inst = instances[iid];
+                if (inst) inst.chat_bg = bg;
+                applyChatBg(bg);
+            })
+            .catch(() => {});
+    }
+
+    window.changeInstanceChatBg = function() {
+        const inst = instances[currentInstanceId];
+        if (!inst) return;
+        // 已有自定义背景时，先把「恢复默认」这个出口给出来，
+        // 免得用户找不到路回去（不额外占用功能键位置）
+        if (inst.chat_bg) {
+            if (confirm('当前已设置自定义背景。\n【确定】= 换一张新图\n【取消】= 恢复默认背景')) { /* 继续走选图 */ }
+            else { window.clearInstanceChatBg(); return; }
+        }
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.onchange = function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(ev) {
+                const dataUrl = ev.target.result;
+                toast('⏳ 正在上传背景…');
+                api('/api/instance/' + currentInstanceId + '/chat_bg', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user: currentUser, bg: dataUrl })
+                }).then(d => {
+                    // 后端返回的是文件路径，不是 base64
+                    inst.chat_bg = (d && d.bg) || '';
+                    applyChatBg(inst.chat_bg);
+                    toast('✅ 背景已保存到服务器');
+                }).catch(err => toast('❌ 上传失败：' + err.message));
+            };
+            reader.readAsDataURL(file);
+        };
+        input.click();
+    };
+
+    window.clearInstanceChatBg = function() {
+        const inst = instances[currentInstanceId];
+        if (!inst) return;
+        api('/api/instance/' + currentInstanceId + '/chat_bg', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user: currentUser, bg: '' })
+        }).then(() => {
+            inst.chat_bg = '';
+            applyChatBg('');
+            toast('已恢复默认背景');
+        }).catch(err => toast('❌ ' + err.message));
+    };
+
+    // 重新激活副本（幂等）：用于「副本未激活」时自动纠正前端/后端状态不一致
+    function reenterInstance(iid) {
+        return api('/api/instance/' + iid + '/enter', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ user: currentUser })
-        }).then(() => {
-            toast('✅ 已暂离副本，AI 回到现实世界住宅');
-            // 关键修复：必须清空 currentInstanceId，否则会残留 active 状态
-            currentInstanceId = null;
-            if (isReadOnly) {
-                const publicList = publicInstancesMap[selectedAi] || [];
-                renderPublicLibrary(publicList, selectedOwner);
-            } else if (selectedAi) {
-                loadInstanceLibrary(selectedAi);
-            } else {
-                renderAiSelection();
-            }
+        }).then(d => {
+            // 只更新状态与历史，不重绘（重绘会清空输入态）
+            if (!instances[iid]) instances[iid] = {};
+            if (d && d.chat_history) instances[iid].chat_history = d.chat_history;
+            instances[iid].status = 'active';
+            const s = (d && d.settings) || {};
+            if (s.name) instances[iid].name = s.name;
+            if (s.background != null) instances[iid].background = s.background;
+            if (s.premise != null) instances[iid].premise = s.premise;
+            if (s.time_setting != null) instances[iid].time_setting = s.time_setting;
+            if (s.participants) instances[iid].participants = s.participants;
+            return true;
         }).catch(e => {
-            toast('❌ 暂离失败：' + e.message);
-            console.error(e);
+            console.warn('[instance] 重新进入失败:', e.message);
+            return false;
         });
-    };
+    }
 
     window.sendInstanceMsg = function() {
         const input = document.getElementById('instanceMsgInput');
@@ -1411,13 +1581,19 @@
         const body = { user: currentUser, content: content };
         if (currentInstanceModel) body.model_override = currentInstanceModel;
 
-        api('/api/instance/' + iid + '/message', {
+        const doPost = () => api('/api/instance/' + iid + '/message', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
-        }).then(() => {
-            // 3. 轮询等待 AI 回复：以「收到新的 assistant 消息」为准，不依赖固定条数
-            const before = countAssistantMsgs(prevHist);
+        });
+
+        // 3. 成功后才开始轮询 AI 回复。
+        //    baseline：本轮发送前的 assistant 条数（进聊天页时取一次；若中间重新激活过，
+        //    服务端历史可能变化，必须用刷新后的最新值，否则会误判 AI 是否已回复）。
+        const afterPost = (baseline) => {
+            const before = (typeof baseline === 'number')
+                ? baseline
+                : countAssistantMsgs(instances[iid] ? instances[iid].chat_history : []);
             let tries = 0;
             const MAX_TRIES = 15;   // 约 22 秒
             const finish = () => { showAiThinking(false); if (btn) btn.disabled = false; };
@@ -1441,8 +1617,8 @@
                             b.onclick = function() {
                                 b.disabled = true;
                                 b.textContent = '🔄 检查中…';
-                                refreshInstanceChat(before).then(done => {
-                                    if (done) { maybeAutoSpeak((instances[iid] || {}).chat_history); return; }
+                                refreshInstanceChat(before).then(done2 => {
+                                    if (done2) { maybeAutoSpeak((instances[iid] || {}).chat_history); return; }
                                     // 未回复 → 重新渲染会清空本按钮，再给一条明确提示
                                     showInstanceError('AI 仍未回复。多半是「AI 集成总开关」未开启，或 API Key / 模型不可用。');
                                 });
@@ -1457,12 +1633,38 @@
                 });
             };
             setTimeout(tick, 700);
-        }).catch(e => {
+        };
+
+        doPost().then(() => afterPost(countAssistantMsgs(prevHist))).catch(e => {
+            const msg = String((e && e.message) || '');
+            // 「副本未激活」：本地以为是 active，后端已 paused/ended。
+            // 自动重新进入一次再重发，用户无感；只重试一次，避免死循环。
+            if (/未激活/.test(msg)) {
+                console.warn('[instance] 副本未激活，自动重新进入后重发…');
+                reenterInstance(iid).then(ok => {
+                    if (!ok) {
+                        showAiThinking(false);
+                        if (btn) btn.disabled = false;
+                        showInstanceError('副本未能激活，请返回首页后重新进入。');
+                        return;
+                    }
+                    // 重新进入会带回最新 chat_history，baseline 必须基于新历史重算
+                    const freshBaseline = countAssistantMsgs(
+                        instances[iid] ? instances[iid].chat_history : []
+                    );
+                    doPost().then(() => afterPost(freshBaseline)).catch(e2 => {
+                        showAiThinking(false);
+                        if (btn) btn.disabled = false;
+                        showInstanceError('重新激活后仍发送失败：' + e2.message);
+                    });
+                });
+                return;
+            }
             showAiThinking(false);
             if (btn) btn.disabled = false;
             // POST 失败 → 回滚乐观消息，不留假消息
             if (inst) { inst.chat_history = prevHist; renderChatMessages(); }
-            showInstanceError('发送失败：' + e.message + '（消息未保存，请重试）');
+            showInstanceError('发送失败：' + msg + '（消息未保存，请重试）');
             console.error(e);
         });
     };
@@ -1536,9 +1738,10 @@
 
     // ---------- 初始化 ----------
     function init() {
+        injectInstanceChatStyles();   // 让 .inst-* 样式一开始就可用
         modifyMapBar();
         createOverlay();
-        console.log('[ext] 副本插件 v10 加载完成（住宅聊天风格 UI / 前情进消息区 / 暂离 / 模型+语音接口）');
+        console.log('[ext] 副本插件 v12 加载完成（全屏聊天 UI / 返回首页=暂离 / 激活自愈 / 聊天背景存文件 / 模型+语音）');
     }
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
