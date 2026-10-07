@@ -82,40 +82,59 @@ def setup(app, data, helpers):
 
     # ---------- 副本章节生成（只读副本内容，绝不碰现实世界） ----------
     def _generate_instance_chapter(owner, iid, chapter_start_round, chapter_end_round):
-        """在后台线程里为副本生成一章总结。只读取本副本的 background/premise/chat_history。"""
+        """在后台线程里为副本生成一章总结。只读取本副本的 background/premise/chapters/chat_history。"""
         try:
             insts = data.get("instances", {}).get(owner, {})
             inst = insts.get(iid)
             if not inst:
                 return
-            # 只取当前这一章的 30 轮
             history = inst.get("chat_history", [])
-            idx_start = max(0, (chapter_start_round - 1) * 2)
-            idx_end = min(len(history), chapter_end_round * 2)
-            chapter_msgs = history[idx_start:idx_end]
+            # ---- 切片：按"用户消息作为一轮开始"的语义，不假设 1轮=2条 ----
+            user_idxs = [i for i, mm in enumerate(history) if mm.get("role") == "user"]
+            if not user_idxs:
+                return
+            start_pos = chapter_start_round - 1
+            end_pos = chapter_end_round  # exclusive
+            if start_pos >= len(user_idxs):
+                return
+            start_idx = user_idxs[start_pos]
+            end_idx = user_idxs[end_pos] if end_pos < len(user_idxs) else len(history)
+            chapter_msgs = history[start_idx:end_idx]
             if not chapter_msgs:
                 return
             chat_text = "\n".join(
-                f"{m.get('sender', '?')}：{m.get('content', '')}"
-                for m in chapter_msgs if m.get("content")
+                f"{mm.get('sender', '?')}：{mm.get('content', '')}"
+                for mm in chapter_msgs if mm.get("content")
             )
             inst_name = inst.get("name", "未命名副本")
             background = inst.get("background", "")
             premise = inst.get("premise", "")
+            # ---- 已完成章节（只取已有，不含本章）----
+            prev_chapters = inst.get("chapters", [])
+            if prev_chapters:
+                prev_chapters_text = "\n".join(
+                    f"第{c.get('chapter')}章：{(c.get('summary') or '')[:300]}"
+                    for c in prev_chapters
+                )
+            else:
+                prev_chapters_text = "（无）"
             prompt = (
                 "你是本副本的剧情记录者。\n\n"
-                "请根据下面这一章副本中的真实对话，整理成一段连续的剧情章节总结。\n\n"
+                "请根据副本背景、前情提要、已完成章节，以及下面本章节的真实对话，"
+                "整理成一段连续的剧情章节总结。\n\n"
                 "要求：\n"
                 "1. 只根据副本内容。\n"
                 "2. 保留关键人物、事件、冲突和关系变化。\n"
                 "3. 不加入现实世界信息。\n"
                 "4. 不解释自己是AI。\n"
                 "5. 写成故事，而不是聊天记录。\n"
-                "6. 控制在800字以内。\n\n"
-                f"副本：{inst_name}\n\n"
-                f"背景：{background}\n\n"
-                f"前情：{premise}\n\n"
-                f"本章对话：\n{chat_text}"
+                "6. 承接前情提要和已完成章节，不要写成'两人突然开始聊天'。\n"
+                "7. 控制在800字以内。\n\n"
+                f"【副本名称】\n{inst_name}\n\n"
+                f"【副本背景】\n{background or '（无）'}\n\n"
+                f"【前情提要】\n{premise or '（无）'}\n\n"
+                f"【已完成章节】\n{prev_chapters_text}\n\n"
+                f"【本章对话】\n{chat_text}"
             )
             summary = ""
             try:
@@ -289,18 +308,9 @@ def setup(app, data, helpers):
         })
         save_data()
 
-        # 2. 计算当前轮数（用户消息条数 = 轮数）
-        round_count = len([x for x in inst.get("chat_history", []) if x.get("role") == "user"])
-        inst["round_count"] = round_count
-
-        # 3. 每 30 轮触发一次章节生成（后台线程，不阻塞）
-        if round_count > 0 and round_count % 30 == 0:
-            chapter_start = round_count - 29
-            chapter_end = round_count
-            threading.Timer(2.0, _generate_instance_chapter,
-                            args=(user, iid, chapter_start, chapter_end)).start()
-
-        # 4. 查找参与的 AI 并触发回复（异步）
+        # 2. AI 回复 → 等回复写入 chat_history → 再检查章节触发
+        # 关键：章节生成必须在本轮 AI 回复已写入 chat_history 之后，
+        # 避免 30 轮章节缺失最后一条 AI 回复。
         def _do_ai_reply():
             try:
                 ai = None
@@ -310,9 +320,20 @@ def setup(app, data, helpers):
                         break
                 if not ai:
                     return
-                # 调用 drive_ai，触发副本上下文
+                # drive_ai 是同步的：返回时 AI 的 instance_chat 回复已写入 chat_history
                 if hasattr(m, 'drive_ai'):
                     m.drive_ai(ai, "instance_chat", iid, content, user)
+                # ---- AI 回复已写入，更新轮数 ----
+                _h = inst.get("chat_history", [])
+                current_round = len([x for x in _h if x.get("role") == "user"])
+                inst["round_count"] = current_round
+                save_data()
+                # ---- 每 30 轮触发章节 ----
+                if current_round > 0 and current_round % 30 == 0:
+                    chapter_start = current_round - 29
+                    chapter_end = current_round
+                    threading.Timer(2.0, _generate_instance_chapter,
+                                    args=(user, iid, chapter_start, chapter_end)).start()
             except Exception as e:
                 print(f"[Instance] AI 回复异常: {e}", flush=True)
 
@@ -332,15 +353,45 @@ def setup(app, data, helpers):
         if inst.get("status") != "active":
             raise HTTPException(400, "副本未激活")
 
-        # 1. 调用 LLM 生成 800 字总结
+        # 1. 调用 LLM 生成 800 字总结（包含背景 / 前情 / 章节 / 聊天历史）
         summary = "（剧情总结生成失败）"
         try:
-            chat_text = "\n".join([f"{m.get('sender')}：{m.get('content')}" for m in inst.get("chat_history", [])[-200:]])
-            prompt = f"请用自己的人设将以下副本对话内容，整理成一段 800 字左右的叙事总结，包含关键情节、冲突和结局：\n\n{chat_text}"
+            inst_name = inst.get("name", "未命名副本")
+            background = inst.get("background", "")
+            premise = inst.get("premise", "")
+            chapters = inst.get("chapters", [])
+            if chapters:
+                chapters_text = "\n".join(
+                    f"第{c.get('chapter')}章（第{c.get('round_start')}-{c.get('round_end')}轮）：{c.get('summary', '')}"
+                    for c in chapters
+                )
+            else:
+                chapters_text = "（无）"
+            chat_text = "\n".join(
+                f"{mm.get('sender')}：{mm.get('content')}"
+                for mm in inst.get("chat_history", [])[-200:]
+                if mm.get("content")
+            )
+            prompt = (
+                "请将以下副本的完整剧情，整理成一段 1000 字左右的叙事总结。\n\n"
+                "要求：\n"
+                "1. 结合副本背景、前情提要和实际发生的剧情。\n"
+                "2. 保留关键人物、事件、冲突和结局。\n"
+                "3. 不解释自己是 AI，不提及系统。\n"
+                "4. 写成故事，而不是聊天记录。\n"
+                "5. 控制在 800 字以内。\n\n"
+                f"【副本名称】\n{inst_name}\n\n"
+                f"【副本背景】\n{background or '（无）'}\n\n"
+                f"【前情提要】\n{premise or '（无）'}\n\n"
+                f"【已完成章节】\n{chapters_text}\n\n"
+                f"【副本聊天历史】\n{chat_text}"
+            )
             if hasattr(m, 'call_llm'):
-                # 需要使用调用者的 key，这里复用主人的 key
                 owner = user
-                msgs = [{"role": "system", "content": "你是一个专业的文学编辑，擅长总结故事。"}, {"role": "user", "content": prompt}]
+                msgs = [
+                    {"role": "system", "content": "你是一个专业的文学编辑，擅长总结故事。"},
+                    {"role": "user", "content": prompt}
+                ]
                 result = m.call_llm(owner, msgs, max_tokens=1200)
                 if result:
                     summary = result
