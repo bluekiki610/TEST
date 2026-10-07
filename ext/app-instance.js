@@ -71,8 +71,8 @@
         app.appendChild(overlay);
 
         window.closeInstanceOverlay = async function() {
-            // 如果当前有活跃副本，自动暂离
-            if (currentInstanceId && instances[currentInstanceId] && instances[currentInstanceId].status === 'active') {
+            // 只要有 currentInstanceId 就尝试 pause（不依赖本地 status 同步）
+            if (currentInstanceId) {
                 try {
                     await api('/api/instance/' + currentInstanceId + '/pause', {
                         method: 'POST',
@@ -81,7 +81,8 @@
                     });
                     toast('⏸ 已暂离副本，AI 回到现实世界');
                 } catch (e) {
-                    toast('⚠️ 暂离失败：' + e.message);
+                    // 可能已经 paused/ended，不卡死，仅记录
+                    console.warn('[instance] pause failed:', e.message);
                 }
             }
             document.getElementById('instanceOverlay').style.display = 'none';
@@ -115,6 +116,24 @@
     }
     function getMainBg() {
         return (window.mapData && window.mapData.room_bg && window.mapData.room_bg['main']) || '';
+    }
+
+    // ---------- 副本内容区布局模式切换 ----------
+    function setContentScrollable() {
+        const c = document.getElementById('instanceContent');
+        if (!c) return;
+        c.style.display = 'block';
+        c.style.flexDirection = '';
+        c.style.height = '';
+        c.style.overflowY = 'auto';
+    }
+    function setContentChatMode() {
+        const c = document.getElementById('instanceContent');
+        if (!c) return;
+        c.style.display = 'flex';
+        c.style.flexDirection = 'column';
+        c.style.height = '100%';
+        c.style.overflowY = 'hidden';
     }
     window.uploadInstanceBg = function() {
         if (!isAdmin()) { toast('只有站长可以上传背景'); return; }
@@ -168,6 +187,7 @@
 
     // ---------- AI选择页 ----------
     function renderAiSelection() {
+        setContentScrollable();
         const content = document.getElementById('instanceContent');
         const bg = instanceBg || getMainBg();
         const bgStyle = bg ? `background-image: url(${bg}); background-size: cover; background-position: center;` : 'background: #f5f2ef;';
@@ -254,6 +274,7 @@
 
     // ---------- 渲染自己的副本库 ----------
     function renderLibrary() {
+        setContentScrollable();
         const content = document.getElementById('instanceContent');
         const allTags = ['全部', ...userTags];
         const filteredIds = Object.keys(instances).filter(id => {
@@ -308,6 +329,7 @@
 
     // ---------- 渲染他人AI的公开副本 ----------
     function renderPublicLibrary(publicList, owner) {
+        setContentScrollable();
         const content = document.getElementById('instanceContent');
         if (!publicList.length) {
             content.innerHTML = `
@@ -345,14 +367,36 @@
         content.dataset.page = 'public';
     }
 
-    // ---------- 查看公开副本总结 ----------
+    // ---------- 查看公开副本（阅读器模式） ----------
     window.viewPublicSummary = function(id, owner) {
         const item = publicInstancesMap[selectedAi]?.find(i => i.id === id);
-        if (!item || !item.summary) {
-            toast('该副本暂无总结');
-            return;
-        }
-        alert(`📖 剧情总结（${item.name}）\n\n${item.summary}`);
+        if (!item) { toast('副本不存在'); return; }
+        const chapters = item.chapters || [];
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); z-index:400; display:flex; align-items:center; justify-content:center; padding:20px;';
+        wrapper.onclick = function(e) { if (e.target === wrapper) wrapper.remove(); };
+        wrapper.innerHTML = `
+            <div style="background:#f5f2ef; border-radius:16px; width:100%; max-width:600px; max-height:85vh; overflow-y:auto; padding:24px; position:relative;">
+                <h2 style="margin:0 0 8px;">📖 ${esc(item.name || '未命名副本')}</h2>
+                <div style="color:#888; font-size:13px; margin-bottom:16px;">作者：${esc(owner || '')}</div>
+                <hr style="border:none; border-top:1px solid #ddd; margin:16px 0;">
+                ${chapters.length ? chapters.map(c => `
+                    <div style="margin-bottom:18px;">
+                        <h3 style="margin:0 0 6px; font-size:15px; color:#555;">📚 ${esc(c.title || ('第' + (c.chapter || '?') + '章'))}</h3>
+                        <div style="color:#666; line-height:1.7; white-space:pre-wrap;">${esc(c.summary || '')}</div>
+                    </div>
+                `).join('') : ''}
+                ${item.summary ? `
+                    <hr style="border:none; border-top:1px solid #ddd; margin:16px 0;">
+                    <h3 style="margin:0 0 8px; font-size:15px; color:#555;">🎬 全篇剧情</h3>
+                    <div style="color:#666; line-height:1.7; white-space:pre-wrap;">${esc(item.summary)}</div>
+                ` : ''}
+                <div style="text-align:center; margin-top:24px;">
+                    <button style="background:#3498db; color:#fff; border:none; padding:8px 24px; border-radius:8px; cursor:pointer;" onclick="this.closest('div[style*=\\'position:fixed\\']').remove()">关闭</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(wrapper);
     };
 
     // ---------- 返回AI选择 ----------
@@ -518,10 +562,10 @@
                         <textarea id="editPremise" class="input" rows="3" style="width:100%; border:1px solid #1d3a5f; border-radius:8px; padding:8px 12px; font-size:14px; background:#13233d; color:#e6f1ff;">${esc(inst.premise || '')}</textarea>
                     </div>
 
-                    <!-- 底部四按钮 -->
+                    <!-- 底部按钮 -->
                     <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
                         <button class="btn green" data-action="save" data-id="${inst.id}" style="flex:1; background:#0e9f6e; color:#fff; border:none; padding:8px; border-radius:8px; cursor:pointer;">💾 保存</button>
-                        ${!isEnded ? `<button class="btn" data-action="enter" data-id="${inst.id}" style="flex:1; background:#0e7fd4; color:#fff; border:none; padding:8px; border-radius:8px; cursor:pointer;">▶ 进入</button>` : ''}
+                        <button class="btn" data-action="enter" data-id="${inst.id}" style="flex:1; background:#0e7fd4; color:#fff; border:none; padding:8px; border-radius:8px; cursor:pointer;">${isEnded ? '▶ 继续剧情' : (isPaused ? '▶ 继续剧情' : '▶ 进入剧情')}</button>
                         ${isActive ? `<button class="btn" data-action="pause" data-id="${inst.id}" style="flex:1; background:#f39c12; color:#fff; border:none; padding:8px; border-radius:8px; cursor:pointer;">⏸ 暂离</button>` : ''}
                         <button class="btn red" data-action="delete" data-id="${inst.id}" style="flex:1; background:#c0392b; color:#fff; border:none; padding:8px; border-radius:8px; cursor:pointer;">🗑️ 删除</button>
                         <button class="btn gray" data-action="exit" data-id="${inst.id}" style="flex:1; background:#2a4a75; color:#cfe8ff; border:none; padding:8px; border-radius:8px; cursor:pointer;">✕ 退出</button>
@@ -691,52 +735,35 @@
         }
     };
 
-    // ---------- 进入副本 ----------
+    // ---------- 进入副本（唯一入口） ----------
     window.enterInstanceDirect = function(id) {
-        console.log('[DEBUG] enterInstanceDirect called for', id);
-        let inst = currentEditingInstance;
-        if (!inst || inst.id !== id) inst = instances[id];
-        if (!inst) { toast('❌ 副本数据不存在'); return; }
-        if (inst.status === 'ended') { toast('该副本已结束，无法进入'); return; }
-
-        // 如果已经是 active，直接进入聊天（不调用 API）
-        if (inst.status === 'active') {
-            const modal = document.getElementById('instanceModal');
-            if (modal) modal.remove();
-            currentEditingInstance = null;
-            currentInstanceId = id;
-            renderChatRoom(inst.chat_history || [], {
-                name: inst.name,
-                time_setting: inst.time_setting,
-                background: inst.background,
-                premise: inst.premise,
-                participants: inst.participants
-            });
-            return;
-        }
-
-        // 否则调用 enter API 激活
+        if (!id) { toast('❌ 缺少副本ID'); return; }
+        // 1. 先关闭编辑 modal
         const modal = document.getElementById('instanceModal');
         if (modal) modal.remove();
         currentEditingInstance = null;
+
+        // 2. 无论什么状态，都调用 enter API（后端幂等）
+        //    draft / paused / ended → active；active → 保持 active
         toast('⏳ 进入副本...');
         api('/api/instance/' + id + '/enter', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ user: currentUser })
         }).then(d => {
-            if (instances[id]) {
-                instances[id].chat_history = d.chat_history || [];
-                instances[id].status = 'active';
-            } else {
-                instances[id] = {
-                    ...inst,
-                    chat_history: d.chat_history || [],
-                    status: 'active'
-                };
-            }
             currentInstanceId = id;
-            renderChatRoom(d.chat_history || [], d.settings);
+            if (!instances[id]) instances[id] = {};
+            instances[id].chat_history = d.chat_history || [];
+            instances[id].status = 'active';
+            // 补充 settings 里的字段到本地实例
+            const s = d.settings || {};
+            if (s.name) instances[id].name = s.name;
+            if (s.background) instances[id].background = s.background;
+            if (s.premise) instances[id].premise = s.premise;
+            if (s.time_setting) instances[id].time_setting = s.time_setting;
+            if (s.participants) instances[id].participants = s.participants;
+            // 3. 直接渲染聊天页
+            renderChatRoom(d.chat_history || [], s);
         }).catch(e => {
             toast('❌ 进入失败：' + e.message);
             console.error(e);
@@ -789,14 +816,47 @@
         });
     };
 
-    // ---------- 聊天界面（含暂离按钮） ----------
+    // ---------- 聊天消息渲染（可独立复用） ----------
+    function renderChatMessages() {
+        const area = document.getElementById('instanceMsgArea');
+        if (!area) return;
+        const inst = instances[currentInstanceId];
+        if (!inst) return;
+        const hist = inst.chat_history || [];
+        area.innerHTML = hist.length ? hist.map(m => `
+            <div style="display:flex; margin-bottom:10px; ${m.sender === currentUser ? 'justify-content:flex-end;' : ''}">
+                <div style="max-width:75%; padding:8px 14px; border-radius:10px; background:${m.sender === currentUser ? '#d4cdc4' : '#ffffff'}; color:#333; word-break:break-word; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+                    <div style="font-size:11px; color:#888; margin-bottom:2px;">${esc(m.sender)}</div>
+                    ${esc(m.content)}
+                </div>
+            </div>
+        `).join('') : '<div style="color:#aaa; text-align:center; padding:40px;">✨ 空荡荡的，开始你的冒险吧...</div>';
+        area.scrollTop = area.scrollHeight;
+    }
+
+    function showAiThinking(on) {
+        let el = document.getElementById('instanceAiThinking');
+        if (on) {
+            if (el) return;
+            const area = document.getElementById('instanceMsgArea');
+            if (!area) return;
+            el = document.createElement('div');
+            el.id = 'instanceAiThinking';
+            el.style.cssText = 'color:#999; font-size:12px; padding:6px 12px; text-align:center;';
+            el.textContent = '💭 AI 正在思考...';
+            area.appendChild(el);
+            area.scrollTop = area.scrollHeight;
+        } else {
+            if (el) el.remove();
+        }
+    }
+
+    // ---------- 聊天界面（真正的独立聊天房间） ----------
     function renderChatRoom(history, settings) {
-        const content = document.getElementById('instanceContent');
+        setContentChatMode();
         let inst = instances[currentInstanceId];
         if (!inst) {
-            if (currentEditingInstance && currentEditingInstance.id === currentInstanceId) {
-                inst = currentEditingInstance;
-            } else if (settings && settings.name) {
+            if (settings && settings.name) {
                 inst = {
                     id: currentInstanceId,
                     name: settings.name || '未命名',
@@ -821,41 +881,50 @@
         if (history && history.length > 0) inst.chat_history = history;
         else if (!inst.chat_history) inst.chat_history = [];
 
+        const chapters = inst.chapters || [];
+
+        content = document.getElementById('instanceContent');
         content.innerHTML = `
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-shrink:0; background:rgba(255,255,255,0.8); padding:8px 12px; border-radius:8px;">
-                <div>
-                    <span onclick="backToLibraryFromChat()" style="cursor:pointer; color:#3498db; font-size:14px; margin-right:12px;">← 返回</span>
-                    <span style="font-weight:600; font-size:16px; color:#333;">${esc(inst.name)}</span>
-                    <span style="color:#888; font-size:12px; margin-left:8px;">${esc(inst.time_setting || '')}</span>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-shrink:0; background:rgba(255,255,255,0.85); padding:8px 12px; border-radius:8px; gap:8px; flex-wrap:wrap;">
+                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                    <span onclick="backToLibraryFromChat()" style="cursor:pointer; color:#3498db; font-size:14px;">← 返回</span>
+                    <span style="font-weight:600; font-size:16px; color:#333;">🎬 ${esc(inst.name)}</span>
+                    <span style="color:#888; font-size:12px;">${esc(inst.time_setting || '')}</span>
                 </div>
-                <div>
+                <div style="display:flex; gap:6px;">
                     <button class="btn" onclick="pauseInstance('${currentInstanceId}')" style="background:#f39c12; color:#fff; border:none; padding:4px 12px; border-radius:6px; cursor:pointer; font-size:12px;">⏸ 暂离</button>
                     <button class="btn red" onclick="endInstance('${currentInstanceId}')" style="background:#c0392b; color:#fff; border:none; padding:4px 12px; border-radius:6px; cursor:pointer; font-size:12px;">🏁 结束剧情</button>
-                    <button class="btn gray" onclick="closeInstanceOverlay()" style="background:#ddd; color:#333; border:none; padding:4px 12px; border-radius:6px; cursor:pointer; font-size:12px; margin-left:6px;">✕ 关闭</button>
                 </div>
             </div>
-            <div style="margin-bottom:8px; display:flex; gap:10px; font-size:12px; color:#777; flex-wrap:wrap; background:rgba(255,255,255,0.6); padding:6px 12px; border-radius:8px;">
-                <span>📖 ${esc(inst.background || '无背景')}</span>
-                <span>📝 ${esc(inst.premise || '无前情')}</span>
-                <span onclick="setChatBg()" style="cursor:pointer; color:#3498db;">🖼️ 设背景</span>
+
+            ${(inst.background || inst.premise) ? `
+                <div style="flex-shrink:0; background:rgba(255,255,255,0.85); border-radius:8px; padding:10px 14px; margin-bottom:8px; font-size:13px; color:#555; line-height:1.6; max-height:22vh; overflow-y:auto;">
+                    ${inst.background ? `<div style="margin-bottom:6px;"><b>🌍 副本背景</b><br>${esc(inst.background)}</div>` : ''}
+                    ${inst.premise ? `<div><b>📖 前情提要</b><br>${esc(inst.premise)}</div>` : ''}
+                </div>
+            ` : ''}
+
+            ${chapters.length ? `
+                <div style="flex-shrink:0; margin-bottom:8px;">
+                    ${chapters.map(c => `
+                        <details style="background:rgba(255,255,255,0.75); border-radius:8px; padding:6px 12px; margin-bottom:4px; font-size:13px;">
+                            <summary style="cursor:pointer; font-weight:600; color:#555;">📚 ${esc(c.title || ('第' + (c.chapter || '?') + '章'))}（第${c.round_start}-${c.round_end}轮）</summary>
+                            <div style="margin-top:6px; color:#666; line-height:1.6; white-space:pre-wrap;">${esc(c.summary || '')}</div>
+                        </details>
+                    `).join('')}
+                </div>
+            ` : ''}
+
+            <div id="instanceMsgArea" style="flex:1; min-height:0; overflow-y:auto; padding:10px; background:#f5f2ef; border-radius:8px; background-size:cover; background-position:center;">
+                <div style="color:#aaa; text-align:center; padding:40px;">✨ 空荡荡的，开始你的冒险吧...</div>
             </div>
-            <div id="instanceMsgArea" style="flex:1; overflow-y:auto; padding:10px; background:#f5f2ef; border-radius:8px; min-height:300px; background-size:cover; background-position:center;">
-                ${(inst.chat_history || []).length ? inst.chat_history.map(m => `
-                    <div style="display:flex; margin-bottom:10px; ${m.sender === currentUser ? 'justify-content:flex-end;' : ''}">
-                        <div style="max-width:75%; padding:8px 14px; border-radius:10px; background:${m.sender === currentUser ? '#d4cdc4' : '#ffffff'}; color:#333; word-break:break-word; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
-                            <div style="font-size:11px; color:#888; margin-bottom:2px;">${esc(m.sender)}</div>
-                            ${esc(m.content)}
-                        </div>
-                    </div>
-                `).join('') : '<div style="color:#aaa; text-align:center; padding:40px;">✨ 空荡荡的，开始你的冒险吧...</div>'}
-            </div>
+
             <div style="display:flex; gap:8px; margin-top:8px; flex-shrink:0;">
                 <input id="instanceChatInput" style="flex:1; border:1px solid #ddd; border-radius:8px; padding:8px 12px; background:#fff; color:#333; outline:none;" placeholder="说点什么…" onkeydown="if(event.key==='Enter') sendInstanceMsg()">
                 <button class="btn" onclick="sendInstanceMsg()" style="background:#3498db; color:#fff; border:none; padding:8px 16px; border-radius:8px; cursor:pointer;">发送</button>
             </div>
         `;
-        const area = document.getElementById('instanceMsgArea');
-        if (area) area.scrollTop = area.scrollHeight;
+        renderChatMessages();
     }
 
     // ---------- 聊天相关辅助函数 ----------
@@ -877,41 +946,64 @@
         const content = input.value.trim();
         if (!content || !currentInstanceId) return;
         input.value = '';
-        toast('⏳ 发送中...');
+
+        // 1. 立即本地显示用户消息
+        const inst = instances[currentInstanceId];
+        if (inst) {
+            inst.chat_history = inst.chat_history || [];
+            inst.chat_history.push({
+                sender: currentUser, content: content, time: new Date().toLocaleString(), role: 'user'
+            });
+            renderChatMessages();
+        }
+
+        // 2. 显示"AI 思考中"
+        showAiThinking(true);
+
+        // 3. 发送请求
         api('/api/instance/' + currentInstanceId + '/message', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ user: currentUser, content: content })
         }).then(() => {
-            setTimeout(refreshInstanceChat, 500);
-            setTimeout(refreshInstanceChat, 2000);
+            // 4. 短轮询等 AI 回复（最多 10 次，间隔递增）
+            let tries = 0;
+            const tick = () => {
+                tries++;
+                if (tries > 10) {
+                    showAiThinking(false);
+                    toast('⚠️ AI 回复超时，请手动刷新');
+                    return;
+                }
+                refreshInstanceChat().then(hasNewAi => {
+                    if (hasNewAi) {
+                        showAiThinking(false);
+                    } else {
+                        setTimeout(tick, Math.min(2000, 500 + tries * 200));
+                    }
+                });
+            };
+            setTimeout(tick, 500);
         }).catch(e => {
+            showAiThinking(false);
             toast('❌ 发送失败：' + e.message);
             console.error(e);
         });
     };
+
     function refreshInstanceChat() {
-        if (!currentInstanceId) return;
-        api('/api/instances?user=' + encodeURIComponent(currentUser))
+        if (!currentInstanceId) return Promise.resolve(false);
+        return api('/api/instances?user=' + encodeURIComponent(currentUser))
             .then(d => {
                 const inst = d.instances[currentInstanceId];
-                if (inst) {
-                    instances = d.instances;
-                    const area = document.getElementById('instanceMsgArea');
-                    if (area) {
-                        const hist = inst.chat_history || [];
-                        area.innerHTML = hist.length ? hist.map(m => `
-                            <div style="display:flex; margin-bottom:10px; ${m.sender === currentUser ? 'justify-content:flex-end;' : ''}">
-                                <div style="max-width:75%; padding:8px 14px; border-radius:10px; background:${m.sender === currentUser ? '#d4cdc4' : '#ffffff'}; color:#333; word-break:break-word; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
-                                    <div style="font-size:11px; color:#888; margin-bottom:2px;">${esc(m.sender)}</div>
-                                    ${esc(m.content)}
-                                </div>
-                            </div>
-                        `).join('') : '<div style="color:#aaa; text-align:center; padding:40px;">✨ 空荡荡的...</div>';
-                        area.scrollTop = area.scrollHeight;
-                    }
-                }
-            }).catch(() => {});
+                if (!inst) return false;
+                const oldAi = (instances[currentInstanceId] && instances[currentInstanceId].chat_history || [])
+                    .filter(x => x.role === 'assistant').length;
+                const newAi = (inst.chat_history || []).filter(x => x.role === 'assistant').length;
+                instances[currentInstanceId] = inst;
+                renderChatMessages();
+                return newAi > oldAi;
+            }).catch(() => false);
     }
     window.endInstance = function(id) {
         if (!confirm('结束剧情冒险？将生成总结并传送 AI 回住宅。')) return;
