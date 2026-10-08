@@ -151,46 +151,30 @@
       }).catch(function(e){ toast('❌ '+e.message); });
   };
 
-  // B4：通知「去看看」必须真正打开对应面板。
-  // 原实现有两个问题：
-  //   1. window.enterRoom(room, callback) —— enterRoom 只接受 1 个参数，callback 被静默丢弃；
-  //   2. openPrivPanel() 在整个仓库里不存在（已全仓搜索确认）。
-  // 现在改为：真实存在的 enterRoom(room) + enterRoom 之后按状态确认再调 openPrivateTab()/loadStoryModal()。
+  // 通知「去看看」：deep-link → 进入房间 → 打开对应私人空间。
+  // 恢复 9/29 的简单行为：不轮询、不等待、不叠加状态层。
+  // 原来这里写的是 window.enterRoom(room, callback)，但 enterRoom 只接受 1 个参数，
+  // callback 被静默丢弃；openPrivPanel() 全仓也不存在 —— 所以只能跳房间。
+  // 现在直接复用 9/29 就已经在用的 goToTrailSpot(room, tab)（它就是
+  // switchRoom + showChat + setTimeout(privTab=tab; togglePrivate())）。
   window.openNotifyRoom = function(room, tab){
       if(!room) return;
-      var openAfterEnter = function(){
-          if(tab === 'story'){
-              // B5：复用现有剧情入口，不删除 loadStoryModal()
-              if(typeof loadStoryModal === 'function') loadStoryModal();
-          } else if(tab === 'note' || tab === 'diary' || tab === 'story_tab'){
-              if(typeof openPrivateTab === 'function') openPrivateTab(tab);
-              else if(typeof togglePrivate === 'function') togglePrivate();
-          } else if(tab === 'chat'){
-              if(typeof showChat === 'function') showChat();
-          } else {
-              goToTrailSpot(room, tab);
-          }
-      };
-      if(typeof window.enterRoom !== 'function'){
-          // 没有 enterRoom 时的原有回退，保持不动
+      if(typeof goToTrailSpot === 'function'){
           goToTrailSpot(room, tab);
           return;
       }
-      if(currentRoom === room){
-          // 已经在目标房间：不必再切，等一次渲染后直接开面板
-          setTimeout(openAfterEnter, 350);
-          return;
-      }
-      // 真正进入目标房间（一次性、同步路径），再按状态确认后开面板
-      window.enterRoom(room);
-      var tries = 0;
-      var wait = setInterval(function(){
-          tries++;
-          if(currentRoom === room || tries >= 20){   // 最多等约 2 秒
-              clearInterval(wait);
-              setTimeout(openAfterEnter, 150);
+      // 极少数情况下 goToTrailSpot 不存在：退回「进房间 + 直接开面板」
+      if(typeof switchRoom === 'function') switchRoom(room, localStorage.getItem('gc_pwd_'+room)||'');
+      if(typeof showChat === 'function') showChat();
+      setTimeout(function(){
+          if(tab === 'story'){
+              // 复用现有剧情入口，不删除 loadStoryModal()
+              if(typeof loadStoryModal === 'function') loadStoryModal();
+          } else if(tab === 'note' || tab === 'diary'){
+              if(typeof openPrivateTab === 'function') openPrivateTab(tab);
+              else if(typeof togglePrivate === 'function'){ privTab = tab; togglePrivate(); }
           }
-      }, 100);
+      }, 400);
   };
   window.openNotifyBid=function(bid){ if(bid) openBuilding(bid); };
 
