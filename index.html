@@ -340,7 +340,20 @@ function api(url, options) { return fetch(url, options).then(function(r){ if(!r.
 function esc(s) { var d=document.createElement('div'); d.textContent = s==null?'':String(s); return d.innerHTML; }
 function compressImage(dataUrl, maxW, quality, cb){ var img=new Image(); img.onload=function(){ try{ var w=img.width||600,h=img.height||400; if(w>maxW){h=h*maxW/w;w=maxW;} var c=document.createElement('canvas'); c.width=Math.round(w); c.height=Math.round(h); c.getContext('2d').drawImage(img,0,0,c.width,c.height); cb(c.toDataURL('image/jpeg',quality)); }catch(err){ cb(dataUrl); } }; img.onerror=function(){ cb(dataUrl); }; img.src=dataUrl; }
 function toast(msg){ var t=document.createElement('div'); t.style.cssText='position:absolute;top:60px;left:50%;transform:translateX(-50%);background:rgba(10,25,45,.95);color:#bfe6ff;padding:8px 16px;border-radius:20px;font-size:13px;z-index:99;border:1px solid rgba(80,180,255,.4);transition:opacity .4s'; t.textContent=msg; document.querySelector('.app').appendChild(t); setTimeout(function(){t.style.opacity='0'; setTimeout(function(){t.remove();},400);},3500); }
-function roomLabel(r){ return displayRoom(r); }
+// 房间显示名。
+// ⚠️ 全仓搜索确认：displayRoom 在当前仓库里**只有这一处引用、没有任何定义**。
+// 一旦它不存在，roomLabel() 会抛 ReferenceError —— 而 switchRoom() 在调用 showChat()
+// 之前就要写 Header，异常会直接中断整个「点房间」流程：
+//   currentRoom 已经改了，但房间 tab / 背景 / 聊天页都没跟上，
+//   表现为「点很多次不进去，点导航栏聊天才进去」。
+// 所以这里做最小防御：displayRoom 存在就照旧用它（行为完全不变），
+// 不存在时退回房间名本身。不删除、不改名 displayRoom。
+function roomLabel(r){
+  try{
+    if(typeof displayRoom === 'function') return displayRoom(r);
+  }catch(e){ console.warn('[roomLabel] displayRoom failed:', e); }
+  return r === 'main' ? '社区群聊' : r;
+}
 if(!userName){ userName=prompt('欢迎来到恋与临空！请输入你的名字：','亦言❄️')||'亦言❄️'; localStorage.setItem('gc_name',userName); }
 function isAdminUser(){ return userName === globalPairsAdmin || !globalPairsAdmin; }
 // ===== 记忆库 =====
@@ -893,7 +906,7 @@ function summonAI(){
   if(!ai) return;
   api('/api/summon',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ai:ai,room:currentRoom})}).then(function(d){ toast('📣 '+d.msg); loadMessages(true); }).catch(function(e){ toast('❌ '+e.message); });
 }
-function goToTrailSpot(room,tab){ currentRoom=room; roomPassword=localStorage.getItem('gc_pwd_'+room)||''; localStorage.setItem('gc_room',room); document.getElementById('roomName').textContent=roomLabel(room); applyBg(room); reportRoom(); showChat(); setTimeout(function(){ privTab=tab; togglePrivate(); },400); }
+function goToTrailSpot(room,tab){ switchRoom(room, localStorage.getItem('gc_pwd_'+room)||''); showChat(); setTimeout(function(){ privTab=tab; togglePrivate(); },400); }
 // ===== 经济 =====
 function refreshEco(){ api('/api/economy?user='+encodeURIComponent(userName)).then(function(d){ var info=document.getElementById('ecoInfo'); if(!info) return; var txt='💰 我的余额：'+(d.wallet||0).toFixed(0)+' 金币'; var w=d.working; if(w){ var b=mapData.buildings[w.building_id]; var left=Math.max(0,Math.ceil(w.start_ts+w.hours*3600-Date.now()/1000)); txt+='<br>💼 上班中：'+(b?b.name:'?')+'（剩 '+Math.floor(left/60)+' 分钟）'; } var hj=d.home_jobs[userName]; if(hj) txt+='<br>🏢 我的常驻：'+esc(hj); (mapData.user_ais[userName]||[]).forEach(function(ai){ if(d.home_jobs[ai]) txt+='<br>🤖 '+esc(ai)+' 常驻：'+esc(d.home_jobs[ai]); }); var myh=d.my_history||[]; if(myh.length){ txt+='<br><br>📖 打工记录：'+myh.slice(-5).reverse().map(function(m){ return '<br>· '+esc(m.time)+' '+esc(m.building)+' '+m.hours+'小时 +'+m.earn.toFixed(0)+'金币'; }).join(''); } info.innerHTML=txt; }).catch(function(e){ toast('❌ '+e.message); }); }
 function stopWorkHere(){ api('/api/work/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:userName})}).then(function(d){ toast('✅ '+d.msg); loadMapData().then(renderBuilding); }).catch(function(e){ toast('❌ '+e.message); }); }
@@ -931,33 +944,13 @@ function showBuilding(bid){ currentBuilding=bid; ['chatView','mapView','regionVi
 function backFromBuilding(){ if(buildingFromRegion) showRegion(currentBuildingRegion()); else showMap(); }
 function openBuilding(bid){
     buildingFromRegion = !!(mapData.buildings[bid] && mapData.buildings[bid].region);
-    // ===== 进入建筑时，把当前房间设为该建筑的会客厅 =====
-    var b = mapData.buildings[bid];
-    if(b){
-        var hall = b.name + '·会客厅';
-        // 如果会客厅存在，切换到会客厅；否则用建筑的第一个房间
-        if(mapData.rooms && mapData.rooms[hall]){
-            currentRoom = hall;
-        } else {
-            var rooms = b.rooms || [];
-            if(rooms.length){
-                currentRoom = rooms[0];
-            } else {
-                // 如果建筑没有任何房间，保留原房间（但这种情况极少见）
-            }
-        }
-        localStorage.setItem('gc_room', currentRoom);
-        // ===== 新增：立即应用背景并更新UI =====
-        // 这里之前只调 applyBg + updateRoomUI，没有同步 Header 名称与 active tab，
-        // 导致「点进具体房间后 Header 还停在社区群聊」。
-        // 统一走 applyWorldRoomChrome（与 switchRoom 同一套外壳同步），
-        // 不另建第二套房间状态逻辑。
-        if (currentRoom) {
-            applyWorldRoomChrome(currentRoom, roomPassword);
-            updateRoomUI();
-        }
-        // ===== 新增结束 =====
-    }
+    // ⚠️ 这里以前会直接写 currentRoom = hall / rooms[0]，但只同步了背景和 roomDesc，
+    // 没有同步 Header / 房间 tab / 消息 —— 于是 currentRoom 已经变成会客厅，
+    // 而聊天页 Header 还停在「临空社区」，形成两套房态。
+    // 更糟的是：随后点击房间走的是 enterRoom() 的 same-room 早退分支（room===currentRoom），
+    // 只 showChat() 不切房间，所以表现为「点很多次都进不去，点导航栏聊天才进去」。
+    // 现在 openBuilding 只负责「打开建筑首页」这一个视图职责，不再改房间状态；
+    // 房间状态唯一入口是 enterRoom() → switchRoom()。
     // ===== 结束 =====
     showBuilding(bid);
 }
@@ -1619,62 +1612,6 @@ function refreshOnline(){ api('/api/online').then(function(d){ var count=0; (d.o
 function showOnline(){ api('/api/online').then(function(d){ var names=(d.online||[]).filter(function(u){return u.room===currentRoom;}).map(function(u){return u.name;}); toast(names.length?'👥 在线：'+names.join('、'):'当前房间暂无在线成员'); }).catch(function(){}); }
 function heartbeat(){ api('/api/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:userName,room:currentRoom})}).catch(function(){}); refreshOnline(); }
 function reportRoom(){ api('/api/current_room',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:currentRoom,password:roomPassword})}).catch(function(){}); }
-// ===== [ROOM-TRACE] 临时诊断：记录「谁在什么时候改了 Header 的 roomName」 =====
-// 背景对、Header 错 → 说明有人覆盖了 roomName。这里把每一次写入都记下来，
-// 直接看日志就能定位覆盖源，不用猜。确认后可以整块删掉，不影响其他逻辑。
-window.__roomTrace = [];
-(function(){
-  var stack = [];
-  window.__roomTracePush = function(src){ try{ stack.push({at:Date.now(), src:src}); if(stack.length>30) stack.shift(); }catch(e){} };
-  window.__pushRoomWrite = function(src){
-    try{
-      window.__roomTrace.push({ at:new Date().toLocaleTimeString(), src:src, currentRoom:(typeof currentRoom!=='undefined'?currentRoom:'?') });
-      if(window.__roomTrace.length>60) window.__roomTrace.shift();
-    }catch(e){}
-  };
-  // 给 #roomName 挂 setter，捕获所有直接写入（包括内联脚本与插件）
-  try{
-    var el0 = document.getElementById('roomName');
-    if(el0){
-      var proto = Object.getPrototypeOf(el0);
-      var d = Object.getOwnPropertyDescriptor(proto, 'textContent');
-      if(d && d.set){
-        Object.defineProperty(el0, 'textContent', {
-          configurable:true,
-          get:function(){ return d.get.call(this); },
-          set:function(v){
-            window.__pushRoomWrite('textContent=' + v + ' @' + (new Error().stack||'').split('\n')[2]);
-            d.set.call(this, v);
-          }
-        });
-      }
-    }
-  }catch(e){ console.warn('[ROOM-TRACE] hook failed', e); }
-})();
-// ===== [ROOM-TRACE] 结束 =====
-function applyWorldRoomChrome(room, pwd){
-    // 房间「外壳状态」的唯一同步入口：Header 名称 / 房间 tab / 背景。
-    // 每步单独 try/catch：背景是最后一个动作，如果前面某步抛错被整体 catch 吞掉，
-    // 就会出现「背景对、Header 错」这种半同步状态，很难查。现在各步独立并打成日志。
-    try{ window.__pushRoomWrite && window.__pushRoomWrite('applyWorldRoomChrome('+room+')'); }catch(e){}
-    try{
-        document.getElementById('roomName').textContent=roomLabel(room);
-    }catch(e){ console.error('[ROOM-TRACE] set roomName FAILED', e); }
-    try{
-        var tabs=document.querySelectorAll('.room-tab');
-        tabs.forEach(function(t){t.classList.remove('active');});
-        var cur=document.getElementById('tab_'+room);
-        if(cur)cur.classList.add('active');
-    }catch(e){ console.error('[ROOM-TRACE] set room tab FAILED', e); }
-    try{
-        applyBg(room);
-    }catch(e){ console.error('[ROOM-TRACE] applyBg FAILED', e); }
-    console.log('[ROOM-TRACE] chrome applied', {
-        room: room,
-        header: (document.getElementById('roomName')||{}).textContent,
-        tabActive: !!document.getElementById('tab_'+room)
-    });
-}
 function switchRoom(room,pwd){ 
   // P4 修复：记录最近一次进入的真实世界房间，排除 main（群聊） 
   if(room && room !== 'main'){ 
@@ -1685,7 +1622,21 @@ function switchRoom(room,pwd){
   localStorage.setItem('gc_room',room); 
   localStorage.setItem('gc_pwd_'+room,roomPassword); 
   lastMsgKey=''; 
-  applyWorldRoomChrome(room, roomPassword); 
+  // ===== 房间 UI 全部由 currentRoom 一次性同步（唯一入口）=====
+  // 原则：真正的房间状态只有 currentRoom，Header / tab / 背景都由它直接推出，
+  // 不再让 enterRoom / openBuilding / showChat 各自改一部分。
+  try{ document.getElementById('roomName').textContent=roomLabel(room); }catch(e){}
+  try{
+    var tabs=document.querySelectorAll('.room-tab');
+    tabs.forEach(function(t){t.classList.remove('active');});
+    var cur=document.getElementById('tab_'+room);
+    if(cur)cur.classList.add('active');
+  }catch(e){}
+  applyBg(room); 
+  console.log('[ROOM]', {
+    currentRoom: currentRoom,
+    roomName: (document.getElementById('roomName')||{}).textContent
+  });
   reportRoom(); 
   updateRoomUI(); 
   var area=document.getElementById('msgArea'); 
@@ -1700,25 +1651,7 @@ function switchRoom(room,pwd){
   refreshOnline(); 
 }
 function enterRoom(room){ 
-  // 真人实测：住宅首页点一次厨房 → 背景对了，但 Header 还是「临空社区」、tab 没切。
-  // 说明「已经等于 currentRoom」这条分支（openBuilding 预先写过 currentRoom）
-  // 走的是外壳补丁路径，而不是一次完整的 switchRoom。
-  // 这里直接打印判据，确定到底走了哪条分支（不需要再猜）。
-  try{
-    console.log('[ROOM-TRACE] enterRoom', {
-      requested: room,
-      currentRoom: currentRoom,
-      sameRoom: room===currentRoom,
-      label: roomLabel(room),
-      header: (document.getElementById('roomName')||{}).textContent
-    });
-  }catch(e){}
   if(room===currentRoom){ 
-    // 已经是同一个房间：不再只补 UI，而是补走一次完整的 switchRoom，
-    // 保证 Header / active tab / 背景 / 消息 全部按同一条路径同步（幂等）。
-    // 这样点击房间永远只有一条真正的进入路径：enterRoom → switchRoom。
-    try{ window.__pushRoomWrite && window.__pushRoomWrite('enterRoom same-room'); }catch(e){}
-    switchRoom(room, roomPassword); 
     showChat(); 
     return; 
   } 
