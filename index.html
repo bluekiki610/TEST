@@ -193,9 +193,8 @@ textarea.input { color:#e6f1ff; }
         <button class="hbtn" onclick="goMyHome()">🏡我家</button>
         <button class="hbtn" onclick="openBell()">🔔<span id="bellDot" style="display:none;color:#ff6b6b;margin-left:2px">●</span></button>
         <button class="hbtn" id="voiceBtn" onclick="toggleChatVoice()" title="语音朗读开关">🔇</button>
-        <!-- 独立召唤按钮：把 📣 召唤从 #privBtn 上分离出来，
-             这样 #privBtn 可以专责「🏠 私人空间」，召唤功能仍然保留 -->
-        <button class="hbtn" id="summonBtn" onclick="if(typeof summonAIHere==='function') summonAIHere(currentRoom)" title="召唤我的 AI" style="display:none">📣</button>
+        <!-- 住宅房间右上角只保留 🏠 私人空间；📣 召唤按钮已按需求移除
+             （召唤功能仍在：建筑页「📣召唤」与轨迹里的「📣召唤」都调用 summonAIHere） -->
         <button class="hbtn" id="privBtn" onclick="togglePrivate()" title="私人空间" style="display:none">🏠</button>
       </div>
     </header>
@@ -930,7 +929,15 @@ function buildingOfRoom(room){ for(var bid in mapData.buildings){ if((mapData.bu
 function isHallRoom(room){ var b=buildingOfRoom(room); return b&&room.indexOf('·会客厅')>=0; }
 function isPrivateRoom(room){ var b=buildingOfRoom(room); return b!==null&&b.type!=='npc'&&!isHallRoom(room); }
 function canEnterRoom(room){ if(room==='main') return true; var b=buildingOfRoom(room); if(!b) return true; if(b.type==='npc') return true; if(isHallRoom(room)) return true; if(b.owner===userName) return true; var acc=mapData.room_access[room]||[]; if(acc.indexOf(userName)>=0) return true; for(var i=0;i<acc.length;i++){ if((mapData.user_ais[acc[i]]||[]).indexOf(userName)>=0) return true; } return false; }
-function showChat(){ ['mapView','regionView','buildingView','myView'].forEach(function(i){document.getElementById(i).style.display='none';}); document.getElementById('chatView').style.display='flex'; loadMessages(false); updateRoomUI(); bChatOn=false; curTab='chat'; updateTab(); }
+function showChat(){ ['mapView','regionView','buildingView','myView'].forEach(function(i){document.getElementById(i).style.display='none';}); document.getElementById('chatView').style.display='flex';
+  // Header / tab 直接由 currentRoom 推出（幂等）。
+  // 这样无论从哪条路径进聊天页，Header 都不会停留在「社区群聊」这个初始占位文案。
+  try{ document.getElementById('roomName').textContent=roomLabel(currentRoom); }catch(e){}
+  try{
+    var _ts=document.querySelectorAll('.room-tab'); _ts.forEach(function(t){t.classList.remove('active');});
+    var _c=document.getElementById('tab_'+currentRoom); if(_c)_c.classList.add('active');
+  }catch(e){}
+  loadMessages(false); updateRoomUI(); bChatOn=false; curTab='chat'; updateTab(); }
 function showMap(){ ['chatView','regionView','buildingView','myView'].forEach(function(i){document.getElementById(i).style.display='none';}); document.getElementById('mapView').style.display='flex'; currentRegion=null; exitModes(); loadMap(); curTab='map'; updateTab(); }
 function showRegion(name){ 
   currentRegion=name; 
