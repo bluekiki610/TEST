@@ -938,8 +938,12 @@ function openBuilding(bid){
         }
         localStorage.setItem('gc_room', currentRoom);
         // ===== 新增：立即应用背景并更新UI =====
+        // 这里之前只调 applyBg + updateRoomUI，没有同步 Header 名称与 active tab，
+        // 导致「点进具体房间后 Header 还停在社区群聊」。
+        // 统一走 applyWorldRoomChrome（与 switchRoom 同一套外壳同步），
+        // 不另建第二套房间状态逻辑。
         if (currentRoom) {
-            applyBg(currentRoom);
+            applyWorldRoomChrome(currentRoom, roomPassword);
             updateRoomUI();
         }
         // ===== 新增结束 =====
@@ -1254,10 +1258,30 @@ function createBuildingRoom(){
   };
 }
 function loadMapData(){ return api('/api/map').then(function(d){ mapData=d; mapCacheData=d; mapCacheTs=Date.now(); }).catch(function(){}); }
-function updateRoomUI(){ var b=buildingOfRoom(currentRoom); var isHomeRoom=b!==null; var bar=document.getElementById('roomDescBar'); var privBtn=document.getElementById('privBtn'); var privFooterBtn=document.getElementById('privFooterBtn'); var backHomeBtn=document.getElementById('backHomeBtn'); if(isHomeRoom){ bar.style.display='flex'; var desc=currentRoom==='main'?'':(mapData.rooms&&mapData.rooms[currentRoom]&&mapData.rooms[currentRoom].description||''); document.getElementById('roomDescText').textContent=desc||'（暂无房间简介）'; document.getElementById('roomDescEdit').style.display=(canEdit()&&(b.owner===userName||b.type==='npc'))?'':'none'; privBtn.style.display=''; privFooterBtn.style.display=''; privBuildingId=null; for(var bid in mapData.buildings){ if(mapData.buildings[bid]===b){ privBuildingId=bid; break; } } if(backHomeBtn) backHomeBtn.style.display=''; } else { bar.style.display='none'; privBtn.style.display='none'; privFooterBtn.style.display='none'; privBuildingId=null; if(backHomeBtn) backHomeBtn.style.display='none'; } document.getElementById('roomEmoji').textContent=currentRoom==='main'?'🏠':'🚪'; }
+function updateRoomUI(){ var b=buildingOfRoom(currentRoom); var isHomeRoom=b!==null; var bar=document.getElementById('roomDescBar'); var privBtn=document.getElementById('privBtn'); var privFooterBtn=document.getElementById('privFooterBtn'); var backHomeBtn=document.getElementById('backHomeBtn'); if(isHomeRoom){ bar.style.display='flex'; var desc=currentRoom==='main'?'':(mapData.rooms&&mapData.rooms[currentRoom]&&mapData.rooms[currentRoom].description||''); document.getElementById('roomDescText').textContent=desc||'（暂无房间简介）'; document.getElementById('roomDescEdit').style.display=(canEdit()&&(b.owner===userName||b.type==='npc'))?'':'none'; privBtn.style.display=''; privFooterBtn.style.display=''; for(var bid in mapData.buildings){ if(mapData.buildings[bid]===b){ privBuildingId=bid; break; } } if(backHomeBtn) backHomeBtn.style.display=''; } else { bar.style.display='none'; privBtn.style.display='none'; privFooterBtn.style.display='none'; privBuildingId=null; if(backHomeBtn) backHomeBtn.style.display='none'; } document.getElementById('roomEmoji').textContent=currentRoom==='main'?'🏠':'🚪'; }
 function editRoomDesc(){ var d=prompt('房间简介：',(mapData.rooms&&mapData.rooms[currentRoom]&&mapData.rooms[currentRoom].description)||''); if(d===null) return; api('/api/room/desc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:currentRoom,description:d})}).then(function(){ toast('✅ 简介已更新'); loadMapData().then(updateRoomUI); }).catch(function(e){ toast('❌ '+e.message); }); }
 function editRoomDescByName(room){ var d=prompt('房间简介：',(mapData.rooms&&mapData.rooms[room]&&mapData.rooms[room].description)||''); if(d===null) return; api('/api/room/desc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:room,description:d})}).then(function(){ toast('✅ 简介已更新'); loadMapData().then(function(){ renderBuilding(); updateRoomUI(); }); }).catch(function(e){ toast('❌ '+e.message); }); }
-function togglePrivate(){ if(!privBuildingId){ toast('当前房间不属于房子'); return; } document.getElementById('privRoomName').textContent=roomLabel(currentRoom); var bg=mapData.room_bg[currentRoom]; var pm=document.getElementById('privModal'); if(bg){ pm.style.backgroundImage='url('+bg+')'; pm.style.backgroundColor='rgba(16,29,51,.85)'; } else { pm.style.backgroundImage='none'; pm.style.backgroundColor='#101d33'; } document.getElementById('privWrite').style.display=canEdit()?'':'none'; document.getElementById('privateMask').classList.add('show'); setPrivTab(privTab); }
+function togglePrivate(){ 
+  // privBuildingId 是 updateRoomUI 里算出来的全局缓存，原来这里只认它：
+  // 只要它没被算出来（null），两个入口都会 toast「当前房间不属于房子」并且打不开。
+  // 现在改为「缓存不可信时直接用 currentRoom 反查」，不依赖那个全局状态。
+  var bid = privBuildingId;
+  if(!bid){
+    var b = buildingOfRoom(currentRoom);
+    if(b){
+      for(var k in mapData.buildings){ if(mapData.buildings[k]===b){ bid=k; break; } }
+      if(bid) privBuildingId = bid;
+    }
+  }
+  if(!bid){ toast('当前房间不属于房子'); return; } 
+  document.getElementById('privRoomName').textContent=roomLabel(currentRoom); 
+  var bg=mapData.room_bg[currentRoom]; 
+  var pm=document.getElementById('privModal'); 
+  if(bg){ pm.style.backgroundImage='url('+bg+')'; pm.style.backgroundColor='rgba(16,29,51,.85)'; } else { pm.style.backgroundImage='none'; pm.style.backgroundColor='#101d33'; } 
+  document.getElementById('privWrite').style.display=canEdit()?'':'none'; 
+  document.getElementById('privateMask').classList.add('show'); 
+  setPrivTab(privTab); 
+}
 function hidePrivate(){ document.getElementById('privateMask').classList.remove('show'); }
 function setPrivTab(t){ privTab=t; document.getElementById('ptabNote').className=t==='note'?'on':''; document.getElementById('ptabDiary').className=t==='diary'?'on':''; document.getElementById('ptabStory').className=t==='story'?'on':''; document.getElementById('privInput').placeholder=t==='note'?'写一张纸条…':(t==='diary'?'写一篇随笔…':(t==='story'?'写一段剧情…':'写点什么…')); loadPriv(); }
 function loadPriv(){
@@ -1543,6 +1567,19 @@ function refreshOnline(){ api('/api/online').then(function(d){ var count=0; (d.o
 function showOnline(){ api('/api/online').then(function(d){ var names=(d.online||[]).filter(function(u){return u.room===currentRoom;}).map(function(u){return u.name;}); toast(names.length?'👥 在线：'+names.join('、'):'当前房间暂无在线成员'); }).catch(function(){}); }
 function heartbeat(){ api('/api/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:userName,room:currentRoom})}).catch(function(){}); refreshOnline(); }
 function reportRoom(){ api('/api/current_room',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:currentRoom,password:roomPassword})}).catch(function(){}); }
+function applyWorldRoomChrome(room, pwd){
+    // 房间「外壳状态」的唯一同步入口：Header 名称 / 房间 tab / 背景 / 描述栏 / localStorage。
+    // 这里只做 UI+本地状态同步，不做消息加载（消息由 switchRoom 负责）。
+    // 这样所有进入真实房间的路径都能保证 Header 与背景和 currentRoom 一致。
+    try{
+        document.getElementById('roomName').textContent=roomLabel(room);
+        var tabs=document.querySelectorAll('.room-tab');
+        tabs.forEach(function(t){t.classList.remove('active');});
+        var cur=document.getElementById('tab_'+room);
+        if(cur)cur.classList.add('active');
+        applyBg(room);
+    }catch(e){ console.warn('applyWorldRoomChrome error', e); }
+}
 function switchRoom(room,pwd){ 
   // P4 修复：记录最近一次进入的真实世界房间，排除 main（群聊） 
   if(room && room !== 'main'){ 
@@ -1553,12 +1590,7 @@ function switchRoom(room,pwd){
   localStorage.setItem('gc_room',room); 
   localStorage.setItem('gc_pwd_'+room,roomPassword); 
   lastMsgKey=''; 
-  document.getElementById('roomName').textContent=roomLabel(room); 
-  var tabs=document.querySelectorAll('.room-tab'); 
-  tabs.forEach(function(t){t.classList.remove('active');}); 
-  var cur=document.getElementById('tab_'+room); 
-  if(cur)cur.classList.add('active'); 
-  applyBg(room); 
+  applyWorldRoomChrome(room, roomPassword); 
   reportRoom(); 
   updateRoomUI(); 
   var area=document.getElementById('msgArea'); 
@@ -1573,7 +1605,16 @@ function switchRoom(room,pwd){
   refreshOnline(); 
 }
 function enterRoom(room){ 
-  if(room===currentRoom){ showChat(); return; } 
+  if(room===currentRoom){ 
+    // 已经在目标房间：仍然补齐外壳状态再进聊天。
+    // 之前这里直接 showChat() 就返回了 —— 如果 currentRoom 是被 openBuilding()
+    // 等路径直接改掉而 Header/背景没跟上，这一分支就会「看起来点了没反应」，
+    // 用户要再点一次才生效（Bug 3 双击）。外壳同步是幂等的，重复调用无副作用。
+    applyWorldRoomChrome(room, roomPassword); 
+    updateRoomUI(); 
+    showChat(); 
+    return; 
+  } 
   if(isPrivateRoom(room)&&!canEnterRoom(room)){ 
     if(confirm('🔒 房间「'+room+'」是私密的，需要主人同意才能进入。\n\n要申请访问吗？')){ 
       applyRoom(room); 
