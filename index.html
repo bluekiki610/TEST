@@ -207,9 +207,8 @@ textarea.input { color:#e6f1ff; }
     <div class="room-tabs" id="roomTabs"></div>
     <div id="msgArea"></div>
     <footer>
-      <button class="hbtn" id="privFooterBtn" onclick="togglePrivate()" style="display:none;flex-shrink:0">🏠</button>
-      <!-- 住宅聊天模型切换入口（视觉与副本 .inst-model-chip 一致）。
-           注意：/api/messages 目前不接收 model_override，所以本轮只做 UI 入口。 -->
+      <!-- 底部 🏠 私人空间入口已移除：顶部 #privBtn 已经是私人空间入口，不需要重复。
+           （保留模型切换圆形图标） -->
       <button id="homeModelBtn" class="home-model-chip" onclick="openHomeModelPicker()" title="切换模型" style="flex-shrink:0">…</button>
       <input id="msgInput" placeholder="说点什么吧…" autocomplete="off">
       <button id="sendBtn" onclick="sendMessage()">发送</button>
@@ -1268,7 +1267,7 @@ function createBuildingRoom(){
   };
 }
 function loadMapData(){ return api('/api/map').then(function(d){ mapData=d; mapCacheData=d; mapCacheTs=Date.now(); }).catch(function(){}); }
-function updateRoomUI(){ var b=buildingOfRoom(currentRoom); var isHomeRoom=b!==null; var bar=document.getElementById('roomDescBar'); var privBtn=document.getElementById('privBtn'); var privFooterBtn=document.getElementById('privFooterBtn'); var backHomeBtn=document.getElementById('backHomeBtn'); if(isHomeRoom){ bar.style.display='flex'; var desc=currentRoom==='main'?'':(mapData.rooms&&mapData.rooms[currentRoom]&&mapData.rooms[currentRoom].description||''); document.getElementById('roomDescText').textContent=desc||'（暂无房间简介）'; document.getElementById('roomDescEdit').style.display=(canEdit()&&(b.owner===userName||b.type==='npc'))?'':'none'; privBtn.style.display=''; privFooterBtn.style.display=''; for(var bid in mapData.buildings){ if(mapData.buildings[bid]===b){ privBuildingId=bid; break; } } if(backHomeBtn) backHomeBtn.style.display=''; } else { bar.style.display='none'; privBtn.style.display='none'; privFooterBtn.style.display='none'; privBuildingId=null; if(backHomeBtn) backHomeBtn.style.display='none'; } document.getElementById('roomEmoji').textContent=currentRoom==='main'?'🏠':'🚪'; }
+function updateRoomUI(){ var b=buildingOfRoom(currentRoom); var isHomeRoom=b!==null; var bar=document.getElementById('roomDescBar'); var privBtn=document.getElementById('privBtn'); var backHomeBtn=document.getElementById('backHomeBtn'); if(isHomeRoom){ bar.style.display='flex'; var desc=currentRoom==='main'?'':(mapData.rooms&&mapData.rooms[currentRoom]&&mapData.rooms[currentRoom].description||''); document.getElementById('roomDescText').textContent=desc||'（暂无房间简介）'; document.getElementById('roomDescEdit').style.display=(canEdit()&&(b.owner===userName||b.type==='npc'))?'':'none'; privBtn.style.display=''; for(var bid in mapData.buildings){ if(mapData.buildings[bid]===b){ privBuildingId=bid; break; } } if(backHomeBtn) backHomeBtn.style.display=''; } else { bar.style.display='none'; privBtn.style.display='none'; privBuildingId=null; if(backHomeBtn) backHomeBtn.style.display='none'; } document.getElementById('roomEmoji').textContent=currentRoom==='main'?'🏠':'🚪'; }
 function editRoomDesc(){ var d=prompt('房间简介：',(mapData.rooms&&mapData.rooms[currentRoom]&&mapData.rooms[currentRoom].description)||''); if(d===null) return; api('/api/room/desc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:currentRoom,description:d})}).then(function(){ toast('✅ 简介已更新'); loadMapData().then(updateRoomUI); }).catch(function(e){ toast('❌ '+e.message); }); }
 function editRoomDescByName(room){ var d=prompt('房间简介：',(mapData.rooms&&mapData.rooms[room]&&mapData.rooms[room].description)||''); if(d===null) return; api('/api/room/desc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:room,description:d})}).then(function(){ toast('✅ 简介已更新'); loadMapData().then(function(){ renderBuilding(); updateRoomUI(); }); }).catch(function(e){ toast('❌ '+e.message); }); }
 function togglePrivate(){ 
