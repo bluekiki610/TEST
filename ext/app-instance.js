@@ -361,20 +361,20 @@
         });
     }
 
-    // 点模型 chip → 弹出选择（只用设置里已保存的配置，不新建 Key 系统）
-    window.openInstanceModelPicker = function() {
-        if (!userModelCfg) {
-            toast('未配置模型：请到「设置 → 模型与服务」填写 API Key');
-            return;
-        }
-        const provider = userModelCfg.provider || 'deepseek';
-        const saved = userModelCfg.model || '';
+    // 通用模型选择弹层（副本与住宅聊天共用，避免复制第二套模型系统）
+    // opts: { provider, saved, current, onPick(value) }
+    window.openModelPicker = function(opts) {
+        opts = opts || {};
+        injectInstanceChatStyles();   // 住宅聊天也要用这个弹层，确保样式已注入
+        const provider = opts.provider || 'deepseek';
+        const saved = opts.saved || '';
+        const active = (opts.current === undefined || opts.current === null) ? '' : opts.current;
         const mask = document.createElement('div');
         mask.className = 'inst-modal-mask';
         mask.onclick = function(e) { if (e.target === mask) mask.remove(); };
-        const opt = (value, label, active) => (
-            '<div class="inst-model-opt' + (active ? ' active' : '') + '" data-v="' + escAttr(value) + '">' +
-                label + (active ? ' ✓' : '') +
+        const opt = (value, label, isActive) => (
+            '<div class="inst-model-opt' + (isActive ? ' active' : '') + '" data-v="' + escAttr(value) + '">' +
+                label + (isActive ? ' ✓' : '') +
             '</div>'
         );
         mask.innerHTML =
@@ -382,20 +382,37 @@
                 '<h2>🔀 选择模型</h2>' +
                 '<div class="muted">使用你「设置 → 模型与服务」里已保存的 ' + esc(providerLabel(provider)) + ' 配置，不新建 Key。</div>' +
                 '<h3>模型</h3>' +
-                (saved ? opt(saved, '已保存：' + esc(saved), currentInstanceModel === saved) : '') +
-                opt('', esc(providerLabel(provider)) + ' 默认模型', !currentInstanceModel) +
+                (saved ? opt(saved, '已保存：' + esc(saved), active === saved) : '') +
+                opt('', esc(providerLabel(provider)) + ' 默认模型', !active) +
                 '<div class="mfoot"><button class="mclose">关闭</button></div>' +
             '</div>';
         mask.querySelector('.mclose').onclick = function() { mask.remove(); };
         mask.querySelectorAll('.inst-model-opt').forEach(el => {
             el.onclick = function() {
-                currentInstanceModel = el.dataset.v || '';
+                const v = el.dataset.v || '';
                 mask.remove();
-                updateModelChipUI();
-                toast(currentInstanceModel ? ('已切换模型：' + currentInstanceModel) : '已切回默认模型');
+                if (typeof opts.onPick === 'function') opts.onPick(v);
             };
         });
         document.body.appendChild(mask);
+    };
+
+    // 点副本模型 chip → 弹出选择（保持原有行为不变）
+    window.openInstanceModelPicker = function() {
+        if (!userModelCfg) {
+            toast('未配置模型：请到「设置 → 模型与服务」填写 API Key');
+            return;
+        }
+        window.openModelPicker({
+            provider: userModelCfg.provider || 'deepseek',
+            saved: userModelCfg.model || '',
+            current: currentInstanceModel,
+            onPick: function(v) {
+                currentInstanceModel = v;
+                updateModelChipUI();
+                toast(currentInstanceModel ? ('已切换模型：' + currentInstanceModel) : '已切回默认模型');
+            }
+        });
     };
 
     // ---------- 修改地图栏 ----------

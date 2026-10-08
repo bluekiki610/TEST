@@ -151,31 +151,46 @@
       }).catch(function(e){ toast('❌ '+e.message); });
   };
 
+  // B4：通知「去看看」必须真正打开对应面板。
+  // 原实现有两个问题：
+  //   1. window.enterRoom(room, callback) —— enterRoom 只接受 1 个参数，callback 被静默丢弃；
+  //   2. openPrivPanel() 在整个仓库里不存在（已全仓搜索确认）。
+  // 现在改为：真实存在的 enterRoom(room) + enterRoom 之后按状态确认再调 openPrivateTab()/loadStoryModal()。
   window.openNotifyRoom = function(room, tab){
       if(!room) return;
-      // 如果页面有 enterRoom 函数（切换房间），优先使用
-      if(typeof window.enterRoom === 'function'){
-          window.enterRoom(room, function(){
-              // 进入房间后，根据 tab 打开对应面板
-              if(tab === 'story'){
-                  setTimeout(function(){
-                      if(typeof loadStoryModal === 'function') loadStoryModal();
-                  }, 300);
-              } else if(tab === 'note' || tab === 'diary'){
-                  setTimeout(function(){
-                      if(typeof openPrivPanel === 'function') openPrivPanel(tab);
-                  }, 300);
-              } else if(tab === 'chat'){
-                  if(typeof showChat === 'function') showChat();
-              } else {
-                  // 其他情况 fallback
-                  goToTrailSpot(room, tab);
-              }
-          });
-      } else {
-          // 如果没有 enterRoom，用原来的方式（虽然可能不支持 story）
+      var openAfterEnter = function(){
+          if(tab === 'story'){
+              // B5：复用现有剧情入口，不删除 loadStoryModal()
+              if(typeof loadStoryModal === 'function') loadStoryModal();
+          } else if(tab === 'note' || tab === 'diary' || tab === 'story_tab'){
+              if(typeof openPrivateTab === 'function') openPrivateTab(tab);
+              else if(typeof togglePrivate === 'function') togglePrivate();
+          } else if(tab === 'chat'){
+              if(typeof showChat === 'function') showChat();
+          } else {
+              goToTrailSpot(room, tab);
+          }
+      };
+      if(typeof window.enterRoom !== 'function'){
+          // 没有 enterRoom 时的原有回退，保持不动
           goToTrailSpot(room, tab);
+          return;
       }
+      if(currentRoom === room){
+          // 已经在目标房间：不必再切，等一次渲染后直接开面板
+          setTimeout(openAfterEnter, 350);
+          return;
+      }
+      // 真正进入目标房间（一次性、同步路径），再按状态确认后开面板
+      window.enterRoom(room);
+      var tries = 0;
+      var wait = setInterval(function(){
+          tries++;
+          if(currentRoom === room || tries >= 20){   // 最多等约 2 秒
+              clearInterval(wait);
+              setTimeout(openAfterEnter, 150);
+          }
+      }, 100);
   };
   window.openNotifyBid=function(bid){ if(bid) openBuilding(bid); };
 

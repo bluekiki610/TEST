@@ -977,20 +977,29 @@ function updateGroupStatus(isVac, isStay) {
     api('/api/summon',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ai:ai,room:room})}).then(function(d){ toast('📣 '+d.msg); }).catch(function(e){ toast('❌ '+e.message); });
   };
   function setupHeaderSummon(){
-    var btn=document.getElementById('privBtn'); if(!btn) return;
-    // 恢复原始行为：聊天页右上角这个按钮是「📣 召唤我的 AI」。
-    // （上一轮我曾把它改成语音开关并隐藏，导致它与左下角「🏠 私人空间」看起来重复，
-    //   而语音开关现在有独立的 #voiceBtn，不需要再占用这个位置。）
-    // 左下角 #privFooterBtn 才是「🏠 私人空间」入口。
-    if(currentRoom==='main'){
-      btn.style.display='none';
-      btn.onclick=function(){};
-      return;
+    // ===== B1：右上角职责分离 =====
+    // #privBtn 现在专责「🏠 私人空间」(onclick=togglePrivate)，不再被改造成 📣。
+    // 召唤改用独立的 #summonBtn（在 index.html 头部）。
+    // setupHeaderSummon 与 summonAIHere 都保留，只把作用对象换成 #summonBtn。
+    var sbtn=document.getElementById('summonBtn');
+    if(sbtn){
+      if(currentRoom==='main'){
+        sbtn.style.display='none';
+        sbtn.onclick=function(){};
+      } else {
+        sbtn.style.display='';
+        sbtn.innerHTML='📣'; sbtn.title='召唤我的 AI';
+        sbtn.onclick=function(){ summonAIHere(currentRoom); };
+      }
     }
-    btn.style.display='';
-    if(btn.getAttribute('data-summon')) return;
-    btn.setAttribute('data-summon','1'); btn.innerHTML='📣'; btn.title='召唤我的 AI';
-    btn.onclick=function(){ summonAIHere(currentRoom); };
+    // 兜底：确保 #privBtn 的私人空间职责不被任何旧代码改回 📣
+    var pbtn=document.getElementById('privBtn');
+    if(pbtn && pbtn.getAttribute('data-priv-role')!=='1'){
+      pbtn.setAttribute('data-priv-role','1');
+      pbtn.innerHTML='🏠';
+      pbtn.title='私人空间';
+      pbtn.onclick=function(){ if(typeof togglePrivate==='function') togglePrivate(); };
+    }
   }
   window.togglePanel=function(id){ var d=document.getElementById(id); if(!d) return; d.style.display=(d.style.display==='none'?'block':'none'); };
   window.FEAT_CN = {work:'工作', shop:'购物', fun:'娱乐', date:'约会', food:'餐饮', medical:'医疗', culture:'文化', service:'服务', transport:'交通', special:'特殊'};
