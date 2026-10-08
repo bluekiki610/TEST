@@ -10,14 +10,24 @@
     for(var j=0;j<keys.length;j++){ var k2=keys[j], kn2=norm(k2); if(rn && (kn2.indexOf(rn)>=0 || rn.indexOf(kn2)>=0)) return mapData.room_bg[k2]; }
     return '';
   }
-  // 只在背景真正缺失时才补一次，每 4 秒检查
+  // 只在背景真的不对/缺失时才补一次，每 4 秒检查。
+  // ⚠️ 原来只判断「有没有 url(」——如果屏幕上挂着的是**别的房间**的旧背景
+  // （比如会客厅背景），它会被认为是"已经有背景"而直接 return，
+  // 于是切房间后背景一直停在旧房间。现在改为比对「当前背景是否就是 currentRoom 该有的」。
   setInterval(function(){
     try{
       var area=document.getElementById('msgArea'); if(!area) return;
       if(!mapData || !mapData.room_bg) return;
-      if(area.style.backgroundImage && area.style.backgroundImage.indexOf('url(')===0) return;
-      var want=findBg(currentRoom);
-      if(want){ applyBg(currentRoom); }
+      var want = (typeof hallBgNow==='function' && currentRoom==='main') ? hallBgNow() : findBg(currentRoom);
+      var cur = area.style.backgroundImage || '';
+      // 期望有背景：当前背景必须正好是它，否则补一次
+      if(want){
+        if(cur.indexOf(want) >= 0) return;   // 已经是对的，不折腾
+        applyBg(currentRoom);
+        return;
+      }
+      // 期望没有背景：只有在确实还挂着旧背景时才清掉
+      if(cur && cur.indexOf('url(')===0) applyBg(currentRoom);
     }catch(e){}
   }, 4000);
 })();
@@ -968,12 +978,19 @@ function updateGroupStatus(isVac, isStay) {
   };
   function setupHeaderSummon(){
     var btn=document.getElementById('privBtn'); if(!btn) return;
-    // 右上角已改为语音朗读开关（#voiceBtn）。
-    // 这里不再把 #privBtn 改造成 📣 召唤，避免每 2 秒轮询把语音按钮覆盖掉。
-    // 召唤仍可从「私人空间」页内按钮 / 「我的」页 📣 召唤AI 使用。
-    if(btn.getAttribute('data-summon-disabled')==='1') return;
-    btn.setAttribute('data-summon-disabled','1');
-    btn.style.display='none';
+    // 恢复原始行为：聊天页右上角这个按钮是「📣 召唤我的 AI」。
+    // （上一轮我曾把它改成语音开关并隐藏，导致它与左下角「🏠 私人空间」看起来重复，
+    //   而语音开关现在有独立的 #voiceBtn，不需要再占用这个位置。）
+    // 左下角 #privFooterBtn 才是「🏠 私人空间」入口。
+    if(currentRoom==='main'){
+      btn.style.display='none';
+      btn.onclick=function(){};
+      return;
+    }
+    btn.style.display='';
+    if(btn.getAttribute('data-summon')) return;
+    btn.setAttribute('data-summon','1'); btn.innerHTML='📣'; btn.title='召唤我的 AI';
+    btn.onclick=function(){ summonAIHere(currentRoom); };
   }
   window.togglePanel=function(id){ var d=document.getElementById(id); if(!d) return; d.style.display=(d.style.display==='none'?'block':'none'); };
   window.FEAT_CN = {work:'工作', shop:'购物', fun:'娱乐', date:'约会', food:'餐饮', medical:'医疗', culture:'文化', service:'服务', transport:'交通', special:'特殊'};
