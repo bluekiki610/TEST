@@ -37,6 +37,10 @@ header { background:linear-gradient(135deg,#12213a,#0b1526); color:#fff; padding
 footer { background:#0d1a2e; border-top:1px solid rgba(80,180,255,.15); padding:7px 8px; display:flex; align-items:center; gap:6px; flex-shrink:0; }
 #msgInput { flex:1; border:1px solid #1d3a5f; border-radius:8px; padding:8px 10px; font-size:15px; outline:none; background:#13233d; color:#e6f1ff; }
 #sendBtn { background:#0e7fd4; color:#fff; border:none; border-radius:8px; padding:8px 14px; font-size:14px; }
+/* 住宅聊天底部「切换模型」圆形图标（视觉对齐副本的 .inst-model-chip） */
+.home-model-chip { width:38px; height:38px; border-radius:50%; flex-shrink:0; background:#13233d; border:1px solid rgba(80,180,255,.35); color:#9fd8ff; font-size:15px; font-weight:600; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; }
+.home-model-chip:hover { background:#1a2f52; }
+.home-model-chip:disabled { opacity:.45; cursor:not-allowed; }
 .map-view, .building-view { display:none; flex-direction:column; height:100%; flex:1; min-height:0; background:#070d18; }
 .map-top { position:relative; z-index:30; background:linear-gradient(135deg,#12213a,#0b1526); color:#9fd8ff; padding:8px 12px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0; border-bottom:1px solid rgba(80,180,255,.2); }
 .map-top .title { font-size:15px; font-weight:bold; color:#fff; display:flex; align-items:center; gap:6px; flex-shrink:0; }
@@ -189,7 +193,10 @@ textarea.input { color:#e6f1ff; }
         <button class="hbtn" onclick="goMyHome()">🏡我家</button>
         <button class="hbtn" onclick="openBell()">🔔<span id="bellDot" style="display:none;color:#ff6b6b;margin-left:2px">●</span></button>
         <button class="hbtn" id="voiceBtn" onclick="toggleChatVoice()" title="语音朗读开关">🔇</button>
-        <button class="hbtn" id="privBtn" onclick="togglePrivate()" style="display:none">🏠</button>
+        <!-- 独立召唤按钮：把 📣 召唤从 #privBtn 上分离出来，
+             这样 #privBtn 可以专责「🏠 私人空间」，召唤功能仍然保留 -->
+        <button class="hbtn" id="summonBtn" onclick="if(typeof summonAIHere==='function') summonAIHere(currentRoom)" title="召唤我的 AI" style="display:none">📣</button>
+        <button class="hbtn" id="privBtn" onclick="togglePrivate()" title="私人空间" style="display:none">🏠</button>
       </div>
     </header>
     <div class="room-desc-bar" id="roomDescBar" style="display:none">
@@ -202,6 +209,9 @@ textarea.input { color:#e6f1ff; }
     <div id="msgArea"></div>
     <footer>
       <button class="hbtn" id="privFooterBtn" onclick="togglePrivate()" style="display:none;flex-shrink:0">🏠</button>
+      <!-- 住宅聊天模型切换入口（视觉与副本 .inst-model-chip 一致）。
+           注意：/api/messages 目前不接收 model_override，所以本轮只做 UI 入口。 -->
+      <button id="homeModelBtn" class="home-model-chip" onclick="openHomeModelPicker()" title="切换模型" style="flex-shrink:0">…</button>
       <input id="msgInput" placeholder="说点什么吧…" autocomplete="off">
       <button id="sendBtn" onclick="sendMessage()">发送</button>
     </footer>
@@ -1262,6 +1272,16 @@ function updateRoomUI(){ var b=buildingOfRoom(currentRoom); var isHomeRoom=b!==n
 function editRoomDesc(){ var d=prompt('房间简介：',(mapData.rooms&&mapData.rooms[currentRoom]&&mapData.rooms[currentRoom].description)||''); if(d===null) return; api('/api/room/desc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:currentRoom,description:d})}).then(function(){ toast('✅ 简介已更新'); loadMapData().then(updateRoomUI); }).catch(function(e){ toast('❌ '+e.message); }); }
 function editRoomDescByName(room){ var d=prompt('房间简介：',(mapData.rooms&&mapData.rooms[room]&&mapData.rooms[room].description)||''); if(d===null) return; api('/api/room/desc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:room,description:d})}).then(function(){ toast('✅ 简介已更新'); loadMapData().then(function(){ renderBuilding(); updateRoomUI(); }); }).catch(function(e){ toast('❌ '+e.message); }); }
 function togglePrivate(){ 
+  // [PRIVATE-TRACE] 临时诊断：确认到底哪一步挡住了私人空间
+  try{
+    console.log('[PRIVATE-TRACE]', {
+      currentRoom: currentRoom,
+      privBuildingId: privBuildingId,
+      building: buildingOfRoom(currentRoom),
+      privateMask: !!document.getElementById('privateMask'),
+      privModal: !!document.getElementById('privModal')
+    });
+  }catch(e){}
   // privBuildingId 是 updateRoomUI 里算出来的全局缓存，原来这里只认它：
   // 只要它没被算出来（null），两个入口都会 toast「当前房间不属于房子」并且打不开。
   // 现在改为「缓存不可信时直接用 currentRoom 反查」，不依赖那个全局状态。
@@ -1281,6 +1301,38 @@ function togglePrivate(){
   document.getElementById('privWrite').style.display=canEdit()?'':'none'; 
   document.getElementById('privateMask').classList.add('show'); 
   setPrivTab(privTab); 
+}
+// ===== B4：统一的「打开私人空间并定位到某个 tab」入口 =====
+// 不新建第二套 modal，只复用 togglePrivate() + setPrivTab()
+function openPrivateTab(tab){
+  try{ privTab = tab || privTab || 'note'; }catch(e){}
+  if(typeof togglePrivate==='function') togglePrivate();
+}
+// ===== B2：住宅聊天底部「切换模型」圆形图标 =====
+// 注意：/api/messages 目前不接收 model_override，所以这里只是 UI 入口，
+// 不会真的改变住宅聊天使用的模型，也没有改 ext_ai.py 的调用链。
+function loadHomeModelBtn(){
+  var b=document.getElementById('homeModelBtn');
+  if(!b) return;
+  api('/api/ai/key?user='+encodeURIComponent(userName)).then(function(d){
+    if(!d || !d.has_key){ b.textContent='?'; b.title='未配置模型：请到「设置 → 模型与服务」填写 API Key'; return; }
+    var p=d.provider||'deepseek';
+    var icon=({deepseek:'D',siliconflow:'硅',glm:'G'})[p]||String(p).charAt(0).toUpperCase();
+    b.textContent=icon;
+    b.title=(d.model? (p+' · '+d.model) : p)+'（点击选择）';
+  }).catch(function(){ b.textContent='?'; });
+}
+function openHomeModelPicker(){
+  if(typeof window.openModelPicker!=='function'){ toast('模型选择器未加载'); return; }
+  api('/api/ai/key?user='+encodeURIComponent(userName)).then(function(d){
+    if(!d || !d.has_key){ toast('未配置模型：请到「设置 → 模型与服务」填写 API Key'); return; }
+    window.openModelPicker({
+      provider: d.provider||'deepseek',
+      saved: d.model||'',
+      current: '',
+      onPick: function(){ loadHomeModelBtn(); }
+    });
+  }).catch(function(e){ toast('❌ '+e.message); });
 }
 function hidePrivate(){ document.getElementById('privateMask').classList.remove('show'); }
 function setPrivTab(t){ privTab=t; document.getElementById('ptabNote').className=t==='note'?'on':''; document.getElementById('ptabDiary').className=t==='diary'?'on':''; document.getElementById('ptabStory').className=t==='story'?'on':''; document.getElementById('privInput').placeholder=t==='note'?'写一张纸条…':(t==='diary'?'写一篇随笔…':(t==='story'?'写一段剧情…':'写点什么…')); loadPriv(); }
@@ -1567,18 +1619,61 @@ function refreshOnline(){ api('/api/online').then(function(d){ var count=0; (d.o
 function showOnline(){ api('/api/online').then(function(d){ var names=(d.online||[]).filter(function(u){return u.room===currentRoom;}).map(function(u){return u.name;}); toast(names.length?'👥 在线：'+names.join('、'):'当前房间暂无在线成员'); }).catch(function(){}); }
 function heartbeat(){ api('/api/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:userName,room:currentRoom})}).catch(function(){}); refreshOnline(); }
 function reportRoom(){ api('/api/current_room',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:currentRoom,password:roomPassword})}).catch(function(){}); }
+// ===== [ROOM-TRACE] 临时诊断：记录「谁在什么时候改了 Header 的 roomName」 =====
+// 背景对、Header 错 → 说明有人覆盖了 roomName。这里把每一次写入都记下来，
+// 直接看日志就能定位覆盖源，不用猜。确认后可以整块删掉，不影响其他逻辑。
+window.__roomTrace = [];
+(function(){
+  var stack = [];
+  window.__roomTracePush = function(src){ try{ stack.push({at:Date.now(), src:src}); if(stack.length>30) stack.shift(); }catch(e){} };
+  window.__pushRoomWrite = function(src){
+    try{
+      window.__roomTrace.push({ at:new Date().toLocaleTimeString(), src:src, currentRoom:(typeof currentRoom!=='undefined'?currentRoom:'?') });
+      if(window.__roomTrace.length>60) window.__roomTrace.shift();
+    }catch(e){}
+  };
+  // 给 #roomName 挂 setter，捕获所有直接写入（包括内联脚本与插件）
+  try{
+    var el0 = document.getElementById('roomName');
+    if(el0){
+      var proto = Object.getPrototypeOf(el0);
+      var d = Object.getOwnPropertyDescriptor(proto, 'textContent');
+      if(d && d.set){
+        Object.defineProperty(el0, 'textContent', {
+          configurable:true,
+          get:function(){ return d.get.call(this); },
+          set:function(v){
+            window.__pushRoomWrite('textContent=' + v + ' @' + (new Error().stack||'').split('\n')[2]);
+            d.set.call(this, v);
+          }
+        });
+      }
+    }
+  }catch(e){ console.warn('[ROOM-TRACE] hook failed', e); }
+})();
+// ===== [ROOM-TRACE] 结束 =====
 function applyWorldRoomChrome(room, pwd){
-    // 房间「外壳状态」的唯一同步入口：Header 名称 / 房间 tab / 背景 / 描述栏 / localStorage。
-    // 这里只做 UI+本地状态同步，不做消息加载（消息由 switchRoom 负责）。
-    // 这样所有进入真实房间的路径都能保证 Header 与背景和 currentRoom 一致。
+    // 房间「外壳状态」的唯一同步入口：Header 名称 / 房间 tab / 背景。
+    // 每步单独 try/catch：背景是最后一个动作，如果前面某步抛错被整体 catch 吞掉，
+    // 就会出现「背景对、Header 错」这种半同步状态，很难查。现在各步独立并打成日志。
+    try{ window.__pushRoomWrite && window.__pushRoomWrite('applyWorldRoomChrome('+room+')'); }catch(e){}
     try{
         document.getElementById('roomName').textContent=roomLabel(room);
+    }catch(e){ console.error('[ROOM-TRACE] set roomName FAILED', e); }
+    try{
         var tabs=document.querySelectorAll('.room-tab');
         tabs.forEach(function(t){t.classList.remove('active');});
         var cur=document.getElementById('tab_'+room);
         if(cur)cur.classList.add('active');
+    }catch(e){ console.error('[ROOM-TRACE] set room tab FAILED', e); }
+    try{
         applyBg(room);
-    }catch(e){ console.warn('applyWorldRoomChrome error', e); }
+    }catch(e){ console.error('[ROOM-TRACE] applyBg FAILED', e); }
+    console.log('[ROOM-TRACE] chrome applied', {
+        room: room,
+        header: (document.getElementById('roomName')||{}).textContent,
+        tabActive: !!document.getElementById('tab_'+room)
+    });
 }
 function switchRoom(room,pwd){ 
   // P4 修复：记录最近一次进入的真实世界房间，排除 main（群聊） 
@@ -1605,13 +1700,25 @@ function switchRoom(room,pwd){
   refreshOnline(); 
 }
 function enterRoom(room){ 
+  // 真人实测：住宅首页点一次厨房 → 背景对了，但 Header 还是「临空社区」、tab 没切。
+  // 说明「已经等于 currentRoom」这条分支（openBuilding 预先写过 currentRoom）
+  // 走的是外壳补丁路径，而不是一次完整的 switchRoom。
+  // 这里直接打印判据，确定到底走了哪条分支（不需要再猜）。
+  try{
+    console.log('[ROOM-TRACE] enterRoom', {
+      requested: room,
+      currentRoom: currentRoom,
+      sameRoom: room===currentRoom,
+      label: roomLabel(room),
+      header: (document.getElementById('roomName')||{}).textContent
+    });
+  }catch(e){}
   if(room===currentRoom){ 
-    // 已经在目标房间：仍然补齐外壳状态再进聊天。
-    // 之前这里直接 showChat() 就返回了 —— 如果 currentRoom 是被 openBuilding()
-    // 等路径直接改掉而 Header/背景没跟上，这一分支就会「看起来点了没反应」，
-    // 用户要再点一次才生效（Bug 3 双击）。外壳同步是幂等的，重复调用无副作用。
-    applyWorldRoomChrome(room, roomPassword); 
-    updateRoomUI(); 
+    // 已经是同一个房间：不再只补 UI，而是补走一次完整的 switchRoom，
+    // 保证 Header / active tab / 背景 / 消息 全部按同一条路径同步（幂等）。
+    // 这样点击房间永远只有一条真正的进入路径：enterRoom → switchRoom。
+    try{ window.__pushRoomWrite && window.__pushRoomWrite('enterRoom same-room'); }catch(e){}
+    switchRoom(room, roomPassword); 
     showChat(); 
     return; 
   } 
@@ -1719,6 +1826,7 @@ function init(){
   document.getElementById('roomName').textContent=roomLabel(currentRoom);
   document.getElementById('setSpeak')&&(document.getElementById('setSpeak').value=speakNames.join(','));
   loadRooms(); loadAvatars(); loadPairs(); reportRoom(); updateTab();
+  setTimeout(loadHomeModelBtn, 600);   // 住宅聊天底部模型图标（只读设置，仅 UI 入口）
   api('/api/edit_status').then(function(d){ editLocked=!!d.locked; }).catch(function(){});
   api('/api/map').then(function(d){ mapData=d; mapCacheData=d; mapCacheTs=Date.now(); applyBg(currentRoom); updateRoomUI(); }).catch(function(){});
   restoreCache().then(function(){ loadMessages(false); }); heartbeat();
