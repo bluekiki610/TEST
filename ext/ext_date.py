@@ -277,17 +277,14 @@ def setup(app, data, helpers):
     def _start_date_now(ai, d, hall):
         """AI 已在约会房间：立即进入 active，不安排任何「赶来」计时器。
 
-        复用 _arrive_date 的同一套到达副作用（位置/待移动/状态/房间提示/迎接发言），
-        通过 announce_already=True 跳过它的幂等守卫，避免与守卫逻辑分叉。
+        直接复用 _arrive_date 的同一套到达副作用（位置/待移动/状态/房间提示/迎接发言），
+        通过 immediate_start=True 告知它这是「已在房间立即开始」路径：
+          - 跳过它的幂等守卫（调用时状态可能仍是 coming）
+          - 日志里记录真实路径，而不是「调用时是否已 active」
+        这里**不做** except 兜底：_arrive_date 内部若真出异常，应让它抛出并被定位，
+        不能被一个宽泛的 except 掩盖，也不能走一条不做迎接/事件记录的残缺分支。
         """
-        try:
-            _arrive_date(ai, d, announce_already=True)
-        except TypeError:
-            # 极端情况：_arrive_date 不接受该关键字（不应发生），退回直接状态写回
-            d['status'] = 'active'
-            data.setdefault('ai_pending_moves', {}).pop(ai, None)
-            save_data()
-            _hall_msg(hall, f"💞 {d['user']} 和 {ai} 正在这里约会")
+        _arrive_date(ai, d, immediate_start=True)
 
     def _process_reply(ai, owner, reply_text):
         inv = data['date_invites_out'].get(ai)
@@ -410,19 +407,22 @@ def setup(app, data, helpers):
             _send_sms(ai, owner, "看来今天没空呢，我自己逛逛吧～")
         save_data()
 
-    def _arrive_date(ai, d, announce_already=False):
+    def _arrive_date(ai, d, immediate_start=False):
         """到达处理：写回位置/状态/提示，并触达 AI 迎接。
 
-        announce_already=False（计时器路径）：
+        immediate_start=False（计时器路径）：
             ended / 已 active → 直接返回（幂等，挡住重复计时器造成的重复播报）
-        announce_already=True（AI 本来就在房间里，立即开始）：
-            状态已经是 active，但仍需播报一次房间提示与迎接，
-            否则「已在房间」这条路径会没有任何提示。
+        immediate_start=True（AI 本来就在房间里，立即开始）：
+            跳过幂等守卫（调用时状态可能仍是 coming），正常播报一次房间提示与迎接。
+
+        注意日志里记录的是**本次调用的真实路径**（immediate_start），
+        而不是「调用时状态是否已经 active」——后者在首次立即开始时会是 False，
+        会误导排查。
         """
         if d.get('status') in ('ended',):
             return
         already_active = (d.get('status') == 'active')
-        if already_active and not announce_already:
+        if already_active and not immediate_start:
             return
         hall = d.get('room', '')
         if hall:
@@ -431,7 +431,12 @@ def setup(app, data, helpers):
         if not already_active:
             d['status'] = 'active'
         save_data()
-        print(f'[ext_date] 约会到达 | ai={ai} | room={hall} | status=active | immediate={already_active}', flush=True)
+        print(
+            f'[ext_date] 约会到达 | ai={ai} | room={hall} | status=active '
+            f'| path={"immediate_start" if immediate_start else "timer"} '
+            f'| was_active={already_active}',
+            flush=True
+        )
 
         b = data['buildings'].get(d['building_id'])
         bn = b.get('name', '?') if b else '?'
