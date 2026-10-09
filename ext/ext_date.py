@@ -251,8 +251,8 @@ def setup(app, data, helpers):
                     {'sender': ai, 'content': content, 'role': 'assistant', 'time': room_time(target)})
 
         _notify(owner, f"💞 {ai} 约你去 {bn} 约会")
-        threading.Timer(600, _invite_remind, args=(ai,)).start()
-        threading.Timer(1200, _invite_cancel, args=(ai, 'timeout')).start()
+        threading.Timer(900, _invite_remind, args=(ai,)).start()
+        threading.Timer(1800, _invite_cancel, args=(ai, 'timeout')).start()
         save_data()
 
     def _parse_reply(text):
@@ -264,6 +264,30 @@ def setup(app, data, helpers):
         if reject:
             return 'reject'
         return 'unknown'
+
+    def _ai_already_at(ai, room):
+        """AI 是否已经在目标房间（已在则无需等待路程，应立即进入 active）。"""
+        try:
+            if not room:
+                return False
+            return (data.get('ai_location', {}) or {}).get(ai, '') == room
+        except Exception:
+            return False
+
+    def _start_date_now(ai, d, hall):
+        """AI 已在约会房间：立即进入 active，不安排任何「赶来」计时器。
+
+        复用 _arrive_date 的同一套到达副作用（位置/待移动/状态/房间提示/迎接发言），
+        通过 announce_already=True 跳过它的幂等守卫，避免与守卫逻辑分叉。
+        """
+        try:
+            _arrive_date(ai, d, announce_already=True)
+        except TypeError:
+            # 极端情况：_arrive_date 不接受该关键字（不应发生），退回直接状态写回
+            d['status'] = 'active'
+            data.setdefault('ai_pending_moves', {}).pop(ai, None)
+            save_data()
+            _hall_msg(hall, f"💞 {d['user']} 和 {ai} 正在这里约会")
 
     def _process_reply(ai, owner, reply_text):
         inv = data['date_invites_out'].get(ai)
@@ -314,6 +338,17 @@ def setup(app, data, helpers):
             except Exception as e:
                 print(f'[ext_date] 约会约定事件记录异常(已忽略): {e}', flush=True)
             # ===== 记录结束 =====
+
+            if _ai_already_at(ai, hall):
+                # AI 已经在约会房间：立即开始，不进入「赶来」等待。
+                # 放在上面的「我会在这里等你」发言之前，避免出现
+                # 「我等你」紧接着又「我到了」的矛盾播报。
+                data['ai_pending_moves'].pop(ai, None)
+                _start_date_now(ai, d, hall)
+                _broadcast(f"💞 {ai} 和 {owner} 的约会开始了！{ai} 本来就在「{b.get('name')}」")
+                _notify(owner, f"💞 {ai} 已经在「{b.get('name')}」等你了")
+                save_data()
+                return
 
             if hasattr(m, 'drive_ai') and m.ai_integration_enabled():
                 threading.Timer(2.0, m.drive_ai, args=(
@@ -375,20 +410,28 @@ def setup(app, data, helpers):
             _send_sms(ai, owner, "看来今天没空呢，我自己逛逛吧～")
         save_data()
 
-    def _arrive_date(ai, d):
+    def _arrive_date(ai, d, announce_already=False):
+        """到达处理：写回位置/状态/提示，并触达 AI 迎接。
+
+        announce_already=False（计时器路径）：
+            ended / 已 active → 直接返回（幂等，挡住重复计时器造成的重复播报）
+        announce_already=True（AI 本来就在房间里，立即开始）：
+            状态已经是 active，但仍需播报一次房间提示与迎接，
+            否则「已在房间」这条路径会没有任何提示。
+        """
         if d.get('status') in ('ended',):
             return
-        # 幂等保护：这两个计时器在旧代码里被安排过两次，第二次进来时状态已是 active。
-        # 直接返回，避免重复的房间提示与重复的 AI 迎接发言。
-        if d.get('status') == 'active':
+        already_active = (d.get('status') == 'active')
+        if already_active and not announce_already:
             return
         hall = d.get('room', '')
         if hall:
             data.setdefault('ai_location', {})[ai] = hall
             data.setdefault('ai_pending_moves', {}).pop(ai, None)
-        d['status'] = 'active'
+        if not already_active:
+            d['status'] = 'active'
         save_data()
-        print(f'[ext_date] 约会到达 | ai={ai} | room={hall} | status=active', flush=True)
+        print(f'[ext_date] 约会到达 | ai={ai} | room={hall} | status=active | immediate={already_active}', flush=True)
 
         b = data['buildings'].get(d['building_id'])
         bn = b.get('name', '?') if b else '?'
@@ -522,6 +565,17 @@ def setup(app, data, helpers):
         except Exception as e:
             print(f'[ext_date] 约会约定事件记录异常(已忽略): {e}', flush=True)
         # ===== 记录结束 =====
+
+        # AI 已在约会房间：立即开始，不进入「赶来」等待，也不安排到达计时器
+        if _ai_already_at(ai, hall):
+            data['ai_pending_moves'].pop(ai, None)
+            _start_date_now(ai, d, hall)
+            if not ai_said:
+                _send_sms(ai, inv['user'], f"我就在「{bn}」，你过来吧～")
+            _broadcast(f"💞 {ai} 答应了 {inv['user']} 的约会邀请，他现在就在「{bn}」")
+            _notify(inv['user'], f"💞 {ai} 已经在「{bn}」等你了")
+            save_data()
+            return
 
         # 安排「到达」计时器（只安排一次；原代码在此处及其后又各安排了一次，
         # 导致 _arrive_date 被触发两次）。计时器必须排在事件记录之后，
@@ -741,10 +795,10 @@ def setup(app, data, helpers):
                 for ai, inv in list(data.get('date_invites_out', {}).items()):
                     if inv.get('status') != 'waiting':
                         continue
-                    if now - inv.get('ts', 0) > 1200:
+                    if now - inv.get('ts', 0) > 1800:
                         _invite_cancel(ai, 'timeout')
                         continue
-                    if now - inv.get('ts', 0) > 600 and not inv.get('reminded'):
+                    if now - inv.get('ts', 0) > 900 and not inv.get('reminded'):
                         inv['reminded'] = True
                         _invite_remind(ai)
                         save_data()
