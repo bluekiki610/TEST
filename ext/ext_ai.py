@@ -1478,6 +1478,75 @@ def setup(app, data, helpers):
                 return nm
         return ""
 
+    def _known_user_names():
+        """当前世界里所有真人用户名（用于识别「明确在和另一位真人说话」）。
+
+        只读汇总，不新增任何字段。system 排除。
+        """
+        names = []
+        try:
+            for src in (
+                (data.get("presence", {}) or {}).keys(),
+                (data.get("user_ais", {}) or {}).keys(),
+                (data.get("user_profiles", {}) or {}).keys(),
+            ):
+                for n in src:
+                    if n and n != "system" and n not in names:
+                        names.append(n)
+            for _b in (data.get("buildings", {}) or {}).values():
+                _ow = _b.get("owner")
+                if _ow and _ow != "system" and _ow not in names:
+                    names.append(_ow)
+            for _d in (data.get("dates", []) or []):
+                _u = _d.get("user")
+                if _u and _u != "system" and _u not in names:
+                    names.append(_u)
+        except Exception:
+            pass
+        return names
+
+    def _parse_human_addressee(content, user_names, ai_names=None):
+        """解析「明确在和另一位真人说话」的目标真人（非 AI）。
+
+        严格要求定向位置，只在名字确实处于「称呼位」时才命中，
+        以免把普通提及误判成对话目标：
+            X，… / X：… / X:… / X ！ / @X / 对X说
+        刻意**不**采用「名字全文包含」——普通提及不算目标。
+        返回命中的真人名；没有明确对象时返回 ""。
+        """
+        text = (content or "").strip()
+        if not text:
+            return ""
+        ai_set = set()
+        for a in (ai_names if ai_names is not None else _room_ai_names()):
+            ai_set.add(_ai_norm(a))
+        cands = []
+        for nm in (user_names or []):
+            if not nm:
+                continue
+            # 真人名不应与 AI 名混用；否则「祁煜，你觉得…」会被误判成"在对真人说话"
+            if _ai_norm(nm) in ai_set:
+                continue
+            if nm not in cands:
+                cands.append(nm)
+        # 长名优先，避免短名先命中
+        cands.sort(key=lambda x: len(_ai_norm(x)), reverse=True)
+
+        # 1) @X
+        for nm in cands:
+            if re.search(r"@" + re.escape(_ai_norm(nm)) + r"(?![\u4e00-\u9fffA-Za-z0-9])", text):
+                return nm
+        # 2) 对X说
+        for nm in cands:
+            if re.search(r"对\s*" + re.escape(_ai_norm(nm)) + r"\s*说", text):
+                return nm
+        # 3) 行首称呼（关键：仅行首，普通提及不算）
+        for nm in cands:
+            n = _ai_norm(nm)
+            if re.match(r"^\s*" + re.escape(n) + r"\s*[，,：:！!]", text):
+                return nm
+        return ""
+
     def _is_room_wide(text):
         """是否「明确面向房间所有人提问」。窄范围：必须有 invite 词 + 疑问语气。"""
         t = text or ""
@@ -1512,11 +1581,25 @@ def setup(app, data, helpers):
     # 判定用的关键词（保守：只在「面向全体」或「与本人约会有直接关系」时才用于放行）
     _DATE_TOPIC_KW = ("约会", "约了", "约好", "约在", "去哪玩", "去哪约", "一起出去", "去哪了")
 
-    def _ai_room_chat_decision(ai, owner, sender, content, room_ais):
+    def _ai_room_chat_decision(ai, owner, sender, content, room_ais, all_ai_names=None):
         """产出本次消息对该 AI 的参与判定。
 
         返回 {"allow": bool, "reason": str, "target": str}
         allow=False 时，execute_action 的 chat 静默兜底会拦截 speak。
+
+        ⚠️ 判定顺序（本轮修正的核心）：
+        必须先判断「这条消息在跟谁说话」，再判断「说话者是不是我主人」。
+        否则会出现：Kiki 对颜颜说「颜颜，你俩去哪约会了？」时，
+        黎深因为 sender==自己主人(Kiki) 就被误判成 owner_talking_to_me 而插话。
+
+        顺序：
+          1 点名本 AI            -> 放行（点名优先于一切保护）
+          2 点名别的 AI          -> 拒绝
+          3 明确在跟另一位真人说  -> 先做「约会双方保护」，再看话题相关性
+          4 说话者是我主人       -> 放行（主人在与我互动）
+          5 我与 sender 约会中   -> 放行
+          6 面向全体提问         -> 看相关性
+          7 其余多人闲聊         -> 拒绝（保守，不抢话）
         """
         try:
             _ais = [x for x in (room_ais or []) if x]
@@ -1524,34 +1607,68 @@ def setup(app, data, helpers):
             if len(_ais) <= 1:
                 return {"allow": True, "reason": "only_ai_in_room", "target": ""}
             text = content or ""
-            target = _parse_target_ai(text, _room_ai_names())
-            # 优先级 1：明确点名本 AI
+            _all_ai = all_ai_names if all_ai_names is not None else _room_ai_names()
+            target = _parse_target_ai(text, _all_ai)
+            # ===== 1. 明确点名本 AI（点名优先，不被任何保护规则挡住）=====
             if target and _ai_name_matches(target, ai):
                 return {"allow": True, "reason": "named_me", "target": target}
-            # 优先级 2：明确点名了别的 AI —— 本 AI 默认不抢话
+            # ===== 2. 明确点名了别的 AI —— 本 AI 不抢话 =====
             if target:
                 return {"allow": False, "reason": "named_other", "target": target}
-            # 优先级 3：说话者就是本 AI 的主人（主人不需要每次点名）
+
+            _myd = _active_date_of(ai)                      # 我正在进行的约会（可能 None）
+            _dp = (_myd or {}).get("user") or ""            # 我的约会对象
+
+            # ===== 3. 明确在跟另一位真人说话 =====
+            # 这是本轮修正的关键分支：真人之间的对话，不能因为「说话者是自己的主人」
+            # 就自动插入。
+            _human_to = _parse_human_addressee(text, _known_user_names(), _all_ai)
+            if _human_to:
+                # 3a. 正在跟我的约会对象说话，且消息涉及我们的约会 -> 我可以自然补充
+                if _dp and _ai_name_matches(_human_to, _dp):
+                    if any(k in text for k in _DATE_TOPIC_KW) or _name_in_text(ai, text):
+                        return {"allow": True, "reason": "my_date_being_discussed", "target": _human_to}
+                # 3b. 话题直接涉及我与我的约会对象 -> 允许参与
+                if any(k in text for k in _DATE_TOPIC_KW) and _name_in_text(ai, text):
+                    return {"allow": True, "reason": "my_date_topic_mentioned", "target": _human_to}
+                # 3c. 其余情况：这是别人之间的对话，保持安静
+                #     （含「正好是我的主人在跟别人说话」——保护约会/社交现场）
+                return {"allow": False, "reason": "addressed_to_other_human", "target": _human_to}
+
+            # ===== 4. 说话者是我的主人（且不是在跟别的真人说话）=====
             if owner and sender == owner:
+                # 4a. 只有当「我正在跟另一个人约会、且那个人就在本房间」时才保护约会，
+                #     避免三人行；否则正常回应主人。
+                #     ⚠️ _dp 是用户名，_ais 是 AI 名，必须用 owner_of_ai 换算后比较。
+                _partner_present = False
+                if _myd is not None and _dp:
+                    for _x in _ais:
+                        try:
+                            if owner_of_ai(_x) == _dp:
+                                _partner_present = True
+                                break
+                        except Exception:
+                            pass
+                if _partner_present:
+                    return {"allow": False, "reason": "date_protected", "target": ""}
                 return {"allow": True, "reason": "owner_talking_to_me", "target": ""}
-            # 优先级 4：本 AI 正与 sender 约会中
+
+            # ===== 5. 我正与 sender 约会中 =====
             if _ai_on_active_date_with(ai, sender):
                 return {"allow": True, "reason": "on_date_with_sender", "target": ""}
-            # 优先级 5：本 AI 正在约会中，但说话者不是约会对象
-            #          —— 保护「别人约会时不要插进来」（三人行）
-            _myd = _active_date_of(ai)
-            if _myd is not None and _myd.get("user") != sender:
-                return {"allow": False, "reason": "sender_not_date_partner", "target": ""}
-            # 优先级 6：明确面向房间所有人的提问（窄范围）
+
+            # ===== 6. 明确面向房间所有人的提问（窄范围）=====
             if _is_room_wide(text):
-                _dp = (_myd or {}).get("user") or ""
+                # 6a. 我的约会对象在房间里被提到，可自然参与
+                if _dp and _name_in_text(_dp, text):
+                    return {"allow": True, "reason": "addressed_to_room_date", "target": ""}
+                # 6b. 主人在场且被点名 + 话题涉及约会，可参与
                 owner_mentioned = bool(owner) and _name_in_text(owner, text)
-                if _dp and _dp in text:
-                    return {"allow": True, "reason": "addressed_to_room", "target": ""}
                 if owner_mentioned and any(k in text for k in _DATE_TOPIC_KW):
                     return {"allow": True, "reason": "addressed_to_room_topic", "target": ""}
                 return {"allow": False, "reason": "room_wide_not_relevant", "target": ""}
-            # 优先级 7：其余多人闲聊 —— 保守，不抢话
+
+            # ===== 7. 其余多人闲聊 —— 保守，不抢话 =====
             return {"allow": False, "reason": "not_addressed", "target": ""}
         except Exception as e:
             # 异常一律降级放行：宁可偶尔抢话，也不要把正常聊天判死
@@ -1751,6 +1868,7 @@ def setup(app, data, helpers):
                         _room_ais_here.append(_x0)
         except Exception:
             _room_ais_here = []
+        _all_ai_names = _room_ai_names()   # 只算一次，供所有 AI 的判定复用
         for owner, ais in data["user_ais"].items():
             seen = set()
             for ai in ais:
@@ -1776,7 +1894,7 @@ def setup(app, data, helpers):
                     # ===== 多人房间参与判定（修复抢话）=====
                     # 判定在「当次消息」当场完成，结果随该 AI 自己的 Timer 参数传递，
                     # 不使用任何共享可覆盖状态，因此后续消息不会串用。
-                    _decision = _ai_room_chat_decision(ai, owner, sender, content, _room_ais_here)
+                    _decision = _ai_room_chat_decision(ai, owner, sender, content, _room_ais_here, _all_ai_names)
                     if not _decision.get("allow"):
                         print(
                             f"🤐 [WAKE] {ai} 本条消息不参与 | sender={sender} "
