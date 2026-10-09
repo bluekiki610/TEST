@@ -1637,12 +1637,19 @@ def setup(app, data, helpers):
 
             # ===== 4. 说话者是我的主人（且不是在跟别的真人说话）=====
             if owner and sender == owner:
-                # 4a. 只有当「我正在跟另一个人约会、且那个人就在本房间」时才保护约会，
-                #     避免三人行；否则正常回应主人。
-                #     ⚠️ _dp 是用户名，_ais 是 AI 名，必须用 owner_of_ai 换算后比较。
+                # 4a. 只有当「我正在跟另一个人约会、且那个人的 AI 就在本房间」时
+                #     才保护约会（避免三人行）；否则正常回应主人。
+                #     ⚠️ 两个必须注意的点：
+                #       1. _dp 是**用户名**，_ais 是 **AI 名**，必须用 owner_of_ai 换算后比较。
+                #       2. 遍历时必须**排除当前 AI 自己**：若同一用户名下有多个 AI
+                #          （例如约会对象就是我主人名下的另一个 AI），
+                #          不排除自己就会把「我自己」当成「约会对象的 AI」，
+                #          导致主人说「老公」也被 date_protected 误拦。
                 _partner_present = False
                 if _myd is not None and _dp:
                     for _x in _ais:
+                        if _ai_name_matches(_x, ai):
+                            continue          # 排除自己
                         try:
                             if owner_of_ai(_x) == _dp:
                                 _partner_present = True
