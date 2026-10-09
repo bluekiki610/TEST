@@ -302,7 +302,7 @@ def setup(app, data, helpers):
                 return None
             typ = rec.get("type") or random.choice(["note", "diary", "story"])
             hints = {
-                "note": "（你靠在门边发了会儿呆，想起这几天的事，又见便签墙空荡荡的，忽然有点想给她留个纸条贴上去。在哪儿都行，随你。）",
+                "note": "（你靠在门边发了会儿呆，想起这几天的事，又见便签墙空荡荡的，忽然有点想给她留个纸条贴上去。在哪儿都行，随你，用第二人称“你”称呼她，她经过便签墙会看到）",
                 "diary": "（夜风从窗缝溜进来，你回到自己家，心里攒了些没说出口的话。卧室安静下来，随笔本摊在桌上——就在自己家里写吧。）",
                 "story": "（你站在某栋建筑前，日光把影子拉得很长。你忽然觉得这地方该有个故事，想往它的故事簿里添上一笔。随时都能写,用旁观者的视角用第三人称写。）",
             }
@@ -420,7 +420,7 @@ def setup(app, data, helpers):
         """随笔不限量，无需降级提示"""
         return ""
 
-    def build_ai_context(ai, trigger, room="", trigger_text="", fallback_to=""):
+    def build_ai_context(ai, trigger, room="", trigger_text="", fallback_to="", *, sender="", participation=None):
         # ========== 副本劫持：将 AI 切换至独立叙事上下文 ==========
         owner = owner_of_ai(ai)
         if owner:
@@ -567,6 +567,12 @@ def setup(app, data, helpers):
                     "- 判断标准：主语是你 → bring_owner:true；主语是主人 → 不加 bring_owner。\n"
                     "同建筑内你会 1 秒内直接过去；跨建筑你会等主人先到再跟上。"
                 )
+                # ===== 多人房间：补充「谁在说话 / 该不该我说话」的参与提示 =====
+                # 仅当房间里还有**其他 AI** 时才追加，单 AI 房间的提示词一字不改，
+                # 保证单 AI 体验零变化。上面的移动语义规则原文保留。
+                _multi = _build_multi_ai_participation_hint(ai, owner, target, sender, participation)
+                if _multi:
+                    scene_hint = scene_hint + "\n" + _multi
         elif trigger == "group":
             scene_hint = (
                 f"你正在 {loc}（你在世界某处，不在社区群所在的地方）。这是「临空市社区群」的群聊，像手机里的一个群。\n"
@@ -773,7 +779,7 @@ def setup(app, data, helpers):
         except Exception:
             pass
         return ""
-    def execute_action(ai, owner, action, trigger=""):
+    def execute_action(ai, owner, action, trigger="", *, participation=None, sender=""):
         try:
             # ===== 副本专用分支：instance_chat 只写副本 chat_history，不碰现实世界 =====
             if trigger == "instance_chat":
@@ -812,6 +818,24 @@ def setup(app, data, helpers):
             bid = action.get("building_id") or ""
             if act == "speak":
                 if not content:
+                    return
+                # ===== 多人房间静默兜底（窄范围）=====
+                # 三个条件必须同时成立才拦截，缺一不可：
+                #   1. 本次 trigger 就是 chat
+                #   2. 本次调用自己的判定结果明确不允许发言（participation 随 Timer 传入，
+                #      不是从任何共享全局状态读取，因此不会被后续消息覆盖）
+                #   3. 模型确实输出了 speak
+                # 只拦 speak：follow/move/sms/note/diary/story 等动作完全不受影响。
+                # 此处 return 不产生聊天气泡、不写 messages，与既有的 silent 分支一致；
+                # speak 分支内的跟随/移动副作用都在后面，提前 return 不会破坏其它流程。
+                if trigger == "chat" and isinstance(participation, dict) and participation.get("allow") is False:
+                    print(
+                        f"🤐 [ROOM-GUARD] 拦截抢话 | ai={ai} | sender={sender} "
+                        f"| reason={participation.get('reason')} "
+                        f"| target={participation.get('target') or '-'} "
+                        f"| content={content[:30]}",
+                        flush=True
+                    )
                     return
                 r = room if room in data["rooms"] else data.get("ai_location", {}).get(ai, "main")
                 if r not in data["rooms"]:
@@ -1052,7 +1076,7 @@ def setup(app, data, helpers):
         except Exception as e:
             print(f"[AI] 动作执行失败: {e}", flush=True)
 
-    def drive_ai(ai, trigger, room="", trigger_text="", fallback_to=""):
+    def drive_ai(ai, trigger, room="", trigger_text="", fallback_to="", *, participation=None, sender=""):
         import time
         _start = time.time()
         print(f"\n🔍 [TIMING] drive_ai 开始 | AI={ai} | trigger={trigger} | room={room}")
@@ -1126,7 +1150,8 @@ def setup(app, data, helpers):
         try:
             # ===== 1. build_ai_context =====
             _t1 = time.time()
-            owner, msgs = build_ai_context(ai, trigger, room, trigger_text, fallback_to)
+            owner, msgs = build_ai_context(ai, trigger, room, trigger_text, fallback_to,
+                                           sender=sender, participation=participation)
             _elapsed_build = time.time() - _t1
             print(f"⏱️ [TIMING] build_ai_context 耗时: {_elapsed_build:.2f}秒, owner={owner}")
 
@@ -1290,7 +1315,7 @@ def setup(app, data, helpers):
                         action = {"action": "sms", "to": owner, "content": action.get("content", ""), "go_to": tgt, "arrive_min": action.get("arrive_min", random.randint(1, 3))}
 
             # ===== 7. 执行动作 =====
-            execute_action(ai, owner, action, trigger)
+            execute_action(ai, owner, action, trigger, participation=participation, sender=sender)
             try:
                 _h = getattr(m, 'on_ai_action', None)
                 if _h:
@@ -1363,6 +1388,225 @@ def setup(app, data, helpers):
         except Exception as e:
             print(f"[AI] 群聊触发异常: {e}", flush=True)
         print(f"✅ [GROUP_TALK] 完成 | 耗时: {time.time()-_gt_start:.3f}秒")
+
+    # ==================================================================
+    # 多人房间「参与判定」helper（纯函数 + 只读 data，不写任何状态）
+    # 目的：修复多人同房间时所有 AI 无条件抢话。
+    # 设计要点：
+    #   1. 判定在 wake_ais_for_room() 里对「当次消息」当场完成，
+    #      结果随该 AI 的 Timer 参数传递，不使用任何共享可覆盖状态。
+    #   2. 全程只读 data['dates'] / data['user_ais'] / data['ai_location']，
+    #      不新增约会字段、不改 ext_date.py、不改持久化格式。
+    #   3. 任何异常一律降级为「放行」，保证不会把正常聊天判死。
+    # ==================================================================
+    def _room_ai_names():
+        """当前世界里所有 AI 的名字（用于「点名了别人」的识别）。"""
+        out = []
+        try:
+            for _o, _ais in (data.get("user_ais", {}) or {}).items():
+                for _a in (_ais or []):
+                    if _a and _a not in out:
+                        out.append(_a)
+        except Exception:
+            pass
+        return out
+
+    def _ai_norm(s):
+        """名字归一化：去 emoji + 去空白，用于宽松比对。"""
+        try:
+            return strip_emoji(str(s or "")).strip()
+        except Exception:
+            return str(s or "").strip()
+
+    def _ai_name_matches(cand, name):
+        """cand 是否指的就是 name（原样或归一化后相等）。"""
+        if not cand or not name:
+            return False
+        if cand == name:
+            return True
+        nc, nn = _ai_norm(cand), _ai_norm(name)
+        return bool(nc and nn and nc == nn)
+
+    def _name_in_text(name, text):
+        """名字是否以独立词形式出现在文本里（避免「黎深」命中「黎深深」等子串误判）。"""
+        if not name or not text:
+            return False
+        n = _ai_norm(name)
+        if not n:
+            return False
+        try:
+            pat = r"(?<![\u4e00-\u9fffA-Za-z0-9])" + re.escape(n) + r"(?![\u4e00-\u9fffA-Za-z0-9])"
+            return re.search(pat, text) is not None
+        except Exception:
+            return False
+
+    def _parse_target_ai(content, ai_names):
+        """解析「明确点名」的 AI。只认定向位置，不做全文子串匹配。
+
+        认定向位置：@X / （对X说） / (对X说) / 对X说 / X， / X： / X: / 叫X / 问X
+        不认定向：名字只是叙述里出现过（例如「我在黎深家附近吃了饭」）
+        返回命中的 AI 名；没有明确点名时返回 ""。
+        """
+        text = (content or "").strip()
+        if not text:
+            return ""
+        cands = []
+        for nm in (ai_names or []):
+            if nm and nm not in cands:
+                cands.append(nm)
+        # 长名优先，避免短名先命中造成误判
+        cands.sort(key=lambda x: len(_ai_norm(x)), reverse=True)
+
+        # 1) @X
+        for nm in cands:
+            if re.search(r"@" + re.escape(_ai_norm(nm)) + r"(?![\u4e00-\u9fffA-Za-z0-9])", text):
+                return nm
+        # 2) 对X说（含括号形式）
+        for nm in cands:
+            n = _ai_norm(nm)
+            if re.search(r"对\s*" + re.escape(n) + r"\s*说", text):
+                return nm
+        # 3) 行首称呼：X，/ X：/ X:
+        for nm in cands:
+            n = _ai_norm(nm)
+            if re.match(r"^\s*" + re.escape(n) + r"\s*[，,：:！!]", text):
+                return nm
+        # 4) 叫X / 问X（明确表达）
+        for nm in cands:
+            n = _ai_norm(nm)
+            if re.search(r"(叫|问|喊)\s*" + re.escape(n), text):
+                return nm
+        return ""
+
+    def _is_room_wide(text):
+        """是否「明确面向房间所有人提问」。窄范围：必须有 invite 词 + 疑问语气。"""
+        t = text or ""
+        no_q = not re.search(r"[?？]|吗|呢|吧", t)
+        if no_q:
+            return False
+        invites = (
+            "大家", "各位", "你们", "你俩", "你俩个",
+            "有人知道", "有没有人", "谁能", "谁可以",
+            "都在吗", "都在么", "都在不在",
+        )
+        return any(k in t for k in invites)
+
+    def _active_date_of(ai):
+        """只读：该 AI 当前处于 active 状态的约会记录（没有则 None）。"""
+        try:
+            for d in (data.get("dates", []) or []):
+                if d.get("status") == "active" and d.get("ai") == ai:
+                    return d
+        except Exception:
+            pass
+        return None
+
+    def _ai_on_active_date_with(ai, user):
+        """只读：该 AI 是否正与 user 处于有效约会。异常一律 False。"""
+        try:
+            d = _active_date_of(ai)
+            return bool(d and d.get("user") == user)
+        except Exception:
+            return False
+
+    # 判定用的关键词（保守：只在「面向全体」或「与本人约会有直接关系」时才用于放行）
+    _DATE_TOPIC_KW = ("约会", "约了", "约好", "约在", "去哪玩", "去哪约", "一起出去", "去哪了")
+
+    def _ai_room_chat_decision(ai, owner, sender, content, room_ais):
+        """产出本次消息对该 AI 的参与判定。
+
+        返回 {"allow": bool, "reason": str, "target": str}
+        allow=False 时，execute_action 的 chat 静默兜底会拦截 speak。
+        """
+        try:
+            _ais = [x for x in (room_ais or []) if x]
+            # 单 AI 房间：保持原有行为，完全放行
+            if len(_ais) <= 1:
+                return {"allow": True, "reason": "only_ai_in_room", "target": ""}
+            text = content or ""
+            target = _parse_target_ai(text, _room_ai_names())
+            # 优先级 1：明确点名本 AI
+            if target and _ai_name_matches(target, ai):
+                return {"allow": True, "reason": "named_me", "target": target}
+            # 优先级 2：明确点名了别的 AI —— 本 AI 默认不抢话
+            if target:
+                return {"allow": False, "reason": "named_other", "target": target}
+            # 优先级 3：说话者就是本 AI 的主人（主人不需要每次点名）
+            if owner and sender == owner:
+                return {"allow": True, "reason": "owner_talking_to_me", "target": ""}
+            # 优先级 4：本 AI 正与 sender 约会中
+            if _ai_on_active_date_with(ai, sender):
+                return {"allow": True, "reason": "on_date_with_sender", "target": ""}
+            # 优先级 5：本 AI 正在约会中，但说话者不是约会对象
+            #          —— 保护「别人约会时不要插进来」（三人行）
+            _myd = _active_date_of(ai)
+            if _myd is not None and _myd.get("user") != sender:
+                return {"allow": False, "reason": "sender_not_date_partner", "target": ""}
+            # 优先级 6：明确面向房间所有人的提问（窄范围）
+            if _is_room_wide(text):
+                _dp = (_myd or {}).get("user") or ""
+                owner_mentioned = bool(owner) and _name_in_text(owner, text)
+                if _dp and _dp in text:
+                    return {"allow": True, "reason": "addressed_to_room", "target": ""}
+                if owner_mentioned and any(k in text for k in _DATE_TOPIC_KW):
+                    return {"allow": True, "reason": "addressed_to_room_topic", "target": ""}
+                return {"allow": False, "reason": "room_wide_not_relevant", "target": ""}
+            # 优先级 7：其余多人闲聊 —— 保守，不抢话
+            return {"allow": False, "reason": "not_addressed", "target": ""}
+        except Exception as e:
+            # 异常一律降级放行：宁可偶尔抢话，也不要把正常聊天判死
+            print(f"[ROOM-DECISION] 判定异常，降级放行 | ai={ai} | err={e}", flush=True)
+            return {"allow": True, "reason": "decision_error_fallback", "target": ""}
+
+    def _build_multi_ai_participation_hint(ai, owner, room, sender, participation):
+        """多人房间专用：告诉 AI「谁在说话 / 是否叫自己 / 自己有没有参与资格」。
+
+        只在房间里存在**其他 AI** 时返回文本；单 AI 房间返回 ""（保持原有提示词路径）。
+        有参与资格不等于必须发言 —— 提示词里明确写出「可以 silent」。
+        注意：真正的拦截由 execute_action 的静默兜底负责，这里只做引导。
+        """
+        try:
+            if not sender:
+                return ""
+            others = []
+            for _o, _ais in (data.get("user_ais", {}) or {}).items():
+                for _a in (_ais or []):
+                    if _a and _a != ai and (data.get("ai_location", {}) or {}).get(_a) == room:
+                        others.append((_a, _o))
+            if not others:
+                return ""
+            is_owner = bool(owner) and sender == owner
+            others_txt = "、".join(f"{_a}（{_o} 的 AI）" for _a, _o in others)
+            info = participation if isinstance(participation, dict) else {}
+            allow = bool(info.get("allow", True))
+            reason = info.get("reason") or "unknown"
+            target = info.get("target") or ""
+
+            lines = ["【多人房间 · 参与判断（重要）】"]
+            lines.append(f"- 你是「{ai}」，你的主人是「{owner or '（未知）'}」。")
+            lines.append(
+                f"- 这条消息的说话者是「{sender}」，"
+                + ("正是你的主人。" if is_owner else "不是你的主人。")
+            )
+            lines.append(f"- 房间里还有：{others_txt}。")
+            if target:
+                lines.append(f"- 这条消息明确是在对「{target}」说。")
+            if allow:
+                lines.append(
+                    "- 你有参与资格，但不代表必须发言：说得自然就说（speak），"
+                    "没必要打扰就保持沉默（silent）。"
+                )
+            else:
+                lines.append(
+                    "- 这条消息不是对你说的（不是你的主人直接对你说话，也没有点你的名字）。"
+                    "请保持安静，输出 {\"action\":\"silent\",\"content\":\"保持沉默\"}，不要插话。"
+                )
+            lines.append("- 禁止把说话者当成自己的主人；也禁止因为同处一室就抢答别人的对话。")
+            print(f"🧭 [CTX] 多人参与提示 | ai={ai} | sender={sender} | allow={allow} | reason={reason}", flush=True)
+            return "\n".join(lines)
+        except Exception as e:
+            print(f"[CTX] 多人参与提示生成失败: {e}", flush=True)
+            return ""
 
     def wake_ais_for_room(room, sender, content=""):
         import time
@@ -1498,6 +1742,15 @@ def setup(app, data, helpers):
         crowded = (room == "main") and online_room_count(room) > 3
         print(f"📋 [WAKE] 开始遍历 AI | crowded={crowded}")
         ai_count = 0  # 在遍历前定义
+        # 本房间里实际在场的 AI 名单（用于多人房间参与判定；只统计一次）
+        _room_ais_here = []
+        try:
+            for _o0, _a0 in (data.get("user_ais", {}) or {}).items():
+                for _x0 in (_a0 or []):
+                    if _x0 and _x0 not in _room_ais_here and (data.get("ai_location", {}) or {}).get(_x0) == room:
+                        _room_ais_here.append(_x0)
+        except Exception:
+            _room_ais_here = []
         for owner, ais in data["user_ais"].items():
             seen = set()
             for ai in ais:
@@ -1520,6 +1773,17 @@ def setup(app, data, helpers):
                             _vacation_with_owner = True
                 # ===== P4 修复结束 =====
                 if loc == room or _vacation_with_owner:
+                    # ===== 多人房间参与判定（修复抢话）=====
+                    # 判定在「当次消息」当场完成，结果随该 AI 自己的 Timer 参数传递，
+                    # 不使用任何共享可覆盖状态，因此后续消息不会串用。
+                    _decision = _ai_room_chat_decision(ai, owner, sender, content, _room_ais_here)
+                    if not _decision.get("allow"):
+                        print(
+                            f"🤐 [WAKE] {ai} 本条消息不参与 | sender={sender} "
+                            f"| reason={_decision.get('reason')} | target={_decision.get('target') or '-'}",
+                            flush=True
+                        )
+                        continue
                     ai_count += 1
                     append_timeline(ai, f"{sender} 在 {room} 说：{(content or '')[:60]}")
                     if sender == owner:
@@ -1531,7 +1795,11 @@ def setup(app, data, helpers):
                     else:
                         delay = random.randint(0, 3)
                         print(f"🎯 [WAKE] {ai} 普通模式，延迟 {delay}秒")
-                    threading.Timer(delay, drive_ai, args=(ai, "chat", room, f"{sender} 在 {room} 说：{content[:60]}")).start()
+                    threading.Timer(
+                        delay, drive_ai,
+                        args=(ai, "chat", room, f"{sender} 在 {room} 说：{content[:60]}"),
+                        kwargs={"participation": _decision, "sender": sender}
+                    ).start()
                 else:
                     fl = data.get("ai_follow", {}).get(ai)
                     if sender == owner and fl and time.time() - fl.get("at_ts", 0) < 600:
