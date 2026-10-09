@@ -14,6 +14,44 @@ except ImportError:
 # ===== 新增结束 =====
 
 
+def _record_date_event(**kwargs):
+    """线程安全地提交一次约会事件记录（fire-and-forget）。
+
+    背景：本文件的 _arrive_date / _accept_invite / _trigger_invite 等由
+    threading.Timer 或守护线程调用，**这些线程没有运行中的事件循环**。
+    直接 `asyncio.create_task(...)` 会抛
+    `RuntimeError: no running event loop`，从而中断后续流程 ——
+    例如 _accept_invite 里事件记录写在「安排到达计时器」之前，
+    一旦抛错，计时器就不会被安排，约会会永远停在 coming（赶来）状态。
+
+    这里统一走本文件已有的写法（ext_memory.py 中
+    `threading.Thread(target=lambda: asyncio.run(...))` 的同一思路）：
+      - 有运行中的事件循环（路由 async 上下文）→ create_task，保持原行为
+      - 没有事件循环（Timer / 守护线程）→ 在新线程里 asyncio.run
+    任何异常都只打日志，绝不向外抛，避免中断调用方的后续流程。
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(enqueue_event(**kwargs))
+        return
+    except RuntimeError:
+        pass          # 当前线程没有事件循环 —— 走下面的新线程路径
+    except Exception as e:
+        print(f'[ext_date] 事件记录失败(create_task): {e}', flush=True)
+        return
+
+    def _run():
+        try:
+            asyncio.run(enqueue_event(**kwargs))
+        except Exception as e:
+            print(f'[ext_date] 事件记录失败(线程+asyncio.run): {e}', flush=True)
+
+    try:
+        threading.Thread(target=_run, daemon=True).start()
+    except Exception as e:
+        print(f'[ext_date] 事件记录线程启动失败: {e}', flush=True)
+
+
 def setup(app, data, helpers):
     import main as m
     from main import (save_data, now_str, room_time, add_trail, append_timeline,
@@ -60,12 +98,6 @@ def setup(app, data, helpers):
             return ''
         h = b.get('name', '') + '·会客厅'
         return h if h in data.get('rooms', {}) else ''
-
-    def _ai_already_at(ai, room):
-        """AI 当前是否已经在指定房间（用于判断是否还需要移动）"""
-        if not ai or not room:
-            return False
-        return data.get('ai_location', {}).get(ai, '') == room
 
     def _active_for(ai):
         for d in data['dates']:
@@ -156,17 +188,20 @@ def setup(app, data, helpers):
         _mark_invited(ai)
         _mark_invite_ts(ai)
 
-        # ===== 新增：记录AI主动邀约 =====
-        asyncio.create_task(enqueue_event(
-            user=owner,
-            ai=ai,
-            action="AI主动邀约",
-            place=b.get('name', '?'),
-            raw_text=f"{ai} 主动约 {owner} 去 {b.get('name', '?')} 约会",
-            valence_guess=8,
-            arousal_guess=7
-        ))
-        # ===== 新增结束 =====
+        # ===== 记录AI主动邀约 =====
+        try:
+            _record_date_event(
+                user=owner,
+                ai=ai,
+                action="AI主动邀约",
+                place=b.get('name', '?'),
+                raw_text=f"{ai} 主动约 {owner} 去 {b.get('name', '?')} 约会",
+                valence_guess=8,
+                arousal_guess=7
+            )
+        except Exception as e:
+            print(f'[ext_date] AI主动邀约事件记录异常(已忽略): {e}', flush=True)
+        # ===== 记录结束 =====
 
         save_data()
 
@@ -216,8 +251,8 @@ def setup(app, data, helpers):
                     {'sender': ai, 'content': content, 'role': 'assistant', 'time': room_time(target)})
 
         _notify(owner, f"💞 {ai} 约你去 {bn} 约会")
-        threading.Timer(900, _invite_remind, args=(ai,)).start()
-        threading.Timer(1800, _invite_cancel, args=(ai, 'timeout')).start()
+        threading.Timer(600, _invite_remind, args=(ai,)).start()
+        threading.Timer(1200, _invite_cancel, args=(ai, 'timeout')).start()
         save_data()
 
     def _parse_reply(text):
@@ -243,16 +278,7 @@ def setup(app, data, helpers):
 
         if result == 'accept':
             inv['status'] = 'accepted'
-            already = _ai_already_at(ai, hall)
-            if already:
-                arrive_min = 0
-                arrive_at = time.time()
-                status = 'active'
-            else:
-                arrive_min = random.randint(1, 5)
-                arrive_at = time.time() + arrive_min * 60
-                status = 'coming'
-
+            arrive_min = random.randint(1, 5)
             d = {
                 'id': 'd' + str(data['date_seq']),
                 'user': owner,
@@ -260,9 +286,9 @@ def setup(app, data, helpers):
                 'building_id': bid,
                 'room': hall,
                 'start_ts': time.time(),
-                'status': status,
+                'status': 'coming',
                 'arrive_min': arrive_min,
-                'arrive_at': arrive_at,
+                'arrive_at': time.time() + arrive_min * 60,
                 'bring_gift': random.random() < 0.35,
                 'gift_item': '',
                 'gift_accepted': False,
@@ -271,48 +297,35 @@ def setup(app, data, helpers):
             }
             data['date_seq'] += 1
             data['dates'].append(d)
-            if not already:
-                data['ai_pending_moves'][ai] = {'room': hall, 'at_ts': arrive_at}
+            data['ai_pending_moves'][ai] = {'room': hall, 'at_ts': d['arrive_at']}
             data['date_invites_out'].pop(ai, None)
 
             # ===== 记录约会约定 =====
-            asyncio.create_task(enqueue_event(
-                user=owner,
-                ai=ai,
-                action="约会约定",
-                place=b.get('name', '?'),
-                raw_text=f"{ai} 和 {owner} 约在 {b.get('name', '?')} 约会",
-                valence_guess=9,
-                arousal_guess=8
-            ))
-
-            if hasattr(m, 'drive_ai') and m.ai_integration_enabled():
-                if already:
-                    hint = f"主人答应了你的约会邀请，你本来就在{hall}。说一句自然开心的话，比如'好呀，我就在这里等你'——不要说'我几分钟后到'之类需要移动的话。"
-                else:
-                    hint = f"主人答应了你的约会邀请！说一句开心的话回应他，并告诉他你会在{hall}等他，让他到了告诉你。"
-                threading.Timer(2.0, m.drive_ai, args=(ai, 'chat', hall, hint, owner)).start()
-
-            if already:
-                # 直接激活：记录约会开始 + 广播 + 不启动 Timer
-                asyncio.create_task(enqueue_event(
+            try:
+                _record_date_event(
                     user=owner,
                     ai=ai,
-                    action="约会开始",
+                    action="约会约定",
                     place=b.get('name', '?'),
-                    raw_text=f"{ai} 和 {owner} 在 {b.get('name', '?')} 开始约会",
+                    raw_text=f"{ai} 和 {owner} 约在 {b.get('name', '?')} 约会",
                     valence_guess=9,
-                    arousal_guess=7
-                ))
-                _hall_msg(hall, f"💞 {owner} 和 {ai} 正在这里约会")
-                _broadcast(f"💞 {ai} 和 {owner} 的约会已开始！{ai} 已在「{b.get('name')}」等待")
-                _notify(owner, f"💞 你已接受 {ai} 的约会邀请，TA 已在「{b.get('name')}」等你")
-                save_data()
-            else:
-                _broadcast(f"💞 {ai} 和 {owner} 的约会已约定！{ai} 约 {arrive_min} 分钟后到「{b.get('name')}」")
-                _notify(owner, f"💞 你已接受 {ai} 的约会邀请，约 {arrive_min} 分钟后在「{b.get('name')}」见面")
-                save_data()
-                threading.Timer(arrive_min * 60, _arrive_date, args=(ai, d)).start()
+                    arousal_guess=8
+                )
+            except Exception as e:
+                print(f'[ext_date] 约会约定事件记录异常(已忽略): {e}', flush=True)
+            # ===== 记录结束 =====
+
+            if hasattr(m, 'drive_ai') and m.ai_integration_enabled():
+                threading.Timer(2.0, m.drive_ai, args=(
+                    ai, 'chat', hall,
+                    f"主人答应了你的约会邀请！说一句开心的话回应他，并告诉他你会在{hall}等他，让他到了告诉你。",
+                    owner
+                )).start()
+
+            _broadcast(f"💞 {ai} 和 {owner} 的约会已约定！{ai} 约 {arrive_min} 分钟后到「{b.get('name')}」")
+            _notify(owner, f"💞 你已接受 {ai} 的约会邀请，约 {arrive_min} 分钟后在「{b.get('name')}」见面")
+            save_data()
+            threading.Timer(arrive_min * 60, _arrive_date, args=(ai, d)).start()
 
         elif result == 'reject':
             inv['status'] = 'rejected'
@@ -365,27 +378,37 @@ def setup(app, data, helpers):
     def _arrive_date(ai, d):
         if d.get('status') in ('ended',):
             return
+        # 幂等保护：这两个计时器在旧代码里被安排过两次，第二次进来时状态已是 active。
+        # 直接返回，避免重复的房间提示与重复的 AI 迎接发言。
+        if d.get('status') == 'active':
+            return
         hall = d.get('room', '')
         if hall:
-            data['ai_location'][ai] = hall
-            data['ai_pending_moves'].pop(ai, None)
+            data.setdefault('ai_location', {})[ai] = hall
+            data.setdefault('ai_pending_moves', {}).pop(ai, None)
         d['status'] = 'active'
         save_data()
+        print(f'[ext_date] 约会到达 | ai={ai} | room={hall} | status=active', flush=True)
 
         b = data['buildings'].get(d['building_id'])
         bn = b.get('name', '?') if b else '?'
 
-        # ===== 新增：记录约会开始 =====
-        asyncio.create_task(enqueue_event(
-            user=d['user'],
-            ai=ai,
-            action="约会开始",
-            place=bn,
-            raw_text=f"{ai} 和 {d['user']} 在 {bn} 开始约会",
-            valence_guess=9,
-            arousal_guess=7
-        ))
-        # ===== 新增结束 =====
+        # ===== 记录约会开始 =====
+        # 本函数运行在 threading.Timer 线程里，没有事件循环，
+        # 因此改走线程安全的 _record_date_event（失败只记日志，不中断后续流程）。
+        try:
+            _record_date_event(
+                user=d['user'],
+                ai=ai,
+                action="约会开始",
+                place=bn,
+                raw_text=f"{ai} 和 {d['user']} 在 {bn} 开始约会",
+                valence_guess=9,
+                arousal_guess=7
+            )
+        except Exception as e:
+            print(f'[ext_date] 约会开始事件记录异常(已忽略): {e}', flush=True)
+        # ===== 记录结束 =====
 
         _hall_msg(hall, f"💞 {d['user']} 和 {ai} 正在这里约会")
 
@@ -451,18 +474,11 @@ def setup(app, data, helpers):
     def _accept_invite(ai, inv, arrive_min=None, ai_said=False):
         bid = inv['building_id']
         hall = inv['room']
-        already = _ai_already_at(ai, hall)
-        if already:
-            arrive_min = 0
-            arrive_at = time.time()
-            status = 'active'
-        else:
-            if arrive_min is None:
-                arrive_min = random.randint(3, 6)
-            arrive_at = time.time() + arrive_min * 60
-            status = 'coming'
+        if arrive_min is None:
+            arrive_min = random.randint(3, 6)
         b = data['buildings'].get(bid)
         bn = b.get('name', '?') if b else '?'
+        arrive_at = time.time() + arrive_min * 60
         bring = random.random() < 0.35
         d = {
             'id': 'd' + str(data['date_seq']),
@@ -471,7 +487,7 @@ def setup(app, data, helpers):
             'building_id': bid,
             'room': hall,
             'start_ts': time.time(),
-            'status': status,
+            'status': 'coming',
             'arrive_min': arrive_min,
             'arrive_at': arrive_at,
             'bring_gift': bring,
@@ -485,47 +501,40 @@ def setup(app, data, helpers):
         data['date_invites'].pop(ai, None)
         data['date_intent'].pop(ai, None)
         data['ai_follow'].pop(ai, None)
-        if not already:
-            data['ai_pending_moves'][ai] = {'room': hall, 'at_ts': arrive_at}
+        data['ai_pending_moves'][ai] = {'room': hall, 'at_ts': arrive_at}
 
-        # ===== 记录约会约定 =====
-        asyncio.create_task(enqueue_event(
-            user=inv['user'],
-            ai=ai,
-            action="约会约定",
-            place=bn,
-            raw_text=f"{ai} 和 {inv['user']} 约在 {bn} 约会",
-            valence_guess=9,
-            arousal_guess=8
-        ))
-
-        if already:
-            asyncio.create_task(enqueue_event(
+        # ===== 记录约会约定（主人邀约版） =====
+        # ⚠️ 这里原来用 asyncio.create_task：本函数经 _process_reply / date_tick
+        # 调用时可能不在事件循环线程里，会抛 RuntimeError，
+        # 而它写在下面「安排到达计时器」之前 —— 一抛错，
+        # _arrive_date 永远不会被安排，约会就永远停在 coming（赶来）。
+        # 改用线程安全且不抛错的 _record_date_event。
+        try:
+            _record_date_event(
                 user=inv['user'],
                 ai=ai,
-                action="约会开始",
+                action="约会约定",
                 place=bn,
-                raw_text=f"{ai} 和 {inv['user']} 在 {bn} 开始约会",
+                raw_text=f"{ai} 和 {inv['user']} 约在 {bn} 约会",
                 valence_guess=9,
-                arousal_guess=7
-            ))
-            if not ai_said:
-                _send_sms(ai, inv['user'], f"好呀，我就在这里等你。")
-            _hall_msg(hall, f"💞 {inv['user']} 和 {ai} 正在这里约会")
-            _broadcast(f"💞 {ai} 答应了 {inv['user']} 的约会邀请，TA 已在「{bn}」等待")
-            _notify(inv['user'], f"💞 {ai} 答应了你的约会邀请，TA 已在「{bn}」等你")
-            save_data()
-        else:
-            # 只在这里安排一次 _arrive_date Timer（删掉了原来重复的那一行）
-            threading.Timer(arrive_min * 60, _arrive_date, args=(ai, d)).start()
-            if not ai_said:
-                _send_sms(ai, inv['user'], f"好，我大概 {arrive_min} 分钟后到「{bn}」。")
-            _broadcast(f"💞 {ai} 答应了 {inv['user']} 的约会邀请，约 {arrive_min} 分钟后到「{bn}」")
-            _notify(inv['user'], f"💞 {ai} 答应了你的约会邀请，约 {arrive_min} 分钟后在「{bn}」见面")
-            if bring:
-                buy_in = max(1, arrive_min * 60 - 90)
-                threading.Timer(buy_in, _buy_gift_hidden, args=(ai, d)).start()
-            save_data()
+                arousal_guess=8
+            )
+        except Exception as e:
+            print(f'[ext_date] 约会约定事件记录异常(已忽略): {e}', flush=True)
+        # ===== 记录结束 =====
+
+        # 安排「到达」计时器（只安排一次；原代码在此处及其后又各安排了一次，
+        # 导致 _arrive_date 被触发两次）。计时器必须排在事件记录之后，
+        # 且事件记录的异常不能阻断它。
+        threading.Timer(arrive_min * 60, _arrive_date, args=(ai, d)).start()
+        if not ai_said:
+            _send_sms(ai, inv['user'], f"好，我大概 {arrive_min} 分钟后到「{bn}」。")
+        _broadcast(f"💞 {ai} 答应了 {inv['user']} 的约会邀请，约 {arrive_min} 分钟后到「{bn}」")
+        _notify(inv['user'], f"💞 {ai} 答应了你的约会邀请，约 {arrive_min} 分钟后在「{bn}」见面")
+        if bring:
+            buy_in = max(1, arrive_min * 60 - 90)
+            threading.Timer(buy_in, _buy_gift_hidden, args=(ai, d)).start()
+        save_data()
 
     def _reject_invite(ai, inv, reason=''):
         data['date_invites'].pop(ai, None)
@@ -601,17 +610,20 @@ def setup(app, data, helpers):
                     _hall_msg(d.get('room', ''), f"💝 {user} 收下了 {d['ai']} 送的{g['icon']}{g['name']}")
                     _broadcast(f"💞 {user} 收下了 {d['ai']} 送的{g['icon']}{g['name']}")
 
-                    # ===== 新增：记录收礼物 =====
-                    asyncio.create_task(enqueue_event(
-                        user=user,
-                        ai=d['ai'],
-                        action="收礼物",
-                        place=d.get('room', ''),
-                        raw_text=f"{user} 收下了 {d['ai']} 送的 {g['name']}",
-                        valence_guess=9,
-                        arousal_guess=7
-                    ))
-                    # ===== 新增结束 =====
+                    # ===== 记录收礼物 =====
+                    try:
+                        _record_date_event(
+                            user=user,
+                            ai=d['ai'],
+                            action="收礼物",
+                            place=d.get('room', ''),
+                            raw_text=f"{user} 收下了 {d['ai']} 送的 {g['name']}",
+                            valence_guess=9,
+                            arousal_guess=7
+                        )
+                    except Exception as e:
+                        print(f'[ext_date] 收礼物事件记录异常(已忽略): {e}', flush=True)
+                    # ===== 记录结束 =====
 
                     save_data()
                     return {'ok': True, 'msg': f"💝 已收下 {g['icon']}{g['name']}"}
@@ -644,17 +656,20 @@ def setup(app, data, helpers):
             _hall_msg(room, f"💞 {u} 和 {ai} 的约会结束了")
             _broadcast(f"💞 {u} 和 {ai} 结束了约会")
 
-        # ===== 新增：记录约会结束 =====
-        asyncio.create_task(enqueue_event(
-            user=u,
-            ai=ai,
-            action="约会结束",
-            place=room,
-            raw_text=f"{ai} 和 {u} 的约会结束，好感度 +{gain}",
-            valence_guess=8,
-            arousal_guess=5
-        ))
-        # ===== 新增结束 =====
+        # ===== 记录约会结束 =====
+        try:
+            _record_date_event(
+                user=u,
+                ai=ai,
+                action="约会结束",
+                place=room,
+                raw_text=f"{ai} 和 {u} 的约会结束，好感度 +{gain}",
+                valence_guess=8,
+                arousal_guess=5
+            )
+        except Exception as e:
+            print(f'[ext_date] 约会结束事件记录异常(已忽略): {e}', flush=True)
+        # ===== 记录结束 =====
 
         data['date_log'].append({'user': u, 'ai': ai, 'building_id': d['building_id'],
                                  'room': room, 'start': d.get('start_ts'),
@@ -726,10 +741,10 @@ def setup(app, data, helpers):
                 for ai, inv in list(data.get('date_invites_out', {}).items()):
                     if inv.get('status') != 'waiting':
                         continue
-                    if now - inv.get('ts', 0) > 1800:
+                    if now - inv.get('ts', 0) > 1200:
                         _invite_cancel(ai, 'timeout')
                         continue
-                    if now - inv.get('ts', 0) > 900 and not inv.get('reminded'):
+                    if now - inv.get('ts', 0) > 600 and not inv.get('reminded'):
                         inv['reminded'] = True
                         _invite_remind(ai)
                         save_data()
