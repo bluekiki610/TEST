@@ -11,7 +11,7 @@ from .qwen import QwenProvider
 from .zhipu import ZhipuProvider
 from .volcano import VolcanoProvider
 from .elevenlabs import ElevenLabsProvider
-from .trajectory import TrajectoryProvider
+from .siliconflow import SiliconFlowProvider
 
 # provider key -> 类。key 与 provider_manager 里的配置键一致。
 PROVIDER_CLASSES = {
@@ -21,7 +21,7 @@ PROVIDER_CLASSES = {
     "zhipu": ZhipuProvider,
     "volcano": VolcanoProvider,
     "elevenlabs": ElevenLabsProvider,
-    "trajectory": TrajectoryProvider,
+    "siliconflow": SiliconFlowProvider,
 }
 
 __all__ = [
@@ -34,5 +34,5 @@ __all__ = [
     "ZhipuProvider",
     "VolcanoProvider",
     "ElevenLabsProvider",
-    "TrajectoryProvider",
+    "SiliconFlowProvider",
 ]
