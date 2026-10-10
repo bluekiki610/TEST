@@ -260,13 +260,38 @@ class AIService:
             require_configured=require_configured,
         )
 
-    def tts(self, text="", provider="", model="", user=None, require_configured=False, **kwargs):
-        """语音合成：文本 → 音频。"""
+    def tts(self, text="", provider="", model="", user=None, require_configured=False,
+            ai_name="", voice_id="", **kwargs):
+        """语音合成：文本 → 音频。
+
+        Step 6A 新增两个可选参数，用于「每个 AI 有自己的声音人格」：
+            ai_name  —— 传了就按 voice_manager 里该 AI 登记的音色来（供应商/音色/模型）
+            voice_id —— 直接指定音色，优先级高于 ai_name
+        两者都不传时，行为与之前完全一致（走用户默认模型 + provider 默认音色）。
+        返回统一结构，音频在 audio_base64 里（见 base.ok_audio_result）。
+        """
+        # 1) 音色解析：voice_id 显式指定 > 该 AI 登记的 profile > 不指定（用默认）
+        eff_provider = provider
+        eff_model = model
+        eff_voice = voice_id or ""
+        if not eff_voice and ai_name:
+            try:
+                from .voice_manager import get_voice_manager
+                args = get_voice_manager().resolve_tts_args(ai_name, fallback_provider=provider)
+                if args:
+                    eff_provider = provider or args.get("provider", "")
+                    eff_model = model or args.get("model", "")
+                    eff_voice = args.get("voice_id", "") or ""
+            except Exception as e:
+                print(f"[ai_service] 读取音色配置失败（改用默认音色）: {e}", flush=True)
+
         return self._dispatch(
             CAPABILITY_TTS,
-            prefer_provider=provider,
-            model=model,
-            kwargs={"text": text, **kwargs},
+            prefer_provider=eff_provider,
+            model=eff_model,
+            kwargs={"text": text, "voice_id": eff_voice, **kwargs},
+            user=user,
+            require_configured=require_configured,
         )
 
     # ---------- 只读查询（供 UI / 调试） ----------
@@ -290,15 +315,32 @@ class AIService:
 
         out = {}
         for cap in (CAPABILITY_CHAT, CAPABILITY_VISION, CAPABILITY_IMAGE, CAPABILITY_ASR, CAPABILITY_TTS):
-            cap_prefer = prefs.get(cap) or None
-            selected, _model = self._manager.resolve(cap, prefer=cap_prefer, extra_config=extra_cfg)
             available = []
             for k in self._manager.list_providers():
                 p = self._manager.get_provider(k)
                 if p is not None and p.supports(cap):
                     available.append(k)
+
+            # 偏好顺序：用户已配置的供应商 → 该能力位的收藏顺序 → 其余可用供应商。
+            # 这样 capabilities() 报出的 selected 与真正调用时会选到的一致，
+            # 而不是"用户没设默认就显示空"。
+            pref = []
+            for k in sorted((extra_cfg or {}).keys()):
+                if k not in pref:
+                    pref.append(k)
+            for k in (prefs.get(cap) or []):
+                if k not in pref:
+                    pref.append(k)
+            for k in available:
+                if k not in pref:
+                    pref.append(k)
+
+            selected, selected_model = self._manager.resolve(
+                cap, prefer=(pref or None), extra_config=extra_cfg
+            )
             out[cap] = {
                 "selected": selected,
+                "selected_model": selected_model,
                 "available": available,
                 "user": eff_user or "",
                 "configured_for_user": sorted((extra_cfg or {}).keys()),
