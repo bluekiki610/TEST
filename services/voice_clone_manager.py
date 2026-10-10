@@ -8,7 +8,7 @@
 #              → clone_into_library() → voice_library.json（voice_asset_id）
 #
 # 它**不再负责绑定角色** —— 绑定是 character_manager 的事：
-#     CharacterManager.bind_voice_asset(character_id, voice_asset_id)
+#     CharacterManager.bind_default_voice(character_id, voice_asset_id)
 #
 # 因为声音是「可复用资产」而非「角色私有属性」：同一份声音可以分配给
 # 一个或多个角色，换供应商时也只改声音库一处。
@@ -91,7 +91,7 @@ class VoiceCloneManager:
 
         # 再把它绑给角色（在 character_manager 里，不在本模块）
         from services.character_manager import get_character_manager
-        get_character_manager().bind_voice_asset("nightchen", r["voice_asset_id"])
+        get_character_manager().bind_default_voice("nightchen", r["voice_asset_id"])
 
         或者直接用管理员服务一把梭：
         from services.voice_admin import get_voice_admin_service
@@ -199,7 +199,7 @@ class VoiceCloneManager:
         """上传音频 → 供应商 → 返回标准 voice_object（**不落库**）。
 
         Step 6C 修正版：拿到 voice_id 后请用 clone_into_library() 存成声音资产，
-        再由 CharacterManager.bind_voice_asset(character_id, voice_asset_id) 绑给角色。
+        再由 CharacterManager.bind_default_voice(character_id, voice_asset_id) 设为角色默认声音。
 
         参数：
             user / ai_name —— user 用于取该用户的 api_key（谁付费）；

@@ -21,6 +21,24 @@ from .providers.base import (
 )
 
 
+def _asset_to_voice(asset, source):
+    """把声音资产记录转成调用 provider 需要的参数。
+
+    source 标记这一跳来自哪一层（user_override / character_default / world_default），
+    便于排查"这句为什么是这个声音"。
+    """
+    asset = asset or {}
+    return {
+        "provider": (asset.get("provider") or "").strip(),
+        "voice_id": (asset.get("voice_id") or "").strip(),
+        "model": (asset.get("model") or "").strip(),
+        "voice_type": asset.get("type", ""),
+        "voice_asset_id": asset.get("id", ""),
+        "voice_name": asset.get("name", ""),
+        "source": source,
+    }
+
+
 class AIService:
     """多供应商 / 多模型 / 多能力的统一服务入口。
 
@@ -260,81 +278,133 @@ class AIService:
             require_configured=require_configured,
         )
 
-    def resolve_voice_for_character(self, character_id_or_name):
-        """解析「角色 → 声音资产 → provider/voice_id」这一跳。
+    def resolve_voice(self, character_id_or_name, user=""):
+        """解析「角色 + 用户 → 最终声音资产 → provider/voice_id」。
 
-        这是 Step 6C 修正版的核心链路：
-            character_id → character.voice_asset_id → voice_library → provider 参数
+        ==================== 双层绑定优先级（Step 6C 修正版） ====================
+            1. 用户自定义覆盖（user_character_preferences）—— 有就用它
+            2. 角色默认声音（character.default_voice_id）—— 所有用户共享
+            3. 世界默认声音（world.default_voice_id）    —— 兜底
+            4. 都没有 → 回退 provider 默认音色
 
-        返回 (voice_info, character)：
-            voice_info = {"provider","voice_id","model","voice_asset_id","voice_type"}
-            任一环节缺失则 voice_info 为 None（调用方回退到默认音色）
+        覆盖失效（指向的资产已被删除）时**自动回退**到角色默认，不让 TTS 直接失败。
+
+        返回 dict：
+            {"provider","voice_id","model","voice_type","voice_asset_id",
+             "voice_name","source"}    // source: user_override | character_default
+                                        //         | world_default | none
+            以及 character / world（可能为 None）
         """
+        out = {"provider": "", "voice_id": "", "model": "", "voice_type": "",
+               "voice_asset_id": "", "voice_name": "", "source": "none"}
+        character = None
+        world = None
         if not character_id_or_name:
-            return None, None
+            return out, character, world
+
         try:
             from .character_manager import get_character_manager
             cm = get_character_manager()
             character = cm.resolve(character_id_or_name)
             if not character:
                 print(f"[ai_service] 未找到角色模板: {character_id_or_name}", flush=True)
-                return None, None
-            asset_id = (character.get("voice_asset_id") or "").strip()
-            if not asset_id:
-                print(f"[ai_service] 角色 {character.get('name') or character_id_or_name} 未绑定声音资产",
-                      flush=True)
-                return None, character
+                return out, None, None
+            cid = (character.get("character_id") or "").strip()
+
             from .voice_library_manager import get_voice_library_manager
-            asset = get_voice_library_manager().get_voice(asset_id)
-            if not asset:
-                print(f"[ai_service] 声音资产不存在: {asset_id}", flush=True)
-                return None, character
-            info = {
-                "provider": (asset.get("provider") or "").strip(),
-                "voice_id": (asset.get("voice_id") or "").strip(),
-                "model": (asset.get("model") or "").strip(),
-                "voice_type": asset.get("type", ""),
-                "voice_asset_id": asset_id,
-                "voice_name": asset.get("name", ""),
-            }
-            return (info if info["provider"] else None), character
+            vl = get_voice_library_manager()
+
+            # ---------- 1. 用户覆盖 ----------
+            if user and cid:
+                try:
+                    from .user_character_prefs_manager import get_user_character_prefs_manager
+                    override_id = get_user_character_prefs_manager().get_override(user, cid)
+                except Exception as e:
+                    print(f"[ai_service] 读取用户声音覆盖失败: {e}", flush=True)
+                    override_id = None
+                if override_id:
+                    asset = vl.get_voice(override_id)
+                    if asset and (asset.get("provider") or "").strip():
+                        out.update(_asset_to_voice(asset, "user_override"))
+                        return out, character, world
+                    # 覆盖失效 → 回退，并留下可排查的日志
+                    print(f"[ai_service] 用户覆盖声音 {override_id} 不可用，回退角色默认", flush=True)
+
+            # ---------- 2. 角色默认声音 ----------
+            default_id = (character.get("default_voice_id")
+                          or character.get("voice_asset_id") or "").strip()
+            if default_id:
+                asset = vl.get_voice(default_id)
+                if asset and (asset.get("provider") or "").strip():
+                    out.update(_asset_to_voice(asset, "character_default"))
+                    return out, character, world
+                print(f"[ai_service] 角色默认声音 {default_id} 不可用", flush=True)
+
+            # ---------- 3. 世界默认声音 ----------
+            wid = (character.get("world_id") or "").strip()
+            if wid:
+                try:
+                    from .world_manager import get_world_manager
+                    wm = get_world_manager()
+                    world = wm.get_world(wid)
+                except Exception as e:
+                    print(f"[ai_service] 读取世界配置失败: {e}", flush=True)
+                world_default = ((world or {}).get("default_voice_id") or "").strip()
+                if world_default:
+                    asset = vl.get_voice(world_default)
+                    if asset and (asset.get("provider") or "").strip():
+                        out.update(_asset_to_voice(asset, "world_default"))
+                        return out, character, world
+
+            print(f"[ai_service] 角色 {character.get('name') or cid} 未配置任何可用声音", flush=True)
+            return out, character, world
         except Exception as e:
             print(f"[ai_service] 解析角色声音失败（回退默认音色）: {e}", flush=True)
-            return None, None
+            return out, character, world
+
+    def resolve_voice_for_character(self, character_id_or_name, user=""):
+        """兼容旧名：等价于 resolve_voice()。返回 (voice_info|None, character)。"""
+        info, character, _world = self.resolve_voice(character_id_or_name, user=user)
+        return (info if info.get("provider") else None), character
 
     def tts(self, text="", provider="", model="", user=None, require_configured=False,
             character_id="", ai_name="", voice_id="", **kwargs):
         """语音合成：文本 → 音频。
 
-        ==================== Step 6C 修正版：声音来自角色模板 ====================
-        AIService().tts(text="你好", character_id="nightchen")
-            character_id → character.voice_asset_id
-                         → voice_library（声音资产库）
-                         → provider + voice_id
-                         → provider.tts() → 音频
+        ==================== Step 6C 修正版：双层声音绑定 ====================
+        AIService(user="user123").tts(text="你好", character_id="nightchen")
+            character_id + user
+                → 1. 用户覆盖？      （user_character_preferences）
+                → 2. 角色默认声音？  （character.default_voice_id）
+                → 3. 世界默认声音？  （world.default_voice_id）
+                → voice_library → provider + voice_id → provider.tts() → 音频
 
         规则：
           · character_id 是首选入参（稳定英文 id）；ai_name 作为兼容别名，
             既接受角色 id 也接受显示名（如「夜辰」）
-          · 用户**不可**决定角色声音：没有"用我的声音"这类入口
-          · 世界还没给该角色配声音时，回退用户默认 TTS 模型（不让调用直接失败）
+          · 传了 user 才会考虑该用户的声音覆盖；不传则用角色默认（所有用户共享）
+          · 用户覆盖**不改角色模板** —— 其他用户听到的仍然是官方声音
+          · 覆盖失效（资产被删）会自动回退到角色默认，不让 TTS 直接失败
+          · 都没有声音时回退 provider 默认音色（不让调用直接失败）
           · 显式传 voice_id 仅供管理员试听/调试，不作为常规用法
-          · 用户仍然提供自己的 API Key（谁调用谁付费），但改不了声音本身
         """
         eff_provider = provider
         eff_model = model
         eff_voice = voice_id or ""
         voice_info = None
         character = None
+        eff_user = (user or self._user or "").strip()
 
-        # 1) 角色 → 声音资产（唯一的声音真相来源）
+        # 1) 角色 + 用户 → 最终声音资产（双层绑定的唯一真相来源）
         target = character_id or ai_name
         if target and not eff_voice:
-            voice_info, character = self.resolve_voice_for_character(target)
-            if voice_info:
+            voice_info, character, _world = self.resolve_voice(target, user=eff_user)
+            if voice_info.get("provider"):
                 eff_provider = provider or voice_info.get("provider", "")
                 eff_model = model or voice_info.get("model", "")
                 eff_voice = voice_info.get("voice_id", "") or ""
+            else:
+                voice_info = None    # 没解析出可用声音 → 标记为回退
 
         result = self._dispatch(
             CAPABILITY_TTS,
@@ -349,7 +419,9 @@ class AIService:
             result.setdefault("character_id", (character or {}).get("character_id", character_id or ""))
             result.setdefault("character_name", (character or {}).get("name", ai_name or ""))
             result.setdefault("ai_name", ai_name or (character or {}).get("name", ""))
-            result.setdefault("voice_source", "character_template" if voice_info else "provider_default")
+            # voice_source 直接反映双层绑定的哪一层生效，便于排查
+            result.setdefault("voice_source",
+                              (voice_info or {}).get("source", "provider_default"))
             if voice_info:
                 result.setdefault("voice_asset_id", voice_info.get("voice_asset_id", ""))
                 result.setdefault("voice_name", voice_info.get("voice_name", ""))

@@ -4,22 +4,27 @@
 # 这一层是给未来后台「AI Studio」用的**业务接口**，不注册任何 HTTP 路由
 # （保持旁路，不碰 main.py / ext_*）。
 #
-# ==================== 它管理的是三层资产 ====================
+# ==================== 它管理的是三层资产 + 一层用户覆盖 ====================
 #     World Template           world_manager
 #          ↓
-#     Character Template       character_manager  ──voice_asset_id──┐
-#          ↓                                                        │
-#     Voice Library            voice_library_manager  ←────────────┘
+#     Character Template       character_manager  ──default_voice_id──┐
+#          ↓                                                          │
+#     Voice Library            voice_library_manager  ←───────────────┘
+#       ├── system 声音（管理员）
+#       └── user 自定义声音（用户覆盖用）
+#          ↑
+#     User Override            user_character_prefs_manager
 #
 # 管理员典型流程（对应你最终目标）：
-#     1. 建世界            set_world("otome_a", ...)
+#     1. 建世界            create_world("otome_a", ...)
 #     2. 做声音资产        create_voice_asset(...)  或  clone_voice_asset(...)
-#     3. 建角色并绑声音    set_character(...) → bind_voice_asset(...)
+#     3. 建角色并绑声音    create_character(...) → bind_character_voice(...)
 #     4. 把角色登记进世界  add_character_to_world(...)
 #     5. 试听             preview(...)
 #
 # 之后任何用户：
-#     AIService().tts(text="晚上好", character_id="nightchen")   ← 无需 voice_id / 无需克隆
+#     AIService(user=...).tts(text="晚上好", character_id="nightchen")
+#         ← 无需 voice_id / 无需克隆；有覆盖用覆盖，没有就用角色默认声音
 
 from .character_manager import get_character_manager, TYPE_TEMPLATE, TYPE_CUSTOM
 from .voice_library_manager import get_voice_library_manager
@@ -82,19 +87,53 @@ class VoiceAdminService:
         ok = self.worlds.add_character_to_world(world_id, character_id)
         return {"status": "ok" if ok else "error", "error": "" if ok else "世界不存在或写入失败"}
 
-    # ==================== 声音资产库 ====================
+    # ==================== 声音资产库（系统层 / 用户层） ====================
     def list_voice_assets(self):
         return {"status": "ok", "library": self.library.describe()}
 
+    def list_system_voices(self):
+        """系统声音（管理员资产，所有用户默认可选）。"""
+        return {"status": "ok", "voices": self.library.list_system_voices()}
+
+    def list_user_voices(self, owner_user=""):
+        """用户自定义声音（用于覆盖）。"""
+        return {"status": "ok", "voices": self.library.list_user_voices(owner_user)}
+
     def create_voice_asset(self, name="", provider="", voice_id="",
-                           voice_type="cloned", model="", locked=True):
-        """手动登记一个已有 voice_id 的声音资产（例如在 ElevenLabs 网站上克隆好的）。"""
+                           voice_type="cloned", model="", locked=True, owner="system"):
+        """登记一个声音资产。
+
+        owner="system"（默认）→ 管理员系统声音
+        owner="user"          → 用户自定义声音（**只用于该用户自己覆盖听感**，
+                                不会成为任何角色的官方声音）
+        """
         if not provider:
             return {"status": "error", "error": "provider 不能为空"}
         try:
             ok, asset = self.library.add_voice(
                 name=name, provider=provider, voice_id=voice_id,
-                voice_type=voice_type, model=model, locked=locked,
+                voice_type=voice_type, model=model, locked=locked, owner=owner,
+            )
+        except ValueError as e:
+            return {"status": "error", "error": str(e)}
+        if not ok:
+            return {"status": "error", "error": "写入失败（权限、磁盘或 id 冲突）"}
+        return {"status": "ok", "voice_asset": asset}
+
+    def create_user_voice_asset(self, user, name="", provider="", voice_id="",
+                                voice_type="cloned", model=""):
+        """用户创建自己的声音资产（用于覆盖听感）。
+
+        ⚠️ 边界：这**不会**改变任何角色的官方默认声音，
+        只影响该用户自己听到什么。
+        """
+        if not user:
+            return {"status": "error", "error": "缺少 user"}
+        try:
+            ok, asset = self.library.add_voice(
+                name=name or f"{user} 的自定义声音", provider=provider,
+                voice_id=voice_id, voice_type=voice_type, model=model,
+                locked=False, owner="user", owner_user=user, created_by=user,
             )
         except ValueError as e:
             return {"status": "error", "error": str(e)}
@@ -131,14 +170,36 @@ class VoiceAdminService:
         return {"status": "ok", "voice_asset": asset, "clone": result}
 
     def delete_voice_asset(self, voice_asset_id, force=False):
-        """删除声音资产。默认会先检查是否有角色在引用。"""
-        users = self.characters.characters_using_voice(voice_asset_id)
-        if users and not force:
+        """删除声音资产。
+
+        会检查两类引用，避免删掉之后角色变哑或用户覆盖悬空：
+          · 角色默认声音（character.default_voice_id）
+          · 用户覆盖（user_character_preferences）
+        """
+        used_by_characters = self.characters.characters_using_voice(voice_asset_id)
+        used_by_users = []
+        try:
+            from .user_character_prefs_manager import get_user_character_prefs_manager
+            used_by_users = get_user_character_prefs_manager().users_using_voice(voice_asset_id)
+        except Exception as e:
+            print(f"[voice_admin] 检查用户覆盖引用失败: {e}", flush=True)
+
+        if (used_by_characters or used_by_users) and not force:
+            parts = []
+            if used_by_characters:
+                parts.append(f"角色默认声音：{', '.join(used_by_characters)}")
+            if used_by_users:
+                who = ", ".join(f"{x['user']}/{x['character_id']}" for x in used_by_users[:10])
+                parts.append(f"用户覆盖：{who}")
             return {"status": "error",
-                    "error": f"仍有角色引用该声音资产，无法删除：{', '.join(users)}",
-                    "used_by": users}
+                    "error": "仍有引用，无法删除 —— " + "；".join(parts),
+                    "used_by_characters": used_by_characters,
+                    "used_by_users": used_by_users}
+
         ok = self.library.remove_voice(voice_asset_id)
-        return {"status": "ok" if ok else "error", "used_by": users,
+        return {"status": "ok" if ok else "error",
+                "used_by_characters": used_by_characters,
+                "used_by_users": used_by_users,
                 "error": "" if ok else "资产不存在或写入失败"}
 
     # ==================== 角色 + 绑定 ====================
@@ -148,13 +209,13 @@ class VoiceAdminService:
                                                               character_type=character_type)}
 
     def create_character(self, character_id, name="", character_type=TYPE_TEMPLATE,
-                         voice_asset_id="", world_id="", personality="",
+                         default_voice_id="", world_id="", personality="",
                          appearance="", system_prompt="", owner="", **kwargs):
-        """创建角色模板。可选直接指定 voice_asset_id（只存引用）。"""
+        """创建角色模板。可选直接指定 default_voice_id（只存引用，不复制 voice_id）。"""
         try:
             ok, c = self.characters.set_character(
                 character_id, name=name, character_type=character_type,
-                voice_asset_id=voice_asset_id, world_id=world_id,
+                default_voice_id=default_voice_id, world_id=world_id,
                 personality=personality, appearance=appearance,
                 system_prompt=system_prompt, owner=owner, **kwargs
             )
@@ -165,22 +226,68 @@ class VoiceAdminService:
         return {"status": "ok", "character": c}
 
     def bind_character_voice(self, character_id, voice_asset_id):
-        """把声音资产绑定到角色（角色只存 voice_asset_id，不复制 voice_id）。"""
-        ok, res = self.characters.bind_voice_asset(character_id, voice_asset_id)
+        """设置角色的**默认声音**（管理员操作，所有用户共享）。"""
+        ok, res = self.characters.bind_default_voice(character_id, voice_asset_id)
         if not ok:
             return {"status": "error", "error": res if isinstance(res, str) else "绑定失败"}
         return {"status": "ok", "character": res}
 
     def unbind_character_voice(self, character_id):
-        ok, c = self.characters.clear_voice_asset(character_id)
+        ok, c = self.characters.clear_default_voice(character_id)
         return {"status": "ok" if ok else "error", "character": c}
 
+    # ==================== 用户声音覆盖（用户层） ====================
+    def set_user_voice_override(self, user, character_id, voice_override_id):
+        """用户给自己换某角色的声音（只影响该用户）。
+
+        voice_override_id 传空字符串 = 清除覆盖，回退角色默认声音。
+        ⚠️ 这**不会**改动角色模板，其他用户听到的仍是官方默认声音。
+        """
+        if not user:
+            return {"status": "error", "error": "缺少 user"}
+        if voice_override_id:
+            asset = self.library.get_voice(voice_override_id)
+            if not asset or not (asset.get("provider") or "").strip():
+                return {"status": "error", "error": f"声音资产不可用: {voice_override_id}"}
+        try:
+            from .user_character_prefs_manager import get_user_character_prefs_manager
+            mgr = get_user_character_prefs_manager()
+            ok, entry = mgr.set_override(user, character_id, voice_override_id)
+        except Exception as e:
+            return {"status": "error", "error": f"写入用户偏好失败: {e}"}
+        if not ok:
+            return {"status": "error", "error": "写入失败（磁盘问题）"}
+        return {"status": "ok", "user": user, "character_id": character_id,
+                "voice_override_id": (entry or {}).get("voice_override_id", ""),
+                "cleared": not bool(voice_override_id)}
+
+    def clear_user_voice_override(self, user, character_id):
+        return self.set_user_voice_override(user, character_id, "")
+
+    def get_user_voice_override(self, user, character_id):
+        try:
+            from .user_character_prefs_manager import get_user_character_prefs_manager
+            vid = get_user_character_prefs_manager().get_override(user, character_id)
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+        return {"status": "ok", "user": user, "character_id": character_id,
+                "voice_override_id": vid or "", "has_override": bool(vid)}
+
+    def get_effective_voice(self, user, character_id):
+        """解析该用户最终会听到的声音（完整走一遍三层优先级）。"""
+        from .ai_service import AIService
+        svc = AIService()
+        info, character, world = svc.resolve_voice(character_id, user=user)
+        return {"status": "ok", "user": user, "character_id": character_id,
+                "effective": info, "character": character, "world": world,
+                "configured": bool(info.get("provider"))}
+
     def get_character_voice(self, character_id):
-        """查看某个角色最终会用什么声音（完整解析一遍链路）。"""
+        """查看某个角色的**默认**声音（不含用户覆盖）。"""
         c = self.characters.resolve(character_id)
         if not c:
             return {"status": "error", "error": f"角色不存在: {character_id}"}
-        asset_id = (c.get("voice_asset_id") or "").strip()
+        asset_id = (c.get("default_voice_id") or c.get("voice_asset_id") or "").strip()
         asset = self.library.get_voice(asset_id) if asset_id else None
         return {
             "status": "ok",
@@ -217,10 +324,12 @@ class VoiceAdminService:
         return {"status": "ok" if ok else "error"}
 
     def describe(self):
+        from .user_character_prefs_manager import get_user_character_prefs_manager
         return {
             "worlds": self.worlds.describe(),
             "characters": self.characters.describe(),
             "voice_library": self.library.describe(),
+            "user_overrides": get_user_character_prefs_manager().describe(),
             "clone": self.cloner.describe(),
         }
 

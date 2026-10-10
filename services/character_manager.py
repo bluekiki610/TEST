@@ -11,8 +11,13 @@
 #           ↓
 #     Character Runtime         ← 未来：relationship / memory / conversation
 #
-# 声音**只引用 voice_asset_id**，不复制 voice_id：
+# 声音**只引用资产 id（default_voice_id）**，不复制 voice_id：
 #   这样换供应商或换音色时只改声音库一处，所有世界/角色自动跟随。
+#
+# 双层绑定（Step 6C 修正版）：
+#   角色模板存 **默认声音**（default_voice_id，管理员设定，所有用户共享）
+#   用户可在 user_character_preferences.json 里存**覆盖**（只影响自己）
+#   解析优先级见 ai_service.resolve_voice()
 #
 # 存储：data/character_templates.json
 #
@@ -25,7 +30,7 @@
 #         "name": "夜辰",
 #         "character_type": "template",      // template（官方）| custom（用户创建）
 #         "world_id": "otome_a",              // 属于哪个世界模板（空=全局可用）
-#         "voice_asset_id": "voice_001",      // ← 只存引用，不存 voice_id
+#         "default_voice_id": "voice_001",    // ← 只存引用，不存 voice_id
 #         "personality": "",
 #         "appearance": "",
 #         "system_prompt": "",
@@ -254,21 +259,31 @@ class CharacterManager:
         return self.find_by_name(character_id_or_name)
 
     def get_voice_asset_id(self, character_id_or_name):
-        """取该角色引用的声音资产 id（TTS 链路的第二跳）。"""
+        """取该角色的**默认声音**资产 id（TTS 链路的第二跳）。
+
+        Step 6C 修正版字段名为 default_voice_id；为兼容 6C 第一版
+        写入的 voice_asset_id，读取时两者都认（新字段优先）。
+        """
         c = self.resolve(character_id_or_name)
         if not c:
             return ""
-        return (c.get("voice_asset_id") or "").strip()
+        return (c.get("default_voice_id") or c.get("voice_asset_id") or "").strip()
 
-    # ==================== 写入（管理员 / 用户） ====================
+    # 旧名别名（6C 第一版 API，保留以免旧调用报错）
+    def get_default_voice_id(self, character_id_or_name):
+        return self.get_voice_asset_id(character_id_or_name)
+
     def set_character(self, character_id, name="", character_type=TYPE_TEMPLATE,
                       voice_asset_id=None, world_id="", personality="",
                       appearance="", system_prompt="", behavior=None,
-                      owner="", locked=None, extra=None):
+                      owner="", locked=None, default_voice_id=None, extra=None):
         """新增或更新角色模板。
 
-        voice_asset_id —— 传 None 表示"保持原值不动"；传 "" 表示"清空声音引用"。
-        locked         —— 不传则按类型默认：template=True，custom=False。
+        default_voice_id —— 角色**默认声音**资产 id。
+            传 None 表示"保持原值不动"；传 "" 表示"清空声音引用"。
+        voice_asset_id    —— 6C 第一版的旧参数名，仍然接受（会写入 default_voice_id），
+                             仅为兼容旧调用，新代码请用 default_voice_id。
+        locked            —— 不传则按类型默认：template=True，custom=False。
         """
         cid = (character_id or "").strip()
         if not cid:
@@ -279,6 +294,9 @@ class CharacterManager:
         if ctype not in CHARACTER_TYPES:
             raise ValueError(f"character_type 必须是 {CHARACTER_TYPES} 之一")
 
+        # 新旧参数统一：显式传的 default_voice_id 优先，其次旧的 voice_asset_id
+        incoming = default_voice_id if default_voice_id is not None else voice_asset_id
+
         with self._lock:
             self._reload_if_changed()
             chars = self._data.setdefault("characters", {})
@@ -287,14 +305,14 @@ class CharacterManager:
             if locked is None:
                 locked = old.get("locked", ctype == TYPE_TEMPLATE)
 
+            old_voice = (old.get("default_voice_id") or old.get("voice_asset_id") or "")
             item = {
                 "character_id": cid,
                 "name": (name or old.get("name") or cid).strip(),
                 "character_type": ctype,
                 "world_id": (world_id or old.get("world_id") or "").strip(),
                 # ← 只存引用，绝不在角色里复制 voice_id
-                "voice_asset_id": (old.get("voice_asset_id") or "") if voice_asset_id is None
-                                  else (voice_asset_id or "").strip(),
+                "default_voice_id": old_voice if incoming is None else (incoming or "").strip(),
                 "personality": personality if personality else old.get("personality", ""),
                 "appearance": appearance if appearance else old.get("appearance", ""),
                 "system_prompt": system_prompt if system_prompt else old.get("system_prompt", ""),
@@ -304,6 +322,7 @@ class CharacterManager:
                 "created_at": old.get("created_at") or _now(),
                 "updated_at": _now(),
             }
+            item.pop("voice_asset_id", None)   # 迁移后不再保留旧字段
             if isinstance(extra, dict):
                 for k, v in extra.items():
                     if k not in ("character_id", "created_at"):
@@ -313,10 +332,14 @@ class CharacterManager:
             return ok, (json.loads(json.dumps(item, ensure_ascii=False)) if ok else None)
 
     def bind_voice_asset(self, character_id, voice_asset_id):
-        """把某个声音资产绑定到角色（只改引用）。
+        """把某个声音资产绑定为角色的**默认声音**（只改引用）。
 
         会校验该声音资产是否存在，避免角色指向一个不存在的 id。
         """
+        return self.bind_default_voice(character_id, voice_asset_id)
+
+    def bind_default_voice(self, character_id, voice_asset_id):
+        """设置角色默认声音（Step 6C 修正版正式名）。"""
         vid = (voice_asset_id or "").strip()
         if vid:
             try:
@@ -325,11 +348,14 @@ class CharacterManager:
                     return False, f"声音资产不存在: {vid}"
             except Exception as e:
                 print(f"[characters] 校验声音资产失败（继续绑定）: {e}", flush=True)
-        ok, item = self.set_character(character_id, voice_asset_id=vid)
+        ok, item = self.set_character(character_id, default_voice_id=vid)
         return ok, item
 
     def clear_voice_asset(self, character_id):
-        return self.set_character(character_id, voice_asset_id="")
+        return self.set_character(character_id, default_voice_id="")
+
+    def clear_default_voice(self, character_id):
+        return self.set_character(character_id, default_voice_id="")
 
     def remove_character(self, character_id):
         with self._lock:
@@ -341,7 +367,7 @@ class CharacterManager:
             return False
 
     def characters_using_voice(self, voice_asset_id):
-        """反查哪些角色在用这个声音资产（删除资产前必须先查这个）。"""
+        """反查哪些角色把这个资产当**默认声音**（删除资产前必须先查这个）。"""
         vid = (voice_asset_id or "").strip()
         if not vid:
             return []
@@ -349,7 +375,10 @@ class CharacterManager:
             self._reload_if_changed()
             out = []
             for cid, c in (self._data.get("characters", {}) or {}).items():
-                if isinstance(c, dict) and (c.get("voice_asset_id") or "").strip() == vid:
+                if not isinstance(c, dict):
+                    continue
+                used = (c.get("default_voice_id") or c.get("voice_asset_id") or "").strip()
+                if used == vid:
                     out.append(cid)
             return sorted(out)
 

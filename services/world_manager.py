@@ -229,7 +229,13 @@ class WorldManager:
     # ==================== 写入（管理员） ====================
     def set_world(self, world_id, name="", description="",
                   allow_custom_characters=True, character_ids=None,
-                  voice_library="default", locked=True, extra=None):
+                  voice_library="default", locked=True, default_voice_id=None,
+                  extra=None):
+        """创建/更新世界模板。
+
+        default_voice_id —— 世界级**兜底**声音（角色自己没配默认声音时用它）。
+                            传 None 表示"保持原值不动"。
+        """
         wid = (world_id or "").strip()
         if not wid:
             raise ValueError("world_id 不能为空")
@@ -251,6 +257,10 @@ class WorldManager:
                 "character_ids": list(character_ids) if isinstance(character_ids, list)
                                  else list(old.get("character_ids") or []),
                 "voice_library": (voice_library or old.get("voice_library") or "default"),
+                # 世界级兜底声音（优先级最低的一层）
+                "default_voice_id": (old.get("default_voice_id") or "")
+                                    if default_voice_id is None
+                                    else (default_voice_id or "").strip(),
                 "locked": bool(locked),
                 "created_at": old.get("created_at") or _now(),
                 "updated_at": _now(),

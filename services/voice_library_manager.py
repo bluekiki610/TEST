@@ -53,8 +53,25 @@ ENV_DATA_DIR = "DATA_DIR"
 VOICE_TYPE_PRESET = "preset"
 VOICE_TYPE_CLONED = "cloned"
 
-# 声音资产 id 的格式：voice_001 / voice_kiki_01
+# 声音资产 id 的格式：voice_001 / voice_custom_88
 _ID_RE = re.compile(r"^[A-Za-z0-9_\-]{2,64}$")
+
+# ==================== 声音归属（双层模型） ====================
+#   system —— 管理员创建的系统声音（官方男主、NPC 等）
+#   user   —— 用户创建的自定义声音（只用于"覆盖给自己听"）
+# 两层都放在同一个库里，用 owner 区分：
+#
+#       Voice Asset
+#            |
+#      +-----+-----+
+#      |           |
+#   System      User Custom
+#    Voice       Override
+#
+# 这样"所有用户默认共享系统声音"，而个别用户可以挑自己的。
+OWNER_SYSTEM = "system"
+OWNER_USER = "user"
+OWNERS = (OWNER_SYSTEM, OWNER_USER)
 
 
 def _now():
@@ -189,10 +206,26 @@ class VoiceLibraryManager:
             return self._write()
 
     # ==================== 查询（用户侧只读） ====================
-    def list_voices(self):
+    def list_voices(self, owner=None):
+        """列出声音资产。owner 传 "system"/"user" 可过滤；不传则全部。"""
         with self._lock:
             self._reload_if_changed()
-            return json.loads(json.dumps(self._data.get("voices", []) or [], ensure_ascii=False))
+            voices = self._data.get("voices", []) or []
+            if owner:
+                voices = [v for v in voices
+                          if isinstance(v, dict) and (v.get("owner") or OWNER_SYSTEM) == owner]
+            return json.loads(json.dumps(voices, ensure_ascii=False))
+
+    def list_system_voices(self):
+        """系统声音（管理员资产）—— 用户可从中挑选覆盖。"""
+        return self.list_voices(owner=OWNER_SYSTEM)
+
+    def list_user_voices(self, owner_user=""):
+        """用户自定义声音。传 owner_user 则只看该用户的。"""
+        out = self.list_voices(owner=OWNER_USER)
+        if owner_user:
+            out = [v for v in out if (v.get("owner_user") or "") == owner_user]
+        return out
 
     def get_voice(self, voice_asset_id):
         """按声音资产 id 取资产。这是 TTS 链路的关键一跳。"""
@@ -226,17 +259,26 @@ class VoiceLibraryManager:
     # ==================== 写入（管理员） ====================
     def add_voice(self, voice_asset_id="", name="", provider="", voice_id="",
                   voice_type=VOICE_TYPE_CLONED, model="", created_by="admin",
-                  locked=True, extra=None):
+                  locked=True, owner=OWNER_SYSTEM, owner_user="", extra=None):
         """新增一个声音资产。id 不传则自动生成。
+
+        owner      —— "system"（管理员，默认）或 "user"（用户自定义覆盖用）
+        owner_user —— owner="user" 时记录归属用户
+        locked     —— True 表示普通用户不可修改该资产（系统声音默认锁定）
 
         返回 (ok, asset)。id 冲突返回 (False, None)。
         """
         provider = (provider or "").strip()
         if not provider:
             raise ValueError("provider 不能为空")
+        owner = (owner or OWNER_SYSTEM).strip()
+        if owner not in OWNERS:
+            raise ValueError(f"owner 必须是 {OWNERS} 之一")
         with self._lock:
             self._reload_if_changed()
-            vid = (voice_asset_id or "").strip() or self.next_id()
+            vid = (voice_asset_id or "").strip() or self.next_id(
+                "voice_custom" if owner == OWNER_USER else "voice"
+            )
             if not _ID_RE.match(vid):
                 raise ValueError(f"voice_asset_id 只能包含字母/数字/下划线/中划线（2-64位），收到: {vid}")
             if self.get_voice(vid) is not None:
@@ -248,11 +290,14 @@ class VoiceLibraryManager:
                 "voice_id": (voice_id or "").strip(),
                 "type": (voice_type or VOICE_TYPE_CLONED),
                 "model": (model or "").strip(),
+                "owner": owner,
                 "created_by": (created_by or "admin"),
                 "locked": bool(locked),
                 "created_at": _now(),
                 "updated_at": _now(),
             }
+            if owner == OWNER_USER and owner_user:
+                asset["owner_user"] = owner_user
             if isinstance(extra, dict):
                 for k, v in extra.items():
                     if k not in asset:
