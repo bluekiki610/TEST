@@ -13,8 +13,9 @@ class ZhipuProvider(BaseProvider):
     key = "zhipu"
     name = "智谱 GLM"
 
-    def capabilities(self):
-        return [CAPABILITY_CHAT, CAPABILITY_VISION]
+    # Step 5B：已真实实现的能力位 —— 目前为空（Step 6 才接真实调用）
+    implemented_capabilities = []
+    planned_capabilities = [CAPABILITY_CHAT, CAPABILITY_VISION]
 
     def chat(self, messages=None, model="", **kwargs):
         # TODO(V1.1 Step 2+): 接入真实对话请求

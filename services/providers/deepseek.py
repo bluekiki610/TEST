@@ -39,9 +39,12 @@ class DeepSeekProvider(BaseProvider):
     default_base_url = DEFAULT_BASE_URL
     default_model = DEFAULT_MODEL
 
-    # 本期计划支持的能力（Step 5A：只有 chat 真正可用）
-    def capabilities(self):
-        return [CAPABILITY_CHAT, CAPABILITY_VISION]
+    # Step 5B：已真实实现的能力位（唯一选型依据）
+    #   目前只有 chat —— vision 尚未实现，因此不写进来，
+    #   否则会绕过 not_implemented 保护变成假成功。
+    implemented_capabilities = [CAPABILITY_CHAT]
+    # 计划支持（仅展示，不参与选型）
+    planned_capabilities = [CAPABILITY_CHAT, CAPABILITY_VISION]
 
     # ---------- 内部工具 ----------
     def _resolved_base_url(self):

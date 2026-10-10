@@ -15,8 +15,9 @@ class ElevenLabsProvider(BaseProvider):
     key = "elevenlabs"
     name = "ElevenLabs"
 
-    def capabilities(self):
-        return [CAPABILITY_TTS, CAPABILITY_ASR]
+    # Step 5B：已真实实现的能力位 —— 目前为空（Step 6 才接真实调用）
+    implemented_capabilities = []
+    planned_capabilities = [CAPABILITY_TTS, CAPABILITY_ASR]
 
     def tts(self, text="", model="", **kwargs):
         # TODO(V1.1 Step 2+): 接入真实语音合成请求

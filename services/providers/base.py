@@ -110,8 +110,28 @@ class BaseProvider:
     name = ""
     # 供应商默认端点 / 默认模型（Step 5A 新增）：
     # 用户只填 api_key、不填 base_url 时用这里的兜底，避免调用方必须知道端点。
+    # 【架构规则】禁止「provider A 的 key + provider B 的 url」组合：
+    #   每个 provider 必须声明自己的 default_base_url；
+    #   真实调用的 URL 只能由「本 provider 的 base_url 或 default_base_url」推出。
     default_base_url = ""
     default_model = ""
+
+    # ==================== 能力声明（Step 5B） ====================
+    # implemented_capabilities —— 本 provider **已经真实可用**的能力位。
+    #   它是唯一的选型依据：ProviderManager 用 supports() 过滤候选，
+    #   AIService 不再维护任何硬编码的 (provider, capability) 名单。
+    #
+    #   ⚠️ 语义必须严格：只写「真的实现了」的能力，不要写「计划支持」的。
+    #      否则声明一个未实现的能力位，会绕过 not_implemented 保护，
+    #      变成"看起来接上了其实没有"的假成功。
+    #
+    # planned_capabilities —— 仅供文档/前端展示的「计划支持」清单，
+    #   **不参与任何选型判断**，避免把意图误当成能力。
+    #
+    #   注意：类属性刻意不叫 capabilities —— 那会与下面的 capabilities() 方法同名，
+    #   实例属性查找会命中方法对象，class 属性被遮蔽，容易踩坑。
+    implemented_capabilities = []
+    planned_capabilities = []
 
     def __init__(self, config=None):
         # config 只保存「配置内容」，不负责持久化（持久化归 provider_manager）
@@ -123,10 +143,15 @@ class BaseProvider:
 
     # ---------- 能力声明 ----------
     def capabilities(self):
-        """本 provider 支持的能力位。第一版全部返回空列表（尚未接入）。"""
-        return []
+        """本 provider **已真实实现**的能力位（列表副本）。"""
+        return list(type(self).implemented_capabilities or [])
+
+    def planned_capabilities(self):
+        """本 provider 计划支持的能力位（仅展示，不参与选型）。"""
+        return list(type(self).planned_capabilities or [])
 
     def supports(self, capability):
+        """是否已真实实现该能力位。Step 5B 起，这就是唯一的选型依据。"""
         return capability in self.capabilities()
 
     def get_model(self, capability):
@@ -137,7 +162,7 @@ class BaseProvider:
         """是否已填好 api_key 等必要配置。"""
         return bool(self.api_key)
 
-    # ---------- 五个能力位（第一版统一未实现） ----------
+    # ---------- 五个能力位（基类统一未实现，子类按需覆盖） ----------
     def chat(self, messages=None, model="", **kwargs):
         return not_implemented(self.key, CAPABILITY_CHAT)
 
@@ -155,12 +180,17 @@ class BaseProvider:
 
     # ---------- 描述 ----------
     def describe(self):
-        """给 provider_manager / 调试接口用的自描述。"""
+        """给 provider_manager / 调试接口用的自描述。
+
+        capabilities          —— 已真实实现（参与选型）
+        planned_capabilities  —— 计划支持（仅展示）
+        """
         return {
             "key": self.key,
             "name": self.name,
             "configured": self.is_configured(),
             "capabilities": list(self.capabilities()),
+            "planned_capabilities": list(self.planned_capabilities()),
             "models": dict(self.models or {}),
         }
 

@@ -25,14 +25,16 @@ class SiliconFlowProvider(BaseProvider):
     # 未填 base_url 时用它兜底，避免误用别的供应商端点。
     default_base_url = "https://api.siliconflow.cn/v1"
 
-    def capabilities(self):
-        return [
-            CAPABILITY_CHAT,
-            CAPABILITY_VISION,
-            CAPABILITY_IMAGE,
-            CAPABILITY_ASR,
-            CAPABILITY_TTS,
-        ]
+    # Step 5B：已真实实现的能力位 —— 目前为空（Step 6 才接真实调用）
+    implemented_capabilities = []
+    # 计划支持（仅展示，不参与选型）
+    planned_capabilities = [
+        CAPABILITY_CHAT,
+        CAPABILITY_VISION,
+        CAPABILITY_IMAGE,
+        CAPABILITY_ASR,
+        CAPABILITY_TTS,
+    ]
 
     def chat(self, messages=None, model="", **kwargs):
         # TODO(V1.1 Step 2+): 接入真实对话请求

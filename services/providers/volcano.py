@@ -19,14 +19,15 @@ class VolcanoProvider(BaseProvider):
     key = "volcano"
     name = "火山引擎"
 
-    def capabilities(self):
-        return [
-            CAPABILITY_CHAT,
-            CAPABILITY_VISION,
-            CAPABILITY_IMAGE,
-            CAPABILITY_ASR,
-            CAPABILITY_TTS,
-        ]
+    # Step 5B：已真实实现的能力位 —— 目前为空（Step 6 才接真实调用）
+    implemented_capabilities = []
+    planned_capabilities = [
+        CAPABILITY_CHAT,
+        CAPABILITY_VISION,
+        CAPABILITY_IMAGE,
+        CAPABILITY_ASR,
+        CAPABILITY_TTS,
+    ]
 
     def chat(self, messages=None, model="", **kwargs):
         # TODO(V1.1 Step 2+): 接入真实对话请求
