@@ -20,12 +20,6 @@ from .providers.base import (
     not_implemented_result,
 )
 
-# Step 5A：已真实接入的能力位（目前只有 deepseek 的 chat）。
-# 未列出的组合一律返回 not_implemented，避免"看起来接上了其实没实现"。
-_REAL_CAPABILITIES = {
-    ("deepseek", CAPABILITY_CHAT),
-}
-
 
 class AIService:
     """多供应商 / 多模型 / 多能力的统一服务入口。
@@ -178,9 +172,11 @@ class AIService:
         # 显式传入的 model > 用户默认模型 > 登记表里的 model
         use_model = model or user_model or reg_model
 
-        # ===== Step 5A：只有登记为「已真实接入」的能力位才真正分发 =====
-        # 其余组合一律返回 not_implemented，避免出现"选到了 provider 但其实没实现"的假成功。
-        if (pkey, capability) not in _REAL_CAPABILITIES:
+        # ===== Step 5B：能力位以 provider 自己的声明为准 =====
+        # 不再维护任何硬编码的 (provider, capability) 名单 —— 那是硬编码地狱。
+        # provider.supports() 读取该 provider 的 implemented_capabilities，
+        # 所以「接一个新供应商/新能力」= 只改那一个 provider 文件，AIService 不动。
+        if not provider.supports(capability):
             return not_implemented_result(provider=pkey, model=use_model, capability=capability)
 
         handler = {
