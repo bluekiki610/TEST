@@ -1,15 +1,26 @@
 # services/voice_clone_manager.py
-# 声音克隆编排层 —— V1.1 Step 6B
+# 声音制作工具（管理员）—— V1.1 Step 6B 建立 / 6C 修正版调整职责
 #
-# 职责（只做编排，不写供应商协议）：
-#     上传音频 → 校验 → 交给 provider.clone_voice() → 拿 voice_id
-#              → 按隐私策略处理原始文件 → 返回标准 voice_object
+# ==================== 定位（6C 修正） ====================
+# 本模块是**后台资产生产工具**：把一个音频样本变成可复用的**声音资产**。
+#
+#     音频样本 → clone_voice() → voice_id
+#              → clone_into_library() → voice_library.json（voice_asset_id）
+#
+# 它**不再负责绑定角色** —— 绑定是 character_manager 的事：
+#     CharacterManager.bind_voice_asset(character_id, voice_asset_id)
+#
+# 因为声音是「可复用资产」而非「角色私有属性」：同一份声音可以分配给
+# 一个或多个角色，换供应商时也只改声音库一处。
+#
+# 完整管理员流程见 services/voice_admin.py。
 #
 # 分工：
-#     providers/voice_clone.py    —— 抽象 + voice_object 结构 + 统一返回
-#     providers/elevenlabs.py 等  —— 各自的真实协议（端点/参数）
-#     voice_manager.py            —— 落库（bind_clone 绑定到 AI 角色）
-#     本文件                       —— 串起来 + 原始音频的隐私策略
+#     providers/voice_clone.py     —— 抽象 + voice_object 结构 + 统一返回
+#     providers/elevenlabs.py 等   —— 各自的真实协议（端点/参数）
+#     voice_library_manager.py     —— 声音资产库（落库目标）
+#     character_manager.py         —— 角色模板（引用 voice_asset_id）
+#     本文件                        —— 串起来 + 原始音频的隐私策略
 #
 # ==================== 隐私策略（审核明确要求） ====================
 # 默认**不保留**用户上传的原始音频：
@@ -69,13 +80,22 @@ def _now():
 class VoiceCloneManager:
     """声音克隆编排器。
 
-    典型用法：
+    典型用法（管理员制作声音资产）：
         cm = VoiceCloneManager()
-        r = cm.clone_voice(user="亦言", ai_name="颜颜",
-                           audio_file="/path/to/sample.wav",
-                           provider="elevenlabs")
-        # r["status"] == "ok" 时
-        get_voice_manager().bind_clone("颜颜", r)
+
+        # 一步：克隆 + 存进声音库，拿到 voice_asset_id
+        r = cm.clone_into_library(audio_file="/path/to/nightchen.wav",
+                                  name="清冷男声", provider="elevenlabs",
+                                  user="admin")
+        # r["voice_asset_id"] == "voice_001"
+
+        # 再把它绑给角色（在 character_manager 里，不在本模块）
+        from services.character_manager import get_character_manager
+        get_character_manager().bind_voice_asset("nightchen", r["voice_asset_id"])
+
+        或者直接用管理员服务一把梭：
+        from services.voice_admin import get_voice_admin_service
+        get_voice_admin_service().clone_voice_asset(audio_file="...", name="清冷男声")
     """
 
     def __init__(self, data_root=None, providers=None):
@@ -178,10 +198,15 @@ class VoiceCloneManager:
                     duration=0, account_manager=None, timeout=120):
         """上传音频 → 供应商 → 返回标准 voice_object（**不落库**）。
 
+        Step 6C 修正版：拿到 voice_id 后请用 clone_into_library() 存成声音资产，
+        再由 CharacterManager.bind_voice_asset(character_id, voice_asset_id) 绑给角色。
+
         参数：
-            user / ai_name —— 用于取该用户的 api_key 与记录归属
+            user / ai_name —— user 用于取该用户的 api_key（谁付费）；
+                              ai_name 只是给供应商侧的 voice 起个名字
+                              （默认取音频文件名）
             audio_file     —— 音频路径（会被复制进受控目录，原始文件不动）
-            provider       —— 供应商 key（如 elevenlabs / minimax）
+            provider       —— 供应商 key（如 elevenlabs）
             retain         —— True 则长期保留上传样本，默认 False（用完即删）
             duration       —— 音频时长（秒，前端可传，仅用于元数据展示）
 
@@ -260,6 +285,65 @@ class VoiceCloneManager:
             "voice_type": VOICE_TYPE_CLONED,
             "voice_object": obj,
         }
+
+    # ==================== 管理员一站式：克隆 + 存入声音资产库 ====================
+    def clone_into_library(self, audio_file, name="", provider="", user="",
+                           model="", style="", retain=False, duration=0,
+                           locked=True, account_manager=None, voice_library=None):
+        """管理员操作：上传样本 → 克隆 → 存成**声音资产**（不绑定角色）。
+
+        Step 6C 修正版把这件事拆成两步，因为声音是可复用资产：
+            1) 本方法：产出声音资产   → voice_library.json（拿到 voice_asset_id）
+            2) CharacterManager.bind_voice_asset(角色, voice_asset_id)
+
+        这样同一份声音可以先做出来，再分配给一个或多个角色。
+
+        返回 clone_voice() 的结构，另加：
+            voice_asset_id —— 新资产 id（成功时）
+            stored         —— 是否已写入声音库
+        """
+        result = self.clone_voice(
+            user=user, ai_name=name, audio_file=audio_file, provider=provider,
+            model=model, label=name, style=style, retain=retain,
+            duration=duration, account_manager=account_manager,
+        )
+        if result.get("status") != "ok":
+            result["stored"] = False
+            return result
+
+        vl = voice_library
+        if vl is None:
+            try:
+                from .voice_library_manager import get_voice_library_manager
+                vl = get_voice_library_manager()
+            except Exception as e:
+                result["stored"] = False
+                result["store_error"] = f"无法获取 VoiceLibraryManager: {e}"
+                return result
+
+        obj = result.get("voice_object") or {}
+        try:
+            ok, asset = vl.add_voice(
+                name=name or obj.get("label", ""),
+                provider=obj.get("provider", ""),
+                voice_id=obj.get("voice_id", ""),
+                voice_type=obj.get("voice_type", "cloned"),
+                model=obj.get("model", ""),
+                locked=locked,
+                extra={"source_audio": obj.get("source_audio")} if obj.get("source_audio") else None,
+            )
+        except Exception as e:
+            result["stored"] = False
+            result["store_error"] = f"写入声音库失败: {e}"
+            return result
+
+        result["stored"] = bool(ok)
+        if ok:
+            result["voice_asset_id"] = asset.get("id", "")
+            result["voice_asset"] = asset
+        else:
+            result["store_error"] = "写入声音库失败（权限、磁盘或 id 冲突）"
+        return result
 
     # ==================== 保留样本的管理（retain=True 时才用得到） ====================
     def list_retained_samples(self):

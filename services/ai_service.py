@@ -260,32 +260,83 @@ class AIService:
             require_configured=require_configured,
         )
 
+    def resolve_voice_for_character(self, character_id_or_name):
+        """解析「角色 → 声音资产 → provider/voice_id」这一跳。
+
+        这是 Step 6C 修正版的核心链路：
+            character_id → character.voice_asset_id → voice_library → provider 参数
+
+        返回 (voice_info, character)：
+            voice_info = {"provider","voice_id","model","voice_asset_id","voice_type"}
+            任一环节缺失则 voice_info 为 None（调用方回退到默认音色）
+        """
+        if not character_id_or_name:
+            return None, None
+        try:
+            from .character_manager import get_character_manager
+            cm = get_character_manager()
+            character = cm.resolve(character_id_or_name)
+            if not character:
+                print(f"[ai_service] 未找到角色模板: {character_id_or_name}", flush=True)
+                return None, None
+            asset_id = (character.get("voice_asset_id") or "").strip()
+            if not asset_id:
+                print(f"[ai_service] 角色 {character.get('name') or character_id_or_name} 未绑定声音资产",
+                      flush=True)
+                return None, character
+            from .voice_library_manager import get_voice_library_manager
+            asset = get_voice_library_manager().get_voice(asset_id)
+            if not asset:
+                print(f"[ai_service] 声音资产不存在: {asset_id}", flush=True)
+                return None, character
+            info = {
+                "provider": (asset.get("provider") or "").strip(),
+                "voice_id": (asset.get("voice_id") or "").strip(),
+                "model": (asset.get("model") or "").strip(),
+                "voice_type": asset.get("type", ""),
+                "voice_asset_id": asset_id,
+                "voice_name": asset.get("name", ""),
+            }
+            return (info if info["provider"] else None), character
+        except Exception as e:
+            print(f"[ai_service] 解析角色声音失败（回退默认音色）: {e}", flush=True)
+            return None, None
+
     def tts(self, text="", provider="", model="", user=None, require_configured=False,
-            ai_name="", voice_id="", **kwargs):
+            character_id="", ai_name="", voice_id="", **kwargs):
         """语音合成：文本 → 音频。
 
-        Step 6A 新增两个可选参数，用于「每个 AI 有自己的声音人格」：
-            ai_name  —— 传了就按 voice_manager 里该 AI 登记的音色来（供应商/音色/模型）
-            voice_id —— 直接指定音色，优先级高于 ai_name
-        两者都不传时，行为与之前完全一致（走用户默认模型 + provider 默认音色）。
-        返回统一结构，音频在 audio_base64 里（见 base.ok_audio_result）。
+        ==================== Step 6C 修正版：声音来自角色模板 ====================
+        AIService().tts(text="你好", character_id="nightchen")
+            character_id → character.voice_asset_id
+                         → voice_library（声音资产库）
+                         → provider + voice_id
+                         → provider.tts() → 音频
+
+        规则：
+          · character_id 是首选入参（稳定英文 id）；ai_name 作为兼容别名，
+            既接受角色 id 也接受显示名（如「夜辰」）
+          · 用户**不可**决定角色声音：没有"用我的声音"这类入口
+          · 世界还没给该角色配声音时，回退用户默认 TTS 模型（不让调用直接失败）
+          · 显式传 voice_id 仅供管理员试听/调试，不作为常规用法
+          · 用户仍然提供自己的 API Key（谁调用谁付费），但改不了声音本身
         """
-        # 1) 音色解析：voice_id 显式指定 > 该 AI 登记的 profile > 不指定（用默认）
         eff_provider = provider
         eff_model = model
         eff_voice = voice_id or ""
-        if not eff_voice and ai_name:
-            try:
-                from .voice_manager import get_voice_manager
-                args = get_voice_manager().resolve_tts_args(ai_name, fallback_provider=provider)
-                if args:
-                    eff_provider = provider or args.get("provider", "")
-                    eff_model = model or args.get("model", "")
-                    eff_voice = args.get("voice_id", "") or ""
-            except Exception as e:
-                print(f"[ai_service] 读取音色配置失败（改用默认音色）: {e}", flush=True)
+        voice_info = None
+        character = None
 
-        return self._dispatch(
+        # 1) 角色 → 声音资产（唯一的声音真相来源）
+        target = character_id or ai_name
+        if target and not eff_voice:
+            voice_info, character = self.resolve_voice_for_character(target)
+            if voice_info:
+                eff_provider = provider or voice_info.get("provider", "")
+                eff_model = model or voice_info.get("model", "")
+                eff_voice = voice_info.get("voice_id", "") or ""
+
+        result = self._dispatch(
             CAPABILITY_TTS,
             prefer_provider=eff_provider,
             model=eff_model,
@@ -293,6 +344,16 @@ class AIService:
             user=user,
             require_configured=require_configured,
         )
+        # 便于排查"这句到底用的谁的声音"
+        if isinstance(result, dict):
+            result.setdefault("character_id", (character or {}).get("character_id", character_id or ""))
+            result.setdefault("character_name", (character or {}).get("name", ai_name or ""))
+            result.setdefault("ai_name", ai_name or (character or {}).get("name", ""))
+            result.setdefault("voice_source", "character_template" if voice_info else "provider_default")
+            if voice_info:
+                result.setdefault("voice_asset_id", voice_info.get("voice_asset_id", ""))
+                result.setdefault("voice_name", voice_info.get("voice_name", ""))
+        return result
 
     # ---------- 只读查询（供 UI / 调试） ----------
     @property
