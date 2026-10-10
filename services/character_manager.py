@@ -276,14 +276,18 @@ class CharacterManager:
     def set_character(self, character_id, name="", character_type=TYPE_TEMPLATE,
                       voice_asset_id=None, world_id="", personality="",
                       appearance="", system_prompt="", behavior=None,
-                      owner="", locked=None, default_voice_id=None, extra=None):
+                      owner="", locked=None, default_voice_id=None,
+                      locked_voice=None, extra=None):
         """新增或更新角色模板。
 
         default_voice_id —— 角色**默认声音**资产 id。
             传 None 表示"保持原值不动"；传 "" 表示"清空声音引用"。
         voice_asset_id    —— 6C 第一版的旧参数名，仍然接受（会写入 default_voice_id），
                              仅为兼容旧调用，新代码请用 default_voice_id。
-        locked            —— 不传则按类型默认：template=True，custom=False。
+        locked_voice      —— True 表示该角色的**官方声音不可被用户改动**
+                             （用户只能 override 给自己听，不能改角色默认）。
+                             不传则按类型默认：template=True，custom=False。
+        locked            —— 角色模板本身是否锁定（模板不可被用户编辑）。
         """
         cid = (character_id or "").strip()
         if not cid:
@@ -304,6 +308,8 @@ class CharacterManager:
 
             if locked is None:
                 locked = old.get("locked", ctype == TYPE_TEMPLATE)
+            if locked_voice is None:
+                locked_voice = old.get("locked_voice", ctype == TYPE_TEMPLATE)
 
             old_voice = (old.get("default_voice_id") or old.get("voice_asset_id") or "")
             item = {
@@ -313,6 +319,8 @@ class CharacterManager:
                 "world_id": (world_id or old.get("world_id") or "").strip(),
                 # ← 只存引用，绝不在角色里复制 voice_id
                 "default_voice_id": old_voice if incoming is None else (incoming or "").strip(),
+                # 官方声音是否锁定（用户只能 override，不能改这个字段）
+                "locked_voice": bool(locked_voice),
                 "personality": personality if personality else old.get("personality", ""),
                 "appearance": appearance if appearance else old.get("appearance", ""),
                 "system_prompt": system_prompt if system_prompt else old.get("system_prompt", ""),
@@ -330,6 +338,16 @@ class CharacterManager:
             chars[cid] = item
             ok = self._write()
             return ok, (json.loads(json.dumps(item, ensure_ascii=False)) if ok else None)
+
+    def is_voice_locked(self, character_id_or_name):
+        """该角色的官方声音是否锁定（锁定 = 用户只能 override，不能改角色默认）。"""
+        c = self.resolve(character_id_or_name)
+        if not c:
+            return False
+        if "locked_voice" in c:
+            return bool(c.get("locked_voice"))
+        # 兼容旧数据：按类型推断
+        return (c.get("character_type") or TYPE_TEMPLATE) == TYPE_TEMPLATE
 
     def bind_voice_asset(self, character_id, voice_asset_id):
         """把某个声音资产绑定为角色的**默认声音**（只改引用）。

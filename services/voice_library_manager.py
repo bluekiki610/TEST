@@ -73,6 +73,21 @@ OWNER_SYSTEM = "system"
 OWNER_USER = "user"
 OWNERS = (OWNER_SYSTEM, OWNER_USER)
 
+# ==================== 声音来源（source，Step 6D） ====================
+#   official —— 官方声音（管理员为固定角色制作，长期资产）
+#   custom   —— 自定义声音（用户为"我想换个听感"而创建）
+#   preset   —— 供应商预置音色（未克隆，直接引用）
+SOURCE_OFFICIAL = "official"
+SOURCE_CUSTOM = "custom"
+SOURCE_PRESET = "preset"
+SOURCES = (SOURCE_OFFICIAL, SOURCE_CUSTOM, SOURCE_PRESET)
+
+# ==================== provider 与 engine 的分工（Step 6D） ====================
+#   provider —— 走哪条通道（localvoice / elevenlabs / minimax / siliconflow）
+#   engine   —— 具体引擎（本地才有意义：gpt_sovits / cosyvoice / fish_speech /
+#               voicestudio）。云端 provider 通常留空。
+# 换本地引擎只改 engine 一处，provider 与上层代码都不动。
+
 
 def _now():
     try:
@@ -206,19 +221,29 @@ class VoiceLibraryManager:
             return self._write()
 
     # ==================== 查询（用户侧只读） ====================
-    def list_voices(self, owner=None):
-        """列出声音资产。owner 传 "system"/"user" 可过滤；不传则全部。"""
+    def list_voices(self, owner=None, world_id=None):
+        """列出声音资产。
+
+        owner    —— "system"/"user" 过滤
+        world_id —— 世界过滤（多租户隔离）：
+                    · 传具体世界 → 该世界的资产 + 全局资产（world_id 为空）
+                    · 不传       → 全部（管理员视图）
+        """
         with self._lock:
             self._reload_if_changed()
             voices = self._data.get("voices", []) or []
             if owner:
                 voices = [v for v in voices
                           if isinstance(v, dict) and (v.get("owner") or OWNER_SYSTEM) == owner]
+            if world_id:
+                voices = [v for v in voices
+                          if isinstance(v, dict)
+                          and (v.get("world_id") or "") in ("", world_id)]
             return json.loads(json.dumps(voices, ensure_ascii=False))
 
-    def list_system_voices(self):
+    def list_system_voices(self, world_id=None):
         """系统声音（管理员资产）—— 用户可从中挑选覆盖。"""
-        return self.list_voices(owner=OWNER_SYSTEM)
+        return self.list_voices(owner=OWNER_SYSTEM, world_id=world_id)
 
     def list_user_voices(self, owner_user=""):
         """用户自定义声音。传 owner_user 则只看该用户的。"""
@@ -227,20 +252,32 @@ class VoiceLibraryManager:
             out = [v for v in out if (v.get("owner_user") or "") == owner_user]
         return out
 
-    def get_voice(self, voice_asset_id):
-        """按声音资产 id 取资产。这是 TTS 链路的关键一跳。"""
+    def get_voice(self, voice_asset_id, world_id=None):
+        """按声音资产 id 取资产。这是 TTS 链路的关键一跳。
+
+        world_id —— 多租户隔离校验。传了就要求该资产属于这个世界
+                    或属于全局（world_id 为空）。跨世界取用会被拒绝，
+                    避免"世界A的角色误用世界B的声音"。
+        """
         vid = (voice_asset_id or "").strip()
         if not vid:
             return None
         with self._lock:
             self._reload_if_changed()
             for v in (self._data.get("voices", []) or []):
-                if isinstance(v, dict) and (v.get("id") or "").strip() == vid:
-                    return json.loads(json.dumps(v, ensure_ascii=False))
+                if not isinstance(v, dict) or (v.get("id") or "").strip() != vid:
+                    continue
+                if world_id:
+                    vw = (v.get("world_id") or "").strip()
+                    if vw and vw != world_id:
+                        print(f"[voice_library] ⚠️ 跨世界声音引用被拒绝: "
+                              f"资产 {vid} 属于世界 {vw}，当前世界 {world_id}", flush=True)
+                        return None
+                return json.loads(json.dumps(v, ensure_ascii=False))
             return None
 
-    def has_voice(self, voice_asset_id):
-        return self.get_voice(voice_asset_id) is not None
+    def has_voice(self, voice_asset_id, world_id=None):
+        return self.get_voice(voice_asset_id, world_id=world_id) is not None
 
     def next_id(self, prefix="voice"):
         """生成一个未被占用的资产 id（voice_001 递增）。"""
@@ -259,12 +296,19 @@ class VoiceLibraryManager:
     # ==================== 写入（管理员） ====================
     def add_voice(self, voice_asset_id="", name="", provider="", voice_id="",
                   voice_type=VOICE_TYPE_CLONED, model="", created_by="admin",
-                  locked=True, owner=OWNER_SYSTEM, owner_user="", extra=None):
+                  locked=True, owner=OWNER_SYSTEM, owner_user="",
+                  source="", engine="", world_id="", extra=None):
         """新增一个声音资产。id 不传则自动生成。
 
         owner      —— "system"（管理员，默认）或 "user"（用户自定义覆盖用）
         owner_user —— owner="user" 时记录归属用户
         locked     —— True 表示普通用户不可修改该资产（系统声音默认锁定）
+        source     —— 来源：official（官方）/ custom（自定义）/ preset（预置）
+                      不传则按 owner 推断（system→official，user→custom）
+        engine     —— **本地引擎**名（gpt_sovits / cosyvoice / fish_speech /
+                      voicestudio）。云端 provider 留空。
+                      换本地引擎只改这里，上层代码不动。
+        world_id   —— 归属世界（多租户隔离）。留空 = 全局可用。
 
         返回 (ok, asset)。id 冲突返回 (False, None)。
         """
@@ -274,10 +318,15 @@ class VoiceLibraryManager:
         owner = (owner or OWNER_SYSTEM).strip()
         if owner not in OWNERS:
             raise ValueError(f"owner 必须是 {OWNERS} 之一")
+        src = (source or "").strip() or (
+            SOURCE_OFFICIAL if owner == OWNER_SYSTEM else SOURCE_CUSTOM
+        )
+        if src not in SOURCES:
+            raise ValueError(f"source 必须是 {SOURCES} 之一")
         with self._lock:
             self._reload_if_changed()
             vid = (voice_asset_id or "").strip() or self.next_id(
-                "voice_custom" if owner == OWNER_USER else "voice"
+                "user_voice" if owner == OWNER_USER else "voice"
             )
             if not _ID_RE.match(vid):
                 raise ValueError(f"voice_asset_id 只能包含字母/数字/下划线/中划线（2-64位），收到: {vid}")
@@ -291,6 +340,11 @@ class VoiceLibraryManager:
                 "type": (voice_type or VOICE_TYPE_CLONED),
                 "model": (model or "").strip(),
                 "owner": owner,
+                "source": src,
+                # 本地引擎名（云端为空），换引擎只改这一处
+                "engine": (engine or "").strip(),
+                # 多租户：空 = 全局可用
+                "world_id": (world_id or "").strip(),
                 "created_by": (created_by or "admin"),
                 "locked": bool(locked),
                 "created_at": _now(),

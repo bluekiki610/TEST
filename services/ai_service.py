@@ -26,16 +26,21 @@ def _asset_to_voice(asset, source):
 
     source 标记这一跳来自哪一层（user_override / character_default / world_default），
     便于排查"这句为什么是这个声音"。
+
+    engine（Step 6D）—— 本地引擎名。provider="localvoice" 时才会用到，
+    云端 provider 留空。换本地引擎只改声音资产，上层代码不动。
     """
     asset = asset or {}
     return {
         "provider": (asset.get("provider") or "").strip(),
         "voice_id": (asset.get("voice_id") or "").strip(),
         "model": (asset.get("model") or "").strip(),
+        "engine": (asset.get("engine") or "").strip(),
         "voice_type": asset.get("type", ""),
         "voice_asset_id": asset.get("id", ""),
         "voice_name": asset.get("name", ""),
-        "source": source,
+        "asset_source": asset.get("source", ""),   # official / custom / preset
+        "source": source,                          # 哪一层生效
     }
 
 
@@ -310,6 +315,8 @@ class AIService:
                 print(f"[ai_service] 未找到角色模板: {character_id_or_name}", flush=True)
                 return out, None, None
             cid = (character.get("character_id") or "").strip()
+            # 多租户隔离：角色所属世界。声音资产若属于别的世界会被拒绝。
+            wid = (character.get("world_id") or "").strip()
 
             from .voice_library_manager import get_voice_library_manager
             vl = get_voice_library_manager()
@@ -323,25 +330,24 @@ class AIService:
                     print(f"[ai_service] 读取用户声音覆盖失败: {e}", flush=True)
                     override_id = None
                 if override_id:
-                    asset = vl.get_voice(override_id)
+                    asset = vl.get_voice(override_id, world_id=wid)
                     if asset and (asset.get("provider") or "").strip():
                         out.update(_asset_to_voice(asset, "user_override"))
                         return out, character, world
                     # 覆盖失效 → 回退，并留下可排查的日志
                     print(f"[ai_service] 用户覆盖声音 {override_id} 不可用，回退角色默认", flush=True)
 
-            # ---------- 2. 角色默认声音 ----------
+            # ---------- 2. 角色默认声音（官方声音） ----------
             default_id = (character.get("default_voice_id")
                           or character.get("voice_asset_id") or "").strip()
             if default_id:
-                asset = vl.get_voice(default_id)
+                asset = vl.get_voice(default_id, world_id=wid)
                 if asset and (asset.get("provider") or "").strip():
                     out.update(_asset_to_voice(asset, "character_default"))
                     return out, character, world
                 print(f"[ai_service] 角色默认声音 {default_id} 不可用", flush=True)
 
             # ---------- 3. 世界默认声音 ----------
-            wid = (character.get("world_id") or "").strip()
             if wid:
                 try:
                     from .world_manager import get_world_manager
@@ -351,7 +357,7 @@ class AIService:
                     print(f"[ai_service] 读取世界配置失败: {e}", flush=True)
                 world_default = ((world or {}).get("default_voice_id") or "").strip()
                 if world_default:
-                    asset = vl.get_voice(world_default)
+                    asset = vl.get_voice(world_default, world_id=wid)
                     if asset and (asset.get("provider") or "").strip():
                         out.update(_asset_to_voice(asset, "world_default"))
                         return out, character, world
@@ -391,6 +397,7 @@ class AIService:
         eff_provider = provider
         eff_model = model
         eff_voice = voice_id or ""
+        eff_engine = ""
         voice_info = None
         character = None
         eff_user = (user or self._user or "").strip()
@@ -403,14 +410,20 @@ class AIService:
                 eff_provider = provider or voice_info.get("provider", "")
                 eff_model = model or voice_info.get("model", "")
                 eff_voice = voice_info.get("voice_id", "") or ""
+                # 本地引擎名（云端为空）：让 LocalVoiceProvider 知道用哪个引擎
+                eff_engine = voice_info.get("engine", "") or ""
             else:
                 voice_info = None    # 没解析出可用声音 → 标记为回退
+
+        tts_kwargs = {"text": text, "voice_id": eff_voice}
+        if eff_engine:
+            tts_kwargs["engine"] = eff_engine
 
         result = self._dispatch(
             CAPABILITY_TTS,
             prefer_provider=eff_provider,
             model=eff_model,
-            kwargs={"text": text, "voice_id": eff_voice, **kwargs},
+            kwargs={**tts_kwargs, **kwargs},
             user=user,
             require_configured=require_configured,
         )
