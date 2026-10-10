@@ -1,8 +1,8 @@
 # services/voice_manager.py
-# AI 声音人格（Voice Profile）存储层 —— V1.1 Step 6A
+# AI 声音人格（Voice Profile）存储层 —— V1.1 Step 6A 建立 / 6B 扩展
 #
 # 定位：**只做"AI 角色 ↔ 音色"的登记与查询**，不发起任何网络请求。
-#      真正的克隆（上传音频 → 供应商 → voice_id）留给 Step 6B。
+#      真正的克隆调用在 voice_clone_manager.py（6B）。
 #
 # 为什么单独一个文件，而不是塞进 ai_accounts.json：
 #   1. 归属不同：ai_accounts.json 是**用户的基础设施配置**（key/收藏/默认模型），
@@ -13,26 +13,33 @@
 # 存储位置：data/ai_voice_profiles.json
 #   - 跟随 main.py 的 DATA_ROOT 规则（支持 DATA_DIR / AI_VOICE_FILE 环境变量）
 #
-# 结构：
+# 结构（version 2，Step 6B 扩展）：
 #   {
-#     "version": 1,
+#     "version": 2,
 #     "profiles": {
 #       "颜颜": {
-#         "provider": "siliconflow",
-#         "voice_id": "FunAudioLLM/CosyVoice2-0.5B",
-#         "model": "FunAudioLLM/CosyVoice2-0.5B",
+#         "provider": "elevenlabs",
+#         "voice_id": "21m00Tcm4TlvDq8ikWAM",
+#         "voice_type": "cloned",
+#         "model": "eleven_multilingual_v2",
 #         "style": "温柔",
-#         "source": "preset",            # preset | cloned
-#         "created_at": "2025-01-14 22:31:00",
-#         "updated_at": "2025-01-14 22:31:00"
+#         "label": "温柔女声",
+#         "source_audio": {
+#           "filename": "kiki_sample.wav",
+#           "duration": 38,
+#           "created_at": "2025-01-14 22:31:00",
+#           "retained": false
+#         },
+#         "created_at": "...",
+#         "updated_at": "..."
 #       }
 #     }
 #   }
 #
-# ⚠️ 本层不做的事（避免与 Step 6B 混淆）：
+# ⚠️ 本层不做的事：
 #   - 不调供应商 API
-#   - 不存音频文件
-#   - 不做音色克隆
+#   - 不存音频文件（source_audio 只是元数据）
+#   - 不做音色克隆（归 voice_clone_manager）
 
 import json
 import os
@@ -40,15 +47,15 @@ import shutil
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_FILENAME = "ai_voice_profiles.json"
 
 ENV_FILE = "AI_VOICE_FILE"
 ENV_DATA_DIR = "DATA_DIR"
 
-# 音色来源
+# 音色来源（与 providers/voice_clone.py 的取值保持一致）
 SOURCE_PRESET = "preset"     # 供应商自带/预置音色
-SOURCE_CLONED = "cloned"     # 用户上传音频克隆出来的音色（Step 6B 才会产生）
+SOURCE_CLONED = "cloned"     # 用户上传音频克隆出来的音色（Step 6B 产生）
 
 
 def _now():
@@ -181,23 +188,48 @@ class VoiceProfileManager:
             self._reload_if_changed()
             return sorted((self._data.get("profiles", {}) or {}).keys())
 
+    @staticmethod
+    def _normalize(item):
+        """把旧结构（v1 的 source 字段）兼容成新结构（v2 的 voice_type）。
+
+        读取时统一暴露新字段，避免调用方还要判两份。
+        """
+        if not isinstance(item, dict):
+            return None
+        out = json.loads(json.dumps(item, ensure_ascii=False))
+        # v1 -> v2：source → voice_type
+        if "voice_type" not in out:
+            out["voice_type"] = out.get("source") or SOURCE_PRESET
+        out.pop("source", None)
+        out.setdefault("voice_id", "")
+        out.setdefault("model", "")
+        out.setdefault("style", "")
+        out.setdefault("label", "")
+        out.setdefault("source_audio", None)
+        out.setdefault("created_at", "")
+        out.setdefault("updated_at", "")
+        return out
+
     def get_voice(self, ai_name):
-        """取某个 AI 的音色配置；没有则 None（不创建）。"""
+        """取某个 AI 的音色配置；没有则 None（不创建）。
+
+        返回值已归一化为 v2 结构（含 voice_type / source_audio）。
+        """
         with self._lock:
             self._reload_if_changed()
             p = (self._data.get("profiles", {}) or {}).get((ai_name or "").strip())
-            if not isinstance(p, dict):
-                return None
-            return json.loads(json.dumps(p, ensure_ascii=False))
+            return self._normalize(p)
 
     def set_voice(self, ai_name, provider, voice_id="", model="", style="",
-                  source=SOURCE_PRESET, extra=None):
+                  voice_type=SOURCE_PRESET, label="", source_audio=None, extra=None):
         """登记/更新某个 AI 的音色。
 
-        provider  —— 供应商 key（如 siliconflow / elevenlabs）
-        voice_id  —— 供应商侧的音色标识（ElevenLabs 是 voice_id；硅基流动可为空）
-        model     —— 该音色对应的模型（硅基流动的音色与模型同一字段时会用到）
-        source    —— preset（预置）或 cloned（克隆，Step 6B 产生）
+        provider     —— 供应商 key（如 siliconflow / elevenlabs）
+        voice_id     —— 供应商侧的音色标识。**只有标识作用**，不表达类型。
+        model        —— 该音色对应的模型（硅基流动的音色与模型同字段时会用到）
+        voice_type   —— preset（预置）或 cloned（克隆）
+        label        —— 展示名（如「温柔女声」）
+        source_audio —— **仅元数据** {filename, duration, created_at, retained}
         """
         ai_name = (ai_name or "").strip()
         if not ai_name:
@@ -209,13 +241,15 @@ class VoiceProfileManager:
         with self._lock:
             self._reload_if_changed()
             profiles = self._data.setdefault("profiles", {})
-            old = profiles.get(ai_name) if isinstance(profiles.get(ai_name), dict) else {}
+            old = self._normalize(profiles.get(ai_name)) or {}
             item = {
                 "provider": provider,
                 "voice_id": (voice_id or "").strip(),
+                "voice_type": (voice_type or SOURCE_PRESET),
                 "model": (model or "").strip(),
                 "style": (style or "").strip(),
-                "source": (source or SOURCE_PRESET),
+                "label": (label or "").strip(),
+                "source_audio": source_audio if isinstance(source_audio, dict) else old.get("source_audio"),
                 "created_at": old.get("created_at") or _now(),
                 "updated_at": _now(),
             }
@@ -226,6 +260,37 @@ class VoiceProfileManager:
             profiles[ai_name] = item
             self._write()
             return json.loads(json.dumps(item, ensure_ascii=False))
+
+    def bind_clone(self, ai_name, clone_result, label=""):
+        """把一次克隆结果绑定到某个 AI 角色（Step 6B 的核心动作）。
+
+        参数 clone_result —— voice_clone_manager.clone_voice() 的返回值，
+            里面带 voice_object（已包含 provider / voice_id / voice_type /
+            model / source_audio）。
+        只接受 status="ok" 的结果；其余原样返回错误，不会写入半成品配置。
+        """
+        if not isinstance(clone_result, dict):
+            return {"status": "error", "error": "clone_result 必须是 dict"}
+        if clone_result.get("status") != "ok":
+            return {
+                "status": "error",
+                "error": f"克隆未成功，不能绑定：{clone_result.get('error') or clone_result.get('status')}",
+            }
+        obj = clone_result.get("voice_object") or {}
+        if not obj.get("provider") or not obj.get("voice_id"):
+            return {"status": "error", "error": "克隆结果缺少 provider / voice_id"}
+
+        item = self.set_voice(
+            ai_name,
+            provider=obj.get("provider", ""),
+            voice_id=obj.get("voice_id", ""),
+            model=obj.get("model", ""),
+            style=obj.get("style", ""),
+            voice_type=obj.get("voice_type", SOURCE_CLONED),
+            label=label or obj.get("label", ""),
+            source_audio=obj.get("source_audio"),
+        )
+        return {"status": "ok", "voice": item}
 
     def remove_voice(self, ai_name):
         with self._lock:
@@ -256,15 +321,23 @@ class VoiceProfileManager:
         return {k: v for k, v in out.items() if v}
 
     def describe(self):
-        """概览（不含任何敏感数据）。"""
+        """概览（不含任何敏感数据）。
+
+        输出已归一化为 v2 结构，但**不返回音频本体**（本来也不存）。
+        """
         with self._lock:
             self._reload_if_changed()
-            profiles = self._data.get("profiles", {}) or {}
+            raw = self._data.get("profiles", {}) or {}
+            profiles = {}
+            for k in raw:
+                n = self._normalize(raw.get(k))
+                if n is not None:
+                    profiles[k] = n
             return {
                 "file": str(self.path),
                 "version": self._data.get("version", SCHEMA_VERSION),
                 "count": len(profiles),
-                "profiles": json.loads(json.dumps(profiles, ensure_ascii=False)),
+                "profiles": profiles,
             }
 
 
