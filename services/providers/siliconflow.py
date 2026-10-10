@@ -21,6 +21,10 @@ class SiliconFlowProvider(BaseProvider):
     key = "siliconflow"
     name = "硅基流动"
 
+    # 与 ext_ai.py 的 PROVIDERS["siliconflow"] 保持一致；
+    # 未填 base_url 时用它兜底，避免误用别的供应商端点。
+    default_base_url = "https://api.siliconflow.cn/v1"
+
     def capabilities(self):
         return [
             CAPABILITY_CHAT,

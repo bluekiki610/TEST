@@ -53,6 +53,50 @@ def error_result(provider="", capability="", message=""):
     }
 
 
+# ==================== Step 5A：真实调用使用的统一返回结构 ====================
+# 约定字段：status / provider / model / error
+#   status = ok                → 正常，结果在 content
+#   status = error             → 出错，原因在 error
+#   status = not_implemented   → 该能力位尚未接入
+# 额外附带 usage（若上游返回）便于以后接经济系统计费；不保存对话内容。
+def ok_result(provider="", model="", content="", usage=None, **extra):
+    """成功返回。"""
+    out = {
+        "status": STATUS_OK,
+        "provider": provider,
+        "model": model,
+        "error": "",
+        "content": content,
+        "usage": usage if isinstance(usage, dict) else {},
+    }
+    out.update(extra)
+    return out
+
+
+def fail_result(provider="", model="", error="", **extra):
+    """失败返回（含未配置 key、上游报错、超时、解析失败等）。"""
+    out = {
+        "status": STATUS_ERROR,
+        "provider": provider,
+        "model": model,
+        "error": error or "unknown error",
+        "content": "",
+    }
+    out.update(extra)
+    return out
+
+
+def not_implemented_result(provider="", model="", capability=""):
+    """该能力位尚未接入的返回（同样是统一字段，便于上层统一判断）。"""
+    return {
+        "status": STATUS_NOT_IMPLEMENTED,
+        "provider": provider,
+        "model": model,
+        "error": f"capability '{capability}' not implemented yet" if capability else "not implemented yet",
+        "content": "",
+    }
+
+
 class BaseProvider:
     """所有供应商 provider 的基类。
 
@@ -64,12 +108,17 @@ class BaseProvider:
 
     key = ""
     name = ""
+    # 供应商默认端点 / 默认模型（Step 5A 新增）：
+    # 用户只填 api_key、不填 base_url 时用这里的兜底，避免调用方必须知道端点。
+    default_base_url = ""
+    default_model = ""
 
     def __init__(self, config=None):
         # config 只保存「配置内容」，不负责持久化（持久化归 provider_manager）
         self.config = config or {}
         self.api_key = self.config.get("api_key", "")
-        self.base_url = self.config.get("base_url", "")
+        # 显式配置优先；没配则用类级默认
+        self.base_url = self.config.get("base_url", "") or self.default_base_url
         self.models = self.config.get("models", {}) or {}
 
     # ---------- 能力声明 ----------
