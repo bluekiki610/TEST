@@ -111,8 +111,13 @@ class ProviderManager:
         return {k: dict((v or {}).get("models", {}) or {}) for k, v in self._configs.items()}
 
     # ==================== 按能力选型 ====================
-    def _candidates(self, capability, prefer=None):
-        """产出候选 provider 顺序：显式 prefer > 能力偏好 > 已配置 > 其余。"""
+    def _candidates(self, capability, prefer=None, extra_config=None):
+        """产出候选 provider 顺序：显式 prefer > 能力偏好 > 已配置 > 其余。
+
+        extra_config（Step 4 新增，可选）：本次调用额外携带的 provider 配置
+        （通常来自某个用户的 ai_accounts 切片）。它只参与「已配置」这一档的候选，
+        不写入本 manager 的持久状态，因此不会污染全局配置。
+        """
         order = []
         for k in (prefer or []):
             if k and k not in order:
@@ -123,24 +128,42 @@ class ProviderManager:
         for k in self.configured_keys():
             if k not in order:
                 order.append(k)
+        for k in (extra_config or {}).keys():
+            if k not in order:
+                order.append(k)
         for k in PROVIDER_CLASSES.keys():
             if k not in order:
                 order.append(k)
         return order
 
-    def resolve(self, capability, prefer=None, require_configured=False):
+    def resolve(self, capability, prefer=None, require_configured=False, extra_config=None):
         """根据能力位选择 (provider_key, model_name)。
 
         选择规则（第一版，简单确定、无网络）：
-          1. 候选顺序：prefer → 能力偏好 → 已配置的 → 其余已知供应商
+          1. 候选顺序：prefer → 能力偏好 → 已配置的 → 本次 extra_config → 其余已知供应商
           2. 跳过不支持该能力的 provider
           3. require_configured=True 时，跳过未配置 api_key 的 provider
           4. 命中第一个候选即返回；全都不行返回 ("", "")
 
+        extra_config（Step 4 新增，可选）：
+          形如 {provider_key: {"api_key","base_url","models":{capability:model}}}。
+          命中该 provider 时，直接用它提供的模型名与配置，**不写入 self._configs**，
+          因此同一 manager 可以安全地服务不同用户（用户级配置不互相污染）。
+
         注意：第一版不校验模型是否真实存在（那需要网络），只做登记表内的选择。
         """
-        for k in self._candidates(capability, prefer=prefer):
+        extra = extra_config or {}
+        for k in self._candidates(capability, prefer=prefer, extra_config=extra):
+            ov = extra.get(k) if isinstance(extra, dict) else None
             p = self.get_provider(k)
+            if ov is not None:
+                # 用本次携带的用户配置临时构造一个 provider 实例（不缓存、不落盘）
+                if p is not None and not p.supports(capability):
+                    continue
+                cls = PROVIDER_CLASSES.get(k)
+                if cls is None:
+                    continue
+                p = cls(ov)
             if p is None:
                 continue
             if not p.supports(capability):
