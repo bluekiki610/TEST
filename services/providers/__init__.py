@@ -16,7 +16,7 @@ from .zhipu import ZhipuProvider
 from .volcano import VolcanoProvider
 from .elevenlabs import ElevenLabsProvider
 from .siliconflow import SiliconFlowProvider
-from .voicestudio import VoiceStudioProvider
+from .localvoice import LocalVoiceProvider
 from .voice_clone import (  # noqa: F401
     VoiceCloneProvider,
     build_voice_object,
@@ -37,7 +37,7 @@ PROVIDER_CLASSES = {
     "volcano": VolcanoProvider,
     "elevenlabs": ElevenLabsProvider,
     "siliconflow": SiliconFlowProvider,
-    "voicestudio": VoiceStudioProvider,
+    "localvoice": LocalVoiceProvider,
 }
 
 __all__ = [
@@ -51,7 +51,7 @@ __all__ = [
     "VolcanoProvider",
     "ElevenLabsProvider",
     "SiliconFlowProvider",
-    "VoiceStudioProvider",
+    "LocalVoiceProvider",
     "VoiceCloneProvider",
     "build_voice_object",
     "clone_ok",
