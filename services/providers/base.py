@@ -97,6 +97,33 @@ def not_implemented_result(provider="", model="", capability=""):
     }
 
 
+# ==================== Step 6A：二进制结果（TTS 音频等） ====================
+# TTS 返回的是音频字节，无法直接放进 JSON，因此统一用 base64 承载。
+# 约定字段与文本类保持一致（status/provider/model/error），附加：
+#   audio_base64 —— base64 后的音频
+#   mime_type    —— 如 audio/mpeg
+#   voice_id     —— 本次使用的音色（便于前端确认"用的是哪个声音"）
+#   bytes_len    —— 原始字节数（便于排查"返回了空音频"）
+def ok_audio_result(provider="", model="", audio=b"", mime_type="audio/mpeg",
+                    voice_id="", usage=None, **extra):
+    """成功返回（二进制）。audio 可以是 bytes / bytearray。"""
+    import base64 as _b64
+    raw = bytes(audio or b"")
+    out = {
+        "status": STATUS_OK,
+        "provider": provider,
+        "model": model,
+        "error": "",
+        "audio_base64": _b64.b64encode(raw).decode("ascii") if raw else "",
+        "mime_type": mime_type or "audio/mpeg",
+        "voice_id": voice_id or "",
+        "bytes_len": len(raw),
+        "usage": usage if isinstance(usage, dict) else {},
+    }
+    out.update(extra)
+    return out
+
+
 class BaseProvider:
     """所有供应商 provider 的基类。
 
@@ -175,7 +202,13 @@ class BaseProvider:
     def asr(self, audio=None, model="", **kwargs):
         return not_implemented(self.key, CAPABILITY_ASR)
 
-    def tts(self, text="", model="", **kwargs):
+    def tts(self, text="", model="", voice_id="", **kwargs):
+        """语音合成。
+
+        voice_id —— Step 6A 起统一约定：调用方传「用哪个音色」。
+          各 provider 自行解释（ElevenLabs 是 voice_id；硅基流动是 voice 参数；
+          有的供应商把音色编码在模型名里）。不传则用 provider 默认音色。
+        """
         return not_implemented(self.key, CAPABILITY_TTS)
 
     # ---------- 描述 ----------
