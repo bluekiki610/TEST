@@ -17,7 +17,14 @@ from .providers.base import (
     CAPABILITY_TTS,
     error_result,
     not_implemented,
+    not_implemented_result,
 )
+
+# Step 5A：已真实接入的能力位（目前只有 deepseek 的 chat）。
+# 未列出的组合一律返回 not_implemented，避免"看起来接上了其实没实现"。
+_REAL_CAPABILITIES = {
+    ("deepseek", CAPABILITY_CHAT),
+}
 
 
 class AIService:
@@ -127,6 +134,15 @@ class AIService:
                     prefs = (payload.get("capability_prefs") or {}).get(capability)
                     if prefs:
                         prefer = list(prefs)
+                # 过滤掉「不支持该能力位」的供应商，避免偏好顺序把一个
+                # 不支持 chat/tts/vision 的 provider 顶到最前面。
+                if prefer:
+                    filtered = []
+                    for _k in prefer:
+                        _p = self._manager.get_provider(_k)
+                        if _p is not None and _p.supports(capability):
+                            filtered.append(_k)
+                    prefer = filtered or None
 
         pkey, reg_model = self._manager.resolve(
             capability, prefer=prefer, require_configured=require_configured, extra_config=extra_cfg
@@ -162,8 +178,11 @@ class AIService:
         # 显式传入的 model > 用户默认模型 > 登记表里的 model
         use_model = model or user_model or reg_model
 
-        # 第一版：所有 provider 的五个能力位都返回 not_implemented。
-        # 这里仍走真实分发，保证后续 provider 实现后无需改业务代码。
+        # ===== Step 5A：只有登记为「已真实接入」的能力位才真正分发 =====
+        # 其余组合一律返回 not_implemented，避免出现"选到了 provider 但其实没实现"的假成功。
+        if (pkey, capability) not in _REAL_CAPABILITIES:
+            return not_implemented_result(provider=pkey, model=use_model, capability=capability)
+
         handler = {
             CAPABILITY_CHAT: provider.chat,
             CAPABILITY_VISION: provider.vision,
@@ -182,15 +201,16 @@ class AIService:
         try:
             result = handler(model=use_model, **kwargs)
         except Exception as e:
-            # 第一版 provider 不该抛错；这里兜住，避免影响调用方
+            # provider 内部已自行兜异常；这里再兜一层，避免影响调用方
             return error_result(provider=pkey, capability=capability, message=f"provider 调用异常: {e}")
 
-        # 补齐选型信息，方便调用方排查
+        # 统一结构：补齐 provider / model / error 字段，便于业务侧统一判断
         if isinstance(result, dict):
             result.setdefault("provider", pkey)
-            result.setdefault("capability", capability)
             if use_model:
                 result.setdefault("model", use_model)
+            result.setdefault("error", "")
+            result.setdefault("capability", capability)
             return result
 
         # provider 返回了非 dict（异常情况）→ 归一化
